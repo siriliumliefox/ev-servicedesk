@@ -1,0 +1,12 @@
+# CODEOWNERS — EV-ServiceDesk
+# ЗАМЕНИТЕ @your-github-handle на реальный логин перед первым push.
+# При соло-разработке review не required (см. CONTRIBUTING.md), но владение
+# зафиксировано с первого дня — полезно, когда команда вырастет.
+
+*                       @your-github-handle
+/backend/               @your-github-handle
+/mobile/                @your-github-handle
+/web-engineer/          @your-github-handle
+/web-admin/             @your-github-handle
+/web-shared/            @your-github-handle
+/docs/openapi.yaml      @your-github-handle

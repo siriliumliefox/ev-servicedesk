@@ -1,0 +1,33 @@
+# Python / backend
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# Node / web
+node_modules/
+dist/
+.vite/
+
+# Flutter / mobile
+mobile/.dart_tool/
+mobile/.flutter-plugins
+mobile/.flutter-plugins-dependencies
+mobile/build/
+mobile/.packages
+
+# Секреты — НИКОГДА не коммитятся (Глава 4, шаг 3)
+.env
+.env.local
+.env.dev
+.env.staging
+.env.production
+*.pem
+*.key
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store

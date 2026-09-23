@@ -1,0 +1,1655 @@
+openapi: 3.0.3
+info:
+  title: EV-ServiceDesk API
+  version: "1.0.0-rc1"
+  description: >
+    API дипломного проекта «EV-ServiceDesk» (ООО «ЕТСавтоГомель»).
+    Контракты сервисов: Auth, Vehicle, Aggregates & Maintenance, Tickets,
+    Knowledge Base, Notifications, Analytics.
+  contact:
+    name: Sirilium / EV-ServiceDesk
+    email: dev@ev-servicedesk.example.com
+
+servers:
+  - url: https://api.ev-servicedesk.example.com/v1
+    description: Production
+  - url: https://staging-api.ev-servicedesk.example.com/v1
+    description: Staging
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: Auth
+  - name: Vehicle
+  - name: Aggregates
+  - name: Uploads
+  - name: Tickets
+  - name: KnowledgeBase
+  - name: Notifications
+
+paths:
+  # ===================== AUTH SERVICE (шаг 2) =====================
+  # Регистрация и логин объединены в единый passwordless-флоу по телефону:
+  # request-code -> verify-code. Отдельного /auth/register нет намеренно —
+  # verify-code сам создаёт User при первом входе (is_new_user в ответе).
+  /auth/phone/request-code:
+    post:
+      tags: [Auth]
+      summary: Запросить SMS-код для входа/регистрации по телефону
+      operationId: requestPhoneCode
+      description: Отправляет SMS с одноразовым кодом на указанный номер.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PhoneRequestCode' }
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '200':
+          description: Код отправлен
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ttl_seconds: { type: integer, example: 120 }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /auth/phone/verify-code:
+    post:
+      tags: [Auth]
+      summary: Подтвердить SMS-код — вход или создание аккаунта (role=client)
+      operationId: verifyPhoneCode
+      description: Проверяет код; создаёт пользователя при первом обращении.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/VerifyCodeRequest' }
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '200':
+          description: Успешная аутентификация
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/AuthTokens'
+                  - type: object
+                    properties:
+                      is_new_user: { type: boolean }
+                      user: { $ref: '#/components/schemas/UserPublic' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Обновить access-токен по refresh-токену
+      operationId: refreshToken
+      description: Выдаёт новую пару токенов взамен истекающего access-токена.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RefreshRequest' }
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '200':
+          description: Новая пара токенов
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthTokens' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /auth/logout:
+    post:
+      tags: [Auth]
+      summary: Отозвать refresh-токен (выход с устройства)
+      operationId: logout
+      description: Инвалидирует refresh-токен текущего устройства.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RefreshRequest' }
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '204': { description: Токен отозван }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /auth/staff/login:
+    post:
+      tags: [Auth]
+      summary: Логин по паролю для Инженера/Администратора
+      operationId: staffLogin
+      description: >
+        Отдельный флоу от клиентского SMS-логина. Учётные записи engineer/admin
+        создаются администратором вручную (Глава 22), клиент этим эндпоинтом
+        не пользуется.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/StaffLoginRequest' }
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '200':
+          description: Успешная аутентификация
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/AuthTokens'
+                  - type: object
+                    properties:
+                      user: { $ref: '#/components/schemas/UserPublic' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /auth/telegram/link:
+    post:
+      tags: [Auth]
+      summary: Привязать Telegram к текущему аккаунту
+      operationId: linkTelegram
+      description: Сохраняет telegram_id для уже авторизованного пользователя.
+      x-required-roles: [client]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TelegramLinkRequest' }
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '200':
+          description: Telegram привязан
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserPublic' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  # ===================== VEHICLE SERVICE (шаг 3) =====================
+  # VIN-декодер вызывается ВНУТРИ POST /vehicles (серверная интеграция/мок),
+  # отдельного публичного эндпоинта декодера нет. Fallback на случай, если
+  # декодер недоступен/не распознал VIN: клиент передаёт vehicle_model_id
+  # явно, выбрав модель через GET /vehicle-models.
+  /vehicle-models:
+    get:
+      tags: [Vehicle]
+      summary: Поиск моделей авто (fallback, если VIN-декодер не распознал VIN)
+      operationId: searchVehicleModels
+      description: Возвращает модели по подстроке бренда/модели для ручного выбора.
+      x-required-roles: [client, engineer, admin]
+      parameters:
+        - name: search
+          in: query
+          schema: { type: string }
+          description: Подстрока по бренду/модели
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '200':
+          description: Список моделей
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/VehicleModel' }
+
+  /vehicles:
+    get:
+      tags: [Vehicle]
+      summary: Список авто текущего клиента (поддержка нескольких авто на аккаунт)
+      operationId: listVehicles
+      description: Возвращает все автомобили, привязанные к текущему клиенту.
+      x-required-roles: [client]
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '200':
+          description: Список авто
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Vehicle' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [Vehicle]
+      summary: Добавить автомобиль по VIN
+      operationId: createVehicle
+      x-required-roles: [client]
+      description: >
+        Марка/модель/комплектация определяются через VIN-декодер (или мок).
+        Если декодер не смог распознать VIN — 422 с кодом VIN_DECODE_FAILED,
+        и клиент должен передать vehicle_model_id вручную повторным запросом
+        (Vehicle без VehicleModel создать нельзя — FK NOT NULL, Глава 2).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/VehicleCreateRequest' }
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '201':
+          description: Автомобиль добавлен
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Vehicle' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        '409':
+          description: VIN уже привязан к другому аккаунту
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /vehicles/{vehicleId}:
+    parameters:
+      - { name: vehicleId, in: path, required: true, schema: { type: integer } }
+    get:
+      tags: [Vehicle]
+      summary: Карточка автомобиля (марка/модель/пробег)
+      operationId: getVehicle
+      x-required-roles: [client, engineer, admin]
+      description: >
+        Не включает статусы агрегатов — зона ответственности Aggregates
+        Service (шаг 4). RBAC-роль сама по себе не даёт доступа к ЛЮБОМУ
+        авто: client видит только свои (owner-check), engineer — только
+        авто, связанное с тикетом в его работе (object-level check поверх
+        роли, не только middleware RBAC) — иначе IDOR (см. Глава 25).
+        admin — без ограничений.
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '200':
+          description: Карточка автомобиля
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Vehicle' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Vehicle]
+      summary: Удалить авто из аккаунта (soft-delete, история сохраняется)
+      operationId: deleteVehicle
+      description: Помечает автомобиль неактивным, не удаляя связанные записи.
+      x-required-roles: [client, admin]
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '204': { description: Удалено }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /vehicles/{vehicleId}/mileage:
+    parameters:
+      - { name: vehicleId, in: path, required: true, schema: { type: integer } }
+    patch:
+      tags: [Vehicle]
+      summary: Обновить пробег
+      operationId: updateVehicleMileage
+      x-required-roles: [client, engineer, admin]
+      description: >
+        Отдельный узкий эндпоинт вместо общего PATCH /vehicles/{id} — VIN и
+        модель после создания не редактируются, менять можно только пробег.
+        Уменьшение пробега запрещено (Глава 2) → 409, а не 422: это конфликт
+        с текущим состоянием ресурса, не ошибка формата входных данных.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MileageUpdateRequest' }
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '200':
+          description: Пробег обновлён
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Vehicle' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Новый пробег меньше текущего
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /vehicles/{vehicleId}/maintenance-records:
+    parameters:
+      - { name: vehicleId, in: path, required: true, schema: { type: integer } }
+    get:
+      tags: [Vehicle]
+      summary: История выполненных работ
+      operationId: listMaintenanceRecords
+      description: Постраничная история работ по автомобилю.
+      x-required-roles: [client, engineer, admin]
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '200':
+          description: Страница истории ТО
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MaintenanceRecordList' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      tags: [Vehicle]
+      summary: Зафиксировать выполненную работу
+      operationId: createMaintenanceRecord
+      x-required-roles: [engineer, admin]
+      description: Клиент этим эндпоинтом не пользуется — история заполняется инженером/админом.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MaintenanceRecordCreateRequest' }
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '201':
+          description: Запись добавлена в историю
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MaintenanceRecord' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ===================== AGGREGATES & MAINTENANCE SERVICE (шаг 4) =====================
+  /aggregate-types:
+    get:
+      tags: [Aggregates]
+      summary: Справочник типов агрегатов
+      operationId: listAggregateTypes
+      description: Возвращает все типы агрегатов, включая добавленные администратором.
+      x-required-roles: [client, engineer, admin]
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '200':
+          description: Список типов агрегатов
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/AggregateType' }
+    post:
+      tags: [Aggregates]
+      summary: Добавить тип агрегата в справочник
+      operationId: createAggregateType
+      x-required-roles: [admin]
+      description: Расширение набора агрегатов на схеме без релиза кода (ТЗ, раздел 5).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AggregateTypeCreateRequest' }
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '201':
+          description: Тип добавлен
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AggregateType' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /maintenance-regulations:
+    get:
+      tags: [Aggregates]
+      summary: Регламенты ТО (по модели авто)
+      operationId: listMaintenanceRegulations
+      description: Возвращает активные (или все, если include_archived) регламенты.
+      x-required-roles: [engineer, admin]
+      parameters:
+        - name: vehicle_model_id
+          in: query
+          required: false
+          schema: { type: integer }
+        - name: include_archived
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '200':
+          description: Список регламентов
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/MaintenanceRegulation' }
+    post:
+      tags: [Aggregates]
+      summary: Создать/пересмотреть регламент (upsert по модели+агрегату)
+      operationId: reviseMaintenanceRegulation
+      x-required-roles: [admin]
+      description: >
+        Не PATCH: если для пары (vehicle_model_id, aggregate_type_code) уже
+        есть активный регламент, сервер атомарно архивирует его
+        (is_archived=true) и создаёт новый активный — это и есть
+        "удаление/изменение регламента не ломает историю" (Глава 2/12).
+        Прямое редактирование интервала в старой записи не предусмотрено
+        намеренно, чтобы не потерять исторические пороги для прошлых расчётов.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MaintenanceRegulationCreateRequest' }
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '201':
+          description: Новая активная версия регламента
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MaintenanceRegulation' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /maintenance-regulations/{regulationId}:
+    parameters:
+      - { name: regulationId, in: path, required: true, schema: { type: integer } }
+    delete:
+      tags: [Aggregates]
+      summary: Архивировать регламент (без замены)
+      operationId: archiveMaintenanceRegulation
+      x-required-roles: [admin]
+      description: Прекращает отслеживание пары модель+агрегат; история расчётов по прошлым авто не затрагивается.
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '204': { description: Архивирован }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /vehicles/{vehicleId}/aggregate-statuses:
+    parameters:
+      - { name: vehicleId, in: path, required: true, schema: { type: integer } }
+    get:
+      tags: [Aggregates]
+      summary: Статусы всех агрегатов авто (для интерактивной схемы)
+      operationId: listAggregateStatuses
+      x-required-roles: [client, engineer, admin]
+      description: >
+        Алгоритм и пороги — Глава 5 ТЗ. Отдельное значение status=unknown
+        (не ошибка) для агрегата без истории замены — edge-case "новый авто
+        без истории" явно предусмотрен, а не считается сбоем.
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '200':
+          description: Статусы агрегатов
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/AggregateStatus' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /vehicles/{vehicleId}/aggregate-statuses/{aggregateTypeCode}/replace:
+    parameters:
+      - { name: vehicleId, in: path, required: true, schema: { type: integer } }
+      - { name: aggregateTypeCode, in: path, required: true, schema: { type: string } }
+    post:
+      tags: [Aggregates]
+      summary: Зафиксировать замену агрегата (сброс счётчика)
+      operationId: replaceAggregateStatus
+      x-required-roles: [engineer, admin]
+      description: >
+        Единственная точка входа для инженера при замене: сбрасывает счётчик
+        (обновляет VehicleAggregateStatus) И создаёт соответствующую запись
+        в истории ТО (MaintenanceRecord, Vehicle Service) одним вызовом —
+        межсервисная синхронизация статуса и истории, чтобы инженер не
+        забыл вызвать второй эндпоинт и данные не разошлись (реализация
+        сцепки — Глава 17). Публичный POST .../maintenance-records
+        (Vehicle Service, шаг 3) остаётся для работ БЕЗ привязки к
+        конкретному отслеживаемому агрегату.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AggregateReplaceRequest' }
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '200':
+          description: Статус сброшен на 🟢
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AggregateStatus' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ===================== UPLOADS (общая утилита для Tickets/KB) =====================
+  /uploads/presign:
+    post:
+      tags: [Uploads]
+      summary: Получить presigned URL для прямой загрузки файла в S3
+      operationId: createPresignedUpload
+      x-required-roles: [client, engineer]
+      description: >
+        Клиент загружает файл напрямую в S3 по upload_url, минуя API-сервер
+        (не гоняем бинарные данные через backend). file_url затем передаётся
+        в теле создания тикета/сообщения как ссылка на вложение.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PresignRequest' }
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '200':
+          description: URL для загрузки
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PresignResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+
+  # ===================== TICKETS SERVICE (шаг 5) =====================
+  /tickets:
+    get:
+      tags: [Tickets]
+      summary: Список тикетов (канбан-доска инженера / история клиента)
+      operationId: listTickets
+      x-required-roles: [client, engineer, admin]
+      description: >
+        client — только свои тикеты. engineer/admin — фильтры по
+        status/category/overdue для канбана (Глава 21).
+      parameters:
+        - name: status
+          in: query
+          schema: { type: string, enum: [new, in_progress, waiting_vendor, resolved] }
+        - name: category
+          in: query
+          schema: { type: string, enum: [navigation, audio, sim, app_crash, maintenance] }
+        - name: assigned_engineer_id
+          in: query
+          schema: { type: integer }
+        - name: overdue
+          in: query
+          schema: { type: boolean }
+          description: Только тикеты с просроченным SLA
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '200':
+          description: Страница тикетов
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TicketList' }
+    post:
+      tags: [Tickets]
+      summary: Создать тикет
+      operationId: createTicket
+      x-required-roles: [client]
+      description: >
+        source_article_id/source_node_id — при эскалации из дерева решений
+        (Knowledge Base), иначе null. Вложения — через /uploads/presign
+        заранее.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TicketCreateRequest' }
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '201':
+          description: Тикет создан
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TicketDetail' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /tickets/{ticketId}:
+    parameters:
+      - { name: ticketId, in: path, required: true, schema: { type: integer } }
+    get:
+      tags: [Tickets]
+      summary: Карточка тикета с автопривязанным контекстом авто
+      operationId: getTicket
+      x-required-roles: [client, engineer, admin]
+      description: >
+        vehicle_context собирается из Vehicle Service и Aggregates Service
+        (модель, текущая прошивка, статусы агрегатов на момент обращения) —
+        межсервисная агрегация на уровне Tickets Service (Глава 17).
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '200':
+          description: Детали тикета
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TicketDetail' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /tickets/{ticketId}/status:
+    parameters:
+      - { name: ticketId, in: path, required: true, schema: { type: integer } }
+    patch:
+      tags: [Tickets]
+      summary: Сменить статус тикета
+      operationId: updateTicketStatus
+      description: Валидирует допустимость перехода между статусами на сервере.
+      x-required-roles: [engineer, admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { type: string, enum: [new, in_progress, waiting_vendor, resolved] }
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '200':
+          description: Статус изменён
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TicketDetail' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /tickets/{ticketId}/claim:
+    parameters:
+      - { name: ticketId, in: path, required: true, schema: { type: integer } }
+    post:
+      tags: [Tickets]
+      summary: Инженер берёт тикет в работу (самоназначение)
+      operationId: claimTicket
+      x-required-roles: [engineer]
+      description: >
+        Оптимистичная блокировка: если тикет уже назначен другим инженером —
+        409, а не тихая перезапись (тест конкурентного доступа, Глава 21).
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '200':
+          description: Тикет назначен
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TicketDetail' }
+        '409':
+          description: Тикет уже взят другим инженером
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /tickets/{ticketId}/assign:
+    parameters:
+      - { name: ticketId, in: path, required: true, schema: { type: integer } }
+    patch:
+      tags: [Tickets]
+      summary: Переназначить тикет (административно, в обход claim)
+      operationId: assignTicket
+      description: Позволяет администратору назначить или снять инженера с тикета.
+      x-required-roles: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [assigned_engineer_id]
+              properties:
+                assigned_engineer_id: { type: integer, nullable: true }
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '200':
+          description: Переназначено
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TicketDetail' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /tickets/{ticketId}/messages:
+    parameters:
+      - { name: ticketId, in: path, required: true, schema: { type: integer } }
+    get:
+      tags: [Tickets]
+      summary: История чата тикета
+      operationId: listTicketMessages
+      x-required-roles: [client, engineer, admin]
+      description: >
+        REST — персистентная история и фallback (long-polling). Реал-тайм
+        доставка — по WebSocket, вне зоны OpenAPI-контракта (описывается
+        отдельно, напр. AsyncAPI, в Главе 13/17).
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '200':
+          description: Страница сообщений
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TicketMessageList' }
+    post:
+      tags: [Tickets]
+      summary: Отправить сообщение в тикет
+      operationId: createTicketMessage
+      description: Добавляет сообщение в чат тикета; доступно всем сторонам диалога.
+      x-required-roles: [client, engineer, admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TicketMessageCreateRequest' }
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '201':
+          description: Сообщение отправлено
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TicketMessage' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  # ===================== KNOWLEDGE BASE SERVICE (шаг 5) =====================
+  /knowledge-articles:
+    get:
+      tags: [KnowledgeBase]
+      summary: Список/поиск статей
+      operationId: listKnowledgeArticles
+      x-required-roles: [client, engineer, admin]
+      description: client видит только is_published=true; engineer/admin — все, включая черновики.
+      parameters:
+        - name: vehicle_model_id
+          in: query
+          schema: { type: integer }
+        - name: article_type
+          in: query
+          schema: { type: string, enum: [guide, troubleshooting] }
+        - name: search
+          in: query
+          schema: { type: string }
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '200':
+          description: Страница статей
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/KnowledgeArticleList' }
+    post:
+      tags: [KnowledgeBase]
+      summary: Создать статью (черновик)
+      operationId: createKnowledgeArticle
+      description: Создаёт неопубликованную статью для дальнейшего редактирования.
+      x-required-roles: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/KnowledgeArticleCreateRequest' }
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '201':
+          description: Черновик создан
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/KnowledgeArticle' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /knowledge-articles/{articleId}:
+    parameters:
+      - { name: articleId, in: path, required: true, schema: { type: integer } }
+    get:
+      tags: [KnowledgeBase]
+      summary: Детали статьи
+      operationId: getKnowledgeArticle
+      description: Возвращает статью по идентификатору.
+      x-required-roles: [client, engineer, admin]
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '200':
+          description: Статья
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/KnowledgeArticle' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [KnowledgeBase]
+      summary: Редактировать/опубликовать статью
+      operationId: updateKnowledgeArticle
+      x-required-roles: [admin]
+      description: >
+        Редактирование инкрементирует version. Полная история версий не
+        хранится (не требуется ТЗ) — version нужен для отображения
+        актуальности клиенту, не для отката к прошлым редакциям.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/KnowledgeArticleUpdateRequest' }
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '200':
+          description: Обновлено
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/KnowledgeArticle' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    delete:
+      tags: [KnowledgeBase]
+      summary: Снять статью с публикации
+      operationId: unpublishKnowledgeArticle
+      x-required-roles: [admin]
+      description: Soft — is_published=false. Жёсткое удаление не предусмотрено (Ticket.source_article_id ссылается на статьи).
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '204': { description: Снято с публикации }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /knowledge-articles/{articleId}/decision-tree:
+    parameters:
+      - { name: articleId, in: path, required: true, schema: { type: integer } }
+    get:
+      tags: [KnowledgeBase]
+      summary: Дерево решений статьи (все узлы)
+      operationId: listDecisionTreeNodes
+      x-required-roles: [client, engineer, admin]
+      description: Клиент проходит от узла с is_root=true, следуя options[].next_node_id.
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '200':
+          description: Узлы дерева
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/DecisionTreeNode' }
+    post:
+      tags: [KnowledgeBase]
+      summary: Добавить узел дерева решений
+      operationId: createDecisionTreeNode
+      description: Создаёт узел; сервер проверяет уникальность is_root=true для статьи.
+      x-required-roles: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DecisionTreeNodeCreateRequest' }
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '201':
+          description: Узел создан
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DecisionTreeNode' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409':
+          description: Нарушение инварианта (напр. второй is_root=true)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /knowledge-articles/{articleId}/decision-tree/validate:
+    parameters:
+      - { name: articleId, in: path, required: true, schema: { type: integer } }
+    get:
+      tags: [KnowledgeBase]
+      summary: Проверить дерево на тупики перед публикацией
+      operationId: validateDecisionTree
+      x-required-roles: [admin]
+      description: >
+        Операционализация теста из чек-листа Главы 14 ("отсутствие тупиков в
+        дереве решений") — админ прогоняет проверку сам, не дожидаясь QA.
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '200':
+          description: Результат проверки
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DecisionTreeValidationResult' }
+
+  /decision-tree-nodes/{nodeId}:
+    parameters:
+      - { name: nodeId, in: path, required: true, schema: { type: integer } }
+    patch:
+      tags: [KnowledgeBase]
+      summary: Редактировать узел
+      operationId: updateDecisionTreeNode
+      description: Обновляет текст вопроса и варианты переходов узла дерева решений.
+      x-required-roles: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DecisionTreeNodeCreateRequest' }
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '200':
+          description: Обновлено
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DecisionTreeNode' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    delete:
+      tags: [KnowledgeBase]
+      summary: Удалить узел
+      operationId: deleteDecisionTreeNode
+      description: Отклоняется с 409, если на узел ссылаются другие узлы.
+      x-required-roles: [admin]
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '204': { description: Удалён }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409':
+          description: На узел ссылаются другие узлы — сначала обновите их options
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  # ===================== NOTIFICATIONS SERVICE (шаг 5) =====================
+  /push-tokens:
+    post:
+      tags: [Notifications]
+      summary: Зарегистрировать FCM push-токен устройства
+      operationId: registerPushToken
+      description: Сохраняет токен устройства для последующей push-рассылки.
+      x-required-roles: [client, engineer]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token: { type: string }
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '201': { description: Токен зарегистрирован }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /push-tokens/{token}:
+    parameters:
+      - { name: token, in: path, required: true, schema: { type: string } }
+    delete:
+      tags: [Notifications]
+      summary: Удалить push-токен (логаут с устройства/отключение уведомлений)
+      operationId: deletePushToken
+      description: Прекращает отправку push-уведомлений на данное устройство.
+      x-required-roles: [client, engineer]
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '204': { description: Удалён }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /notifications:
+    get:
+      tags: [Notifications]
+      summary: Центр уведомлений клиента
+      operationId: listNotifications
+      description: Постраничная лента уведомлений (прошивки/ТО/новости/акции).
+      x-required-roles: [client]
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '200':
+          description: Страница уведомлений
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NotificationList' }
+    post:
+      tags: [Notifications]
+      summary: Опубликовать уведомление (новости/акции/ручная рассылка)
+      operationId: createNotification
+      x-required-roles: [admin]
+      description: >
+        target_vehicle_model_id — единственный источник таргетинга (Глава 2,
+        3НФ). Для type=firmware обычно создаётся автоматически через
+        POST /firmware-releases, но ручная публикация тоже разрешена.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/NotificationCreateRequest' }
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '201':
+          description: Уведомление поставлено в очередь на рассылку
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Notification' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /notifications/{notificationId}/read:
+    parameters:
+      - { name: notificationId, in: path, required: true, schema: { type: integer } }
+    patch:
+      tags: [Notifications]
+      summary: Отметить уведомление прочитанным
+      operationId: markNotificationRead
+      x-required-roles: [client]
+      description: Пишет opened_at в NotificationDelivery — источник данных для открываемости (Глава 16).
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '204': { description: Отмечено }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /firmware-releases:
+    get:
+      tags: [Notifications]
+      summary: Список релизов прошивок
+      operationId: listFirmwareReleases
+      description: Возвращает релизы, опционально отфильтрованные по модели авто.
+      x-required-roles: [client, engineer, admin]
+      parameters:
+        - name: vehicle_model_id
+          in: query
+          schema: { type: integer }
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '200':
+          description: Список релизов
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/FirmwareRelease' }
+    post:
+      tags: [Notifications]
+      summary: Опубликовать релиз прошивки
+      operationId: createFirmwareRelease
+      x-required-roles: [admin]
+      description: Атомарно создаёт FirmwareRelease и триггерит Notification(type=firmware) с targeting по vehicle_model_id.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/FirmwareReleaseCreateRequest' }
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '201':
+          description: Релиз опубликован, уведомление поставлено в очередь
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FirmwareRelease' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /vehicles/{vehicleId}/firmware:
+    parameters:
+      - { name: vehicleId, in: path, required: true, schema: { type: integer } }
+    patch:
+      tags: [Notifications]
+      summary: Зафиксировать текущую прошивку авто (после русификации/визита)
+      operationId: setVehicleFirmware
+      description: Обновляет current_firmware_release_id автомобиля.
+      x-required-roles: [engineer, admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [firmware_release_id]
+              properties:
+                firmware_release_id: { type: integer }
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '200':
+          description: Обновлено
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Vehicle' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    PageParam:
+      name: page
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+    PageSizeParam:
+      name: page_size
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+
+  schemas:
+    # --- Единый формат ошибок (шаг 6, материализован в шаге 1) ---
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              description: Машиночитаемый код ошибки, напр. VALIDATION_ERROR, NOT_FOUND
+              example: VALIDATION_ERROR
+            message:
+              type: string
+              description: Человекочитаемое сообщение (для логов/поддержки, не для UI напрямую)
+            details:
+              type: object
+              nullable: true
+              description: Доп. контекст (напр. какое поле не прошло валидацию)
+
+    # --- Единый формат пагинации (шаг 6) ---
+    PaginationMeta:
+      type: object
+      required: [page, page_size, total_items, total_pages]
+      properties:
+        page: { type: integer }
+        page_size: { type: integer }
+        total_items: { type: integer }
+        total_pages: { type: integer }
+
+    # --- Auth (шаг 2) ---
+    PhoneRequestCode:
+      type: object
+      required: [phone]
+      properties:
+        phone:
+          type: string
+          example: "+375291234567"
+          description: В формате E.164
+
+    VerifyCodeRequest:
+      type: object
+      required: [phone, code]
+      properties:
+        phone: { type: string, example: "+375291234567" }
+        code: { type: string, example: "1234" }
+
+    RefreshRequest:
+      type: object
+      required: [refresh_token]
+      properties:
+        refresh_token: { type: string }
+
+    StaffLoginRequest:
+      type: object
+      required: [phone, password]
+      properties:
+        phone: { type: string }
+        password: { type: string, format: password }
+
+    TelegramLinkRequest:
+      type: object
+      required: [telegram_id]
+      properties:
+        telegram_id: { type: string }
+
+    AuthTokens:
+      type: object
+      required: [access_token, refresh_token, expires_in]
+      properties:
+        access_token: { type: string }
+        refresh_token: { type: string }
+        expires_in: { type: integer, description: "TTL access-токена, сек." }
+
+    UserPublic:
+      type: object
+      required: [id, phone, role, created_at]
+      properties:
+        id: { type: integer }
+        phone: { type: string }
+        role: { type: string, enum: [client, engineer, admin] }
+        telegram_id: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+
+    # --- Vehicle (шаг 3) ---
+    # VehicleModel — с id, для поиска/выбора модели вручную (fallback VIN-декодера).
+    VehicleModel:
+      type: object
+      required: [id, brand, model]
+      properties:
+        id: { type: integer }
+        brand: { type: string, example: "Zeekr" }
+        model: { type: string, example: "001" }
+        trim: { type: string, nullable: true }
+
+    # VehicleModelInfo — без id, только для отображения внутри карточки Vehicle
+    # (после создания клиенту не нужно повторно ссылаться на модель по id).
+    VehicleModelInfo:
+      type: object
+      required: [brand, model]
+      properties:
+        brand: { type: string }
+        model: { type: string }
+        trim: { type: string, nullable: true }
+
+    VehicleCreateRequest:
+      type: object
+      required: [vin]
+      properties:
+        vin:
+          type: string
+          minLength: 17
+          maxLength: 17
+          pattern: '^[A-HJ-NPR-Z0-9]{17}$'
+          example: "LSVAU2183R2100001"
+        vehicle_model_id:
+          type: integer
+          nullable: true
+          description: Явное указание модели, если VIN-декодер не смог распознать авто
+
+    Vehicle:
+      type: object
+      required: [id, vin, mileage, vehicle_model, is_active, created_at]
+      properties:
+        id: { type: integer }
+        vin: { type: string, minLength: 17, maxLength: 17 }
+        mileage: { type: integer, minimum: 0 }
+        is_active: { type: boolean }
+        vehicle_model: { $ref: '#/components/schemas/VehicleModelInfo' }
+        current_firmware_version:
+          type: string
+          nullable: true
+          description: Версия прошивки из последнего зафиксированного FirmwareRelease (см. PATCH /vehicles/{id}/firmware)
+        created_at: { type: string, format: date-time }
+
+    MileageUpdateRequest:
+      type: object
+      required: [mileage]
+      properties:
+        mileage: { type: integer, minimum: 0 }
+
+    # aggregate_type_code (не id) — публичный контракт ссылается на стабильный
+    # бизнес-ключ справочника AggregateType, а не на внутренний surrogate id (Глава 2).
+    MaintenanceRecord:
+      type: object
+      required: [id, performed_at, mileage_at_service]
+      properties:
+        id: { type: integer }
+        aggregate_type_code: { type: string, nullable: true }
+        performed_by: { $ref: '#/components/schemas/UserPublic' }
+        performed_at: { type: string, format: date }
+        mileage_at_service: { type: integer }
+        description: { type: string, nullable: true }
+
+    MaintenanceRecordCreateRequest:
+      type: object
+      required: [performed_at, mileage_at_service]
+      properties:
+        aggregate_type_code:
+          type: string
+          nullable: true
+          description: Код агрегата (справочник AggregateType), либо null для общей работы
+        performed_at: { type: string, format: date }
+        mileage_at_service: { type: integer, minimum: 0 }
+        description: { type: string, nullable: true, maxLength: 255 }
+
+    MaintenanceRecordList:
+      type: object
+      required: [items, meta]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/MaintenanceRecord' }
+        meta: { $ref: '#/components/schemas/PaginationMeta' }
+
+    # --- Aggregates & Maintenance (шаг 4) ---
+    AggregateType:
+      type: object
+      required: [code, name]
+      properties:
+        code: { type: string, example: "engine_oil" }
+        name: { type: string, example: "Масло в двигателе" }
+
+    AggregateTypeCreateRequest:
+      type: object
+      required: [code, name]
+      properties:
+        code: { type: string, example: "brake_fluid" }
+        name: { type: string, example: "Тормозная жидкость" }
+
+    MaintenanceRegulation:
+      type: object
+      required: [id, vehicle_model_id, aggregate_type_code, is_archived]
+      properties:
+        id: { type: integer }
+        vehicle_model_id: { type: integer }
+        aggregate_type_code: { type: string }
+        interval_km: { type: integer, nullable: true }
+        interval_months: { type: integer, nullable: true }
+        is_archived: { type: boolean }
+
+    MaintenanceRegulationCreateRequest:
+      type: object
+      required: [vehicle_model_id, aggregate_type_code]
+      description: Нужно указать interval_km и/или interval_months — хотя бы одно.
+      properties:
+        vehicle_model_id: { type: integer }
+        aggregate_type_code: { type: string }
+        interval_km: { type: integer, nullable: true, minimum: 1 }
+        interval_months: { type: integer, nullable: true, minimum: 1 }
+
+    AggregateStatus:
+      type: object
+      required: [aggregate_type_code, aggregate_type_name, status]
+      properties:
+        aggregate_type_code: { type: string }
+        aggregate_type_name: { type: string }
+        status:
+          type: string
+          enum: [green, yellow, red, unknown]
+          description: >
+            green <70% интервала, yellow 70–100%, red >100%,
+            unknown — нет истории замены (не ошибка, Глава 5).
+        percentage:
+          type: number
+          nullable: true
+          description: "% выработки интервала, null при status=unknown"
+        last_replaced_at: { type: string, format: date, nullable: true }
+        last_replaced_mileage: { type: integer, nullable: true }
+        remaining_km: { type: integer, nullable: true }
+
+    AggregateReplaceRequest:
+      type: object
+      required: [replaced_at, mileage_at_replacement]
+      properties:
+        replaced_at: { type: string, format: date }
+        mileage_at_replacement: { type: integer, minimum: 0 }
+        description:
+          type: string
+          nullable: true
+          description: Пробрасывается в связанную запись MaintenanceRecord
+
+    # --- Uploads ---
+    PresignRequest:
+      type: object
+      required: [file_name, file_type]
+      properties:
+        file_name: { type: string, example: "photo.jpg" }
+        file_type: { type: string, enum: [photo, video] }
+
+    PresignResponse:
+      type: object
+      required: [upload_url, file_url, expires_at]
+      properties:
+        upload_url: { type: string, description: "PUT сюда бинарные данные напрямую в S3" }
+        file_url: { type: string, description: "Публичная ссылка — использовать в attachments" }
+        expires_at: { type: string, format: date-time }
+
+    # --- Tickets (шаг 5) ---
+    TicketAttachmentInput:
+      type: object
+      required: [file_url, file_type]
+      properties:
+        file_url: { type: string }
+        file_type: { type: string, enum: [photo, video] }
+
+    TicketCreateRequest:
+      type: object
+      required: [vehicle_id, category, description]
+      properties:
+        vehicle_id: { type: integer }
+        category: { type: string, enum: [navigation, audio, sim, app_crash, maintenance] }
+        description: { type: string }
+        source_article_id: { type: integer, nullable: true }
+        source_node_id: { type: integer, nullable: true }
+        attachments:
+          type: array
+          items: { $ref: '#/components/schemas/TicketAttachmentInput' }
+
+    Ticket:
+      type: object
+      required: [id, category, status, sla_due_at, is_overdue, created_at]
+      properties:
+        id: { type: integer }
+        vehicle_id: { type: integer }
+        category: { type: string, enum: [navigation, audio, sim, app_crash, maintenance] }
+        status: { type: string, enum: [new, in_progress, waiting_vendor, resolved] }
+        assigned_engineer_id: { type: integer, nullable: true }
+        sla_due_at: { type: string, format: date-time }
+        is_overdue: { type: boolean, description: "Вычисляемое поле: now() > sla_due_at и status != resolved" }
+        created_at: { type: string, format: date-time }
+
+    VehicleContext:
+      type: object
+      description: Автопривязанный контекст авто на момент открытия карточки тикета.
+      properties:
+        vehicle: { $ref: '#/components/schemas/Vehicle' }
+        aggregate_statuses:
+          type: array
+          items: { $ref: '#/components/schemas/AggregateStatus' }
+
+    TicketDetail:
+      allOf:
+        - $ref: '#/components/schemas/Ticket'
+        - type: object
+          properties:
+            description: { type: string }
+            attachments:
+              type: array
+              items: { $ref: '#/components/schemas/TicketAttachmentInput' }
+            vehicle_context: { $ref: '#/components/schemas/VehicleContext' }
+
+    TicketList:
+      type: object
+      required: [items, meta]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Ticket' }
+        meta: { $ref: '#/components/schemas/PaginationMeta' }
+
+    TicketMessageCreateRequest:
+      type: object
+      required: [body]
+      properties:
+        body: { type: string }
+        attachments:
+          type: array
+          items: { $ref: '#/components/schemas/TicketAttachmentInput' }
+
+    TicketMessage:
+      type: object
+      required: [id, author, body, created_at]
+      properties:
+        id: { type: integer }
+        author: { $ref: '#/components/schemas/UserPublic' }
+        body: { type: string }
+        attachments:
+          type: array
+          items: { $ref: '#/components/schemas/TicketAttachmentInput' }
+        created_at: { type: string, format: date-time }
+
+    TicketMessageList:
+      type: object
+      required: [items, meta]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/TicketMessage' }
+        meta: { $ref: '#/components/schemas/PaginationMeta' }
+
+    # --- Knowledge Base (шаг 5) ---
+    KnowledgeArticleCreateRequest:
+      type: object
+      required: [article_type, title, content]
+      properties:
+        vehicle_model_id: { type: integer, nullable: true }
+        article_type: { type: string, enum: [guide, troubleshooting] }
+        title: { type: string }
+        content: { type: string }
+
+    KnowledgeArticleUpdateRequest:
+      type: object
+      properties:
+        title: { type: string }
+        content: { type: string }
+        is_published: { type: boolean }
+
+    KnowledgeArticle:
+      type: object
+      required: [id, article_type, title, version, is_published]
+      properties:
+        id: { type: integer }
+        vehicle_model_id: { type: integer, nullable: true }
+        article_type: { type: string, enum: [guide, troubleshooting] }
+        title: { type: string }
+        content: { type: string }
+        version: { type: integer }
+        is_published: { type: boolean }
+
+    KnowledgeArticleList:
+      type: object
+      required: [items, meta]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/KnowledgeArticle' }
+        meta: { $ref: '#/components/schemas/PaginationMeta' }
+
+    DecisionTreeOption:
+      type: object
+      required: [label, next_node_id]
+      properties:
+        label: { type: string, example: "Экран всё ещё завис" }
+        next_node_id: { type: integer, nullable: true, description: "null допустим только если is_escalation=true на текущем узле" }
+
+    DecisionTreeNodeCreateRequest:
+      type: object
+      required: [question_text, is_root, is_escalation]
+      properties:
+        question_text: { type: string }
+        options:
+          type: array
+          items: { $ref: '#/components/schemas/DecisionTreeOption' }
+        is_root: { type: boolean }
+        is_escalation: { type: boolean }
+
+    DecisionTreeNode:
+      allOf:
+        - $ref: '#/components/schemas/DecisionTreeNodeCreateRequest'
+        - type: object
+          required: [id, article_id]
+          properties:
+            id: { type: integer }
+            article_id: { type: integer }
+
+    DecisionTreeValidationResult:
+      type: object
+      required: [is_valid, issues]
+      properties:
+        is_valid: { type: boolean }
+        issues:
+          type: array
+          items:
+            type: object
+            properties:
+              node_id: { type: integer }
+              problem:
+                type: string
+                enum: [DEAD_END, UNREACHABLE, MULTIPLE_ROOTS, BROKEN_REFERENCE]
+
+    # --- Notifications & Firmware (шаг 5) ---
+    NotificationCreateRequest:
+      type: object
+      required: [type, message]
+      properties:
+        type: { type: string, enum: [firmware, maintenance, news, promo] }
+        target_vehicle_model_id: { type: integer, nullable: true, description: "null = все модели" }
+        firmware_release_id: { type: integer, nullable: true }
+        message: { type: string }
+
+    Notification:
+      type: object
+      required: [id, type, message, created_at]
+      properties:
+        id: { type: integer }
+        type: { type: string, enum: [firmware, maintenance, news, promo] }
+        target_vehicle_model_id: { type: integer, nullable: true }
+        firmware_release_id: { type: integer, nullable: true }
+        message: { type: string }
+        created_at: { type: string, format: date-time }
+
+    NotificationListItem:
+      allOf:
+        - $ref: '#/components/schemas/Notification'
+        - type: object
+          properties:
+            opened_at: { type: string, format: date-time, nullable: true }
+
+    NotificationList:
+      type: object
+      required: [items, meta]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/NotificationListItem' }
+        meta: { $ref: '#/components/schemas/PaginationMeta' }
+
+    FirmwareReleaseCreateRequest:
+      type: object
+      required: [vehicle_model_id, version, released_at]
+      properties:
+        vehicle_model_id: { type: integer }
+        version: { type: string, example: "2.4.1" }
+        released_at: { type: string, format: date }
+
+    FirmwareRelease:
+      type: object
+      required: [id, vehicle_model_id, version, released_at]
+      properties:
+        id: { type: integer }
+        vehicle_model_id: { type: integer }
+        version: { type: string }
+        released_at: { type: string, format: date }
+
+  responses:
+    BadRequest:
+      description: Некорректный запрос
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Unauthorized:
+      description: Не авторизован (нет/просрочен токен)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Forbidden:
+      description: Нет доступа (RBAC)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: Ресурс не найден
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Conflict:
+      description: Конфликт состояния (напр. VIN уже привязан)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    ValidationError:
+      description: Ошибка валидации входных данных
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    RateLimited:
+      description: Превышен лимит запросов (напр. попытки SMS-кода)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    ServerError:
+      description: Внутренняя ошибка сервера
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }

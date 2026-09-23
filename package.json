@@ -1,0 +1,5 @@
+{
+  "name": "ev-servicedesk",
+  "private": true,
+  "workspaces": ["web-engineer", "web-admin", "web-shared"]
+}

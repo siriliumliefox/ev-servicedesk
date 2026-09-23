@@ -1,0 +1,26 @@
+name: ev_servicedesk
+description: "EV-ServiceDesk — клиентское приложение (Цифровой паспорт автомобиля)"
+publish_to: "none"
+version: 0.1.0
+
+# Целевые платформы: iOS (iPhone) и macOS (MacBook) — НЕ Android на первом этапе.
+# `flutter create --platforms=ios,macos .` при инициализации через реальный Flutter SDK
+# (Android можно добавить позже без переписывания — просто добавляется платформа).
+
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  http: ^1.2.0
+  flutter_secure_storage: ^9.2.0   # хранение JWT (Глава 18)
+  firebase_messaging: ^15.0.0      # push (Глава 20)
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true

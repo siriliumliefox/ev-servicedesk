@@ -1,0 +1,32 @@
+name: web-ci
+
+on:
+  pull_request:
+    branches: [develop, main]
+    paths: ["web-engineer/**", "web-admin/**", "web-shared/**", "package.json", ".github/workflows/web-ci.yml"]
+  push:
+    branches: [develop]
+    paths: ["web-engineer/**", "web-admin/**", "web-shared/**"]
+
+jobs:
+  web-ci:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        app: [web-engineer, web-admin]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies (root — workspaces)
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint --workspace ${{ matrix.app }}
+
+      - name: Build
+        run: npm run build --workspace ${{ matrix.app }}

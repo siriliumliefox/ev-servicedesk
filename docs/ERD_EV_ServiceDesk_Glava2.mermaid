@@ -1,0 +1,158 @@
+erDiagram
+    User {
+        int id PK
+        string phone UK
+        string role
+        string telegram_id UK
+        string password_hash
+        datetime created_at
+        bool is_active
+    }
+
+    VehicleModel {
+        int id PK
+        string brand
+        string model
+        string trim
+    }
+
+    Vehicle {
+        int id PK
+        int user_id FK
+        int vehicle_model_id FK
+        string vin UK
+        int mileage
+        bool is_active
+        int current_firmware_release_id FK
+    }
+
+    AggregateType {
+        int id PK
+        string code UK
+        string name
+    }
+
+    MaintenanceRegulation {
+        int id PK
+        int vehicle_model_id FK
+        int aggregate_type_id FK
+        int interval_km
+        int interval_months
+        bool is_archived
+    }
+
+    VehicleAggregateStatus {
+        int id PK
+        int vehicle_id FK
+        int aggregate_type_id FK
+        date last_replaced_at
+        int last_replaced_mileage
+    }
+
+    MaintenanceRecord {
+        int id PK
+        int vehicle_id FK
+        int aggregate_type_id FK
+        int performed_by_user_id FK
+        date performed_at
+        int mileage_at_service
+        string description
+    }
+
+    Ticket {
+        int id PK
+        int vehicle_id FK
+        string category
+        string status
+        int assigned_engineer_id FK
+        datetime sla_due_at
+        int source_article_id FK
+        int source_node_id FK
+    }
+
+    TicketMessage {
+        int id PK
+        int ticket_id FK
+        int author_id FK
+        text body
+        datetime created_at
+    }
+
+    TicketAttachment {
+        int id PK
+        int ticket_id FK
+        int ticket_message_id FK
+        string file_url
+        string file_type
+    }
+
+    KnowledgeArticle {
+        int id PK
+        int vehicle_model_id FK
+        string article_type
+        int version
+        bool is_published
+    }
+
+    DecisionTreeNode {
+        int id PK
+        int article_id FK
+        text question_text
+        json options
+        bool is_root
+        bool is_escalation
+    }
+
+    FirmwareRelease {
+        int id PK
+        int vehicle_model_id FK
+        string version
+        date released_at
+    }
+
+    Notification {
+        int id PK
+        string type
+        int firmware_release_id FK
+        int target_vehicle_model_id FK
+        string message
+    }
+
+    NotificationDelivery {
+        int id PK
+        int notification_id FK
+        int push_token_id FK
+        datetime delivered_at
+        datetime opened_at
+    }
+
+    PushToken {
+        int id PK
+        int user_id FK
+        string token UK
+    }
+
+    User ||--o{ Vehicle : owns
+    VehicleModel ||--o{ Vehicle : defines
+    VehicleModel ||--o{ MaintenanceRegulation : has
+    AggregateType ||--o{ MaintenanceRegulation : regulates
+    Vehicle ||--o{ VehicleAggregateStatus : tracks
+    AggregateType ||--o{ VehicleAggregateStatus : "type of"
+    Vehicle ||--o{ MaintenanceRecord : history
+    AggregateType ||--o{ MaintenanceRecord : concerns
+    User ||--o{ MaintenanceRecord : "performed by"
+    Vehicle ||--o{ Ticket : raises
+    User ||--o{ Ticket : "assigned to"
+    Ticket ||--o{ TicketMessage : contains
+    User ||--o{ TicketMessage : authors
+    Ticket ||--o{ TicketAttachment : has
+    TicketMessage ||--o{ TicketAttachment : has
+    VehicleModel ||--o{ KnowledgeArticle : "relates to"
+    KnowledgeArticle ||--o{ DecisionTreeNode : contains
+    DecisionTreeNode ||--o{ Ticket : "escalates to"
+    VehicleModel ||--o{ FirmwareRelease : has
+    FirmwareRelease ||--o{ Vehicle : "installed on"
+    FirmwareRelease ||--o{ Notification : triggers
+    Notification ||--o{ NotificationDelivery : "sent as"
+    User ||--o{ PushToken : registers
+    PushToken ||--o{ NotificationDelivery : "delivered to"

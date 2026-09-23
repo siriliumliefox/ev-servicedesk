@@ -1,0 +1,72 @@
+# EV-ServiceDesk — локальное окружение (Глава 4, шаг 3)
+#
+# Поднимает ТОЛЬКО инфраструктуру (Postgres, Redis, Adminer) — backend/web
+# запускаются нативно на хосте (poetry run / npm run dev) для быстрого
+# hot-reload. Контейнеризация самого backend — опциональный профиль "full",
+# пригодится для симуляции prod-подобного окружения перед Главой 26.
+#
+# Запуск:
+#   cp .env.example .env      # один раз, значения по умолчанию уже local-safe
+#   docker compose up -d
+#
+# Протестировано на: описание сборки образов ниже совместимо с arm64
+# (MacBook Pro M5 Pro, Apple Silicon) — postgres/redis/adminer официальные
+# образы мультиархитектурные. Реально не запускала — в этой среде нет
+# доступа к Docker registry (см. ограничения сети), проверила только
+# структуру и синтаксис файла.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-ev}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ev_local_only}
+      POSTGRES_DB: ${POSTGRES_DB:-ev_servicedesk}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ev}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  adminer:
+    image: adminer:4
+    ports:
+      - "8080:8080"
+    depends_on:
+      - postgres
+    profiles: ["tools"]   # docker compose --profile tools up
+
+  backend:
+    build:
+      context: ./backend
+    env_file:
+      - path: .env
+        required: false   # не падать, если .env ещё не создан (cp .env.example .env)
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-ev}:${POSTGRES_PASSWORD:-ev_local_only}@postgres:5432/${POSTGRES_DB:-ev_servicedesk}
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    profiles: ["full"]   # docker compose --profile full up — прод-подобный прогон
+
+volumes:
+  postgres_data:
