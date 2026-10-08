@@ -6,8 +6,8 @@
 
 | Глава | Название | Статус | Доказательства / примечание |
 |---|---|---|---|
-| 00 | Перенос и настройка рабочей среды | IN_PROGRESS | ветка `chore/00-workspace-setup` |
-| 01 | Финализация требований и глоссария | VERIFYING | `docs/Prilozhenie_Glava1_EV_ServiceDesk.docx` |
+| 00 | Перенос и настройка рабочей среды | DONE | PR #3, merge commit `a3fb606` в `develop` |
+| 01 | Финализация требований и глоссария | DONE | PR #5, `docs/requirements/`, ADR 0002, тег `requirements-baseline-v1` |
 | 02 | ER-схема БД | VERIFYING | `docs/ERD_*.mermaid`, `docs/EV_ServiceDesk_Glava2_DDL.sql` |
 | 03 | API-контракты OpenAPI | VERIFYING | `docs/openapi.yaml`, Swagger UI; mock-сервер не подтверждён |
 | 04 | Репозиторий, окружения, CI/CD | VERIFYING | 4 workflow, `docs/ENVIRONMENTS.md`; локально всё зелёное 2026-10-08 |

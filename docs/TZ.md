@@ -192,3 +192,19 @@
 **11. ПОРЯДОК КОНТРОЛЯ И ПРИЁМКИ**
 
 Приёмка осуществляется на основании демонстрации выполнения функциональных требований: регистрация клиента по VIN, корректный расчёт статусов агрегатов, создание и обработка тикета от клиента до закрытия инженером, публикация и получение push-уведомления, — а также предоставления исходного кода вместе с пояснительной запиской диплома.
+
+**ПРИЛОЖЕНИЯ**
+
+- Бэклог функций (MoSCoW) — [`requirements/BACKLOG.md`](requirements/BACKLOG.md)
+- Глоссарий — [`requirements/GLOSSARY.md`](requirements/GLOSSARY.md)
+- RBAC-матрица — [`requirements/RBAC_MATRIX.md`](requirements/RBAC_MATRIX.md)
+- Трассировка ТЗ → бэклог — [`requirements/TRACEABILITY.md`](requirements/TRACEABILITY.md)
+- Экземпляр для подписи (sign-off) — [`Prilozhenie_Glava1_EV_ServiceDesk.docx`](Prilozhenie_Glava1_EV_ServiceDesk.docx)
+
+**ПРИЛОЖЕНИЯ**
+
+- Бэклог функций (MoSCoW) — [`requirements/BACKLOG.md`](requirements/BACKLOG.md)
+- Глоссарий — [`requirements/GLOSSARY.md`](requirements/GLOSSARY.md)
+- RBAC-матрица — [`requirements/RBAC_MATRIX.md`](requirements/RBAC_MATRIX.md)
+- Трассировка ТЗ → бэклог — [`requirements/TRACEABILITY.md`](requirements/TRACEABILITY.md)
+- Экземпляр для подписи (sign-off) — [`Prilozhenie_Glava1_EV_ServiceDesk.docx`](Prilozhenie_Glava1_EV_ServiceDesk.docx)
