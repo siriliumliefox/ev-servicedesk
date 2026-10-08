@@ -1,0 +1,39 @@
+name: docs-ci
+
+on:
+  pull_request:
+    branches: [develop, main]
+    paths: ["docs/**", "scripts/sync_swagger_html.py", ".github/workflows/docs-ci.yml"]
+  push:
+    branches: [develop]
+    paths: ["docs/**", "scripts/sync_swagger_html.py"]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  docs-ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install validators
+        run: pip install "openapi-spec-validator==0.7.*"
+
+      - name: Validate OpenAPI
+        run: openapi-spec-validator docs/openapi.yaml
+
+      - name: Swagger UI HTML in sync with openapi.yaml
+        run: python3 scripts/sync_swagger_html.py --check
+
+      - name: Secret scan (gitleaks)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
