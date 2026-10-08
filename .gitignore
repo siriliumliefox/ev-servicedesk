@@ -31,3 +31,6 @@ mobile/.packages
 .vscode/
 .idea/
 .DS_Store
+
+# Logs
+*.log
