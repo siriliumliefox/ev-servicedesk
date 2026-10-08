@@ -34,6 +34,10 @@ npm run lint --workspaces --if-present
 npm run build --workspaces --if-present
 (cd mobile && flutter analyze && flutter test)
 docker compose config -q
+
+# БД (Глава 2): схема только через Alembic; тесты схемы — на БД *_test (TEST_DATABASE_URL)
+(cd backend && poetry run alembic upgrade head)
+(cd backend && poetry run python scripts/export_ddl.py && poetry run python scripts/export_erd.py)
 ```
 
 ## Процесс главы

@@ -4,7 +4,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     """Настройки приложения — читаются из переменных окружения (см. .env.example, Глава 4 шаг 3)."""
 
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    # Корневой .env (запуск из backend/) и локальный; переменные окружения важнее файлов.
+    model_config = SettingsConfigDict(env_file=("../.env", ".env"), extra="ignore")
 
     environment: str = "local"
     database_url: str = "postgresql+psycopg://ev:ev@localhost:5432/ev_servicedesk"

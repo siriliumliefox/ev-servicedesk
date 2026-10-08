@@ -3,3 +3,7 @@ target-version = "py312"
 
 [lint]
 select = ["E", "F", "I", "UP"]
+
+[lint.per-file-ignores]
+# Миграции генерируются autogenerate: длинные строки op.create_table не переносим.
+"alembic/versions/*" = ["E501"]
