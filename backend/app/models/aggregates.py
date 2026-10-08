@@ -53,7 +53,7 @@ class MaintenanceRegulation(IdMixin, TimestampMixin, Base):
     )
 
     vehicle_model_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("vehicle_model.id", ondelete="RESTRICT"), nullable=False
+        BigInteger, ForeignKey("vehicle_model.id", ondelete="RESTRICT"), nullable=False, index=True
     )
     aggregate_type_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("aggregate_type.id", ondelete="RESTRICT"), nullable=False, index=True

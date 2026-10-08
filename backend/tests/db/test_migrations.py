@@ -40,7 +40,7 @@ def _snapshot(engine: Engine) -> dict[str, set[str]]:
 def test_upgrade_downgrade_upgrade(migrated_engine: Engine, db_url: URL) -> None:
     cfg = alembic_config(db_url)
     head = ScriptDirectory.from_config(cfg).get_current_head()
-    assert head == "0002"
+    assert head == "0003"
 
     command.downgrade(cfg, "base")
     empty = _snapshot(migrated_engine)
@@ -129,7 +129,12 @@ def test_foreign_key_columns_are_indexed(migrated_engine: Engine) -> None:
     with insp_engine.connect() as c:
         insp = inspect(c)
         for table in insp.get_table_names():
-            prefixes = [tuple(i["column_names"]) for i in insp.get_indexes(table)]
+            # Частичные индексы (WHERE ...) не покрывают все строки и не считаются.
+            prefixes = [
+                tuple(i["column_names"])
+                for i in insp.get_indexes(table)
+                if not i.get("dialect_options", {}).get("postgresql_where")
+            ]
             prefixes += [tuple(u["column_names"]) for u in insp.get_unique_constraints(table)]
             prefixes.append(tuple(insp.get_pk_constraint(table)["constrained_columns"]))
             for fk in insp.get_foreign_keys(table):

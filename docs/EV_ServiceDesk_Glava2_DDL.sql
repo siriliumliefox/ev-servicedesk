@@ -406,5 +406,11 @@ INSERT INTO aggregate_type (code, name) VALUES ('ac_refrigerant', 'Фреон к
 
 UPDATE alembic_version SET version_num='0002' WHERE alembic_version.version_num = '0001';
 
+-- Running upgrade 0002 -> 0003
+
+CREATE INDEX ix_maintenance_regulation_vehicle_model_id ON maintenance_regulation (vehicle_model_id);
+
+UPDATE alembic_version SET version_num='0003' WHERE alembic_version.version_num = '0002';
+
 COMMIT;
 
