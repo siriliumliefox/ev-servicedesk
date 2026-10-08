@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: EV-ServiceDesk API
-  version: "1.0.0-rc1"
+  version: "1.0.0-rc2"
   description: >
     API дипломного проекта «EV-ServiceDesk» (ООО «ЕТСавтоГомель»).
     Контракты сервисов: Auth, Vehicle, Aggregates & Maintenance, Tickets,
@@ -1027,7 +1027,9 @@ paths:
       summary: Отметить уведомление прочитанным
       operationId: markNotificationRead
       x-required-roles: [client]
-      description: Пишет opened_at в NotificationDelivery — источник данных для открываемости (Глава 16).
+      description: >-
+        Пишет read_at в NotificationRecipient (лента пользователя, C-13) независимо от push-токенов.
+        Открытие push фиксируется отдельно в NotificationDelivery.opened_at (аналитика, Глава 16).
       responses:
         default: { $ref: '#/components/responses/ServerError' }
         '204': { description: Отмечено }
@@ -1160,20 +1162,24 @@ components:
         total_pages: { type: integer }
 
     # --- Auth (шаг 2) ---
+    PhoneE164:
+      type: string
+      pattern: '^\+[1-9][0-9]{7,14}$'
+      maxLength: 16
+      example: "+375291234567"
+      description: Телефон в формате E.164 (CHECK ck_app_user_phone_e164, Глава 2). ПД по N-07.
+
     PhoneRequestCode:
       type: object
       required: [phone]
       properties:
-        phone:
-          type: string
-          example: "+375291234567"
-          description: В формате E.164
+        phone: { $ref: '#/components/schemas/PhoneE164' }
 
     VerifyCodeRequest:
       type: object
       required: [phone, code]
       properties:
-        phone: { type: string, example: "+375291234567" }
+        phone: { $ref: '#/components/schemas/PhoneE164' }
         code: { type: string, example: "1234" }
 
     RefreshRequest:
@@ -1186,7 +1192,7 @@ components:
       type: object
       required: [phone, password]
       properties:
-        phone: { type: string }
+        phone: { $ref: '#/components/schemas/PhoneE164' }
         password: { type: string, format: password }
 
     TelegramLinkRequest:
@@ -1208,7 +1214,7 @@ components:
       required: [id, phone, role, created_at]
       properties:
         id: { type: integer }
-        phone: { type: string }
+        phone: { $ref: '#/components/schemas/PhoneE164' }
         role: { type: string, enum: [client, engineer, admin] }
         telegram_id: { type: string, nullable: true }
         created_at: { type: string, format: date-time }
@@ -1384,7 +1390,12 @@ components:
       required: [upload_url, file_url, expires_at]
       properties:
         upload_url: { type: string, description: "PUT сюда бинарные данные напрямую в S3" }
-        file_url: { type: string, description: "Публичная ссылка — использовать в attachments" }
+        file_url:
+          type: string
+          description: >-
+            Идентификатор загруженного объекта — передать в attachments. Не публичная ссылка:
+            backend хранит ключ объекта S3 (ticket_attachment.object_key) и выдаёт
+            presigned URL при чтении (ADR 0004).
         expires_at: { type: string, format: date-time }
 
     # --- Tickets (шаг 5) ---
@@ -1392,7 +1403,11 @@ components:
       type: object
       required: [file_url, file_type]
       properties:
-        file_url: { type: string }
+        file_url:
+          type: string
+          description: >-
+            file_url из PresignResponse. Backend проверяет, что объект загружен текущим
+            пользователем, и сохраняет ключ объекта, MIME и размер (ADR 0004).
         file_type: { type: string, enum: [photo, video] }
 
     TicketCreateRequest:
@@ -1420,6 +1435,11 @@ components:
         sla_due_at: { type: string, format: date-time }
         is_overdue: { type: boolean, description: "Вычисляемое поле: now() > sla_due_at и status != resolved" }
         created_at: { type: string, format: date-time }
+        resolved_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Заполнено тогда и только тогда, когда status = resolved (A-05).
 
     VehicleContext:
       type: object
@@ -1486,8 +1506,12 @@ components:
       required: [article_type, title, content]
       properties:
         vehicle_model_id: { type: integer, nullable: true }
+        firmware_release_id:
+          type: integer
+          nullable: true
+          description: Статья под версию прошивки (C-06); требует vehicle_model_id той же модели.
         article_type: { type: string, enum: [guide, troubleshooting] }
-        title: { type: string }
+        title: { type: string, maxLength: 200 }
         content: { type: string }
 
     KnowledgeArticleUpdateRequest:
@@ -1503,6 +1527,10 @@ components:
       properties:
         id: { type: integer }
         vehicle_model_id: { type: integer, nullable: true }
+        firmware_release_id:
+          type: integer
+          nullable: true
+          description: Статья под версию прошивки (C-06); требует vehicle_model_id той же модели.
         article_type: { type: string, enum: [guide, troubleshooting] }
         title: { type: string }
         content: { type: string }
@@ -1586,7 +1614,7 @@ components:
         - $ref: '#/components/schemas/Notification'
         - type: object
           properties:
-            opened_at: { type: string, format: date-time, nullable: true }
+            read_at: { type: string, format: date-time, nullable: true, description: "NotificationRecipient.read_at" }
 
     NotificationList:
       type: object

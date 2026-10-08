@@ -3,14 +3,35 @@ name: backend-ci
 on:
   pull_request:
     branches: [develop, main]
-    paths: ["backend/**", ".github/workflows/backend-ci.yml"]
+    paths:
+      - "backend/**"
+      - "docs/EV_ServiceDesk_Glava2_DDL.sql"  # test_ddl_export сверяет с миграциями
+      - ".github/workflows/backend-ci.yml"
   push:
     branches: [develop]
-    paths: ["backend/**"]
+    paths: ["backend/**", "docs/EV_ServiceDesk_Glava2_DDL.sql"]
 
 jobs:
   backend-ci:
     runs-on: ubuntu-latest
+    # Реальный PostgreSQL 16 для тестов схемы и миграций (Глава 2). Эфемерный контейнер
+    # без пароля (trust) — секреты в workflow не нужны.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: ev
+          POSTGRES_DB: ev_servicedesk_test
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U ev"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql+psycopg://ev@localhost:5432/ev_servicedesk_test
+      REQUIRE_DB: "1"
     defaults:
       run:
         working-directory: backend
@@ -38,6 +59,18 @@ jobs:
 
       - name: Lint (ruff)
         run: poetry run ruff check .
+
+      - name: Migrations upgrade / downgrade / upgrade
+        env:
+          DATABASE_URL: ${{ env.TEST_DATABASE_URL }}
+        run: |
+          poetry run alembic upgrade head
+          poetry run alembic downgrade base
+          poetry run alembic upgrade head
+          poetry run alembic check
+
+      - name: DDL in sync with migrations
+        run: poetry run python scripts/export_ddl.py --check
 
       - name: Test (pytest)
         run: poetry run pytest -v
