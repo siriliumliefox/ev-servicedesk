@@ -31,6 +31,8 @@ mobile/.packages
 .vscode/
 .idea/
 .DS_Store
+# Claude Code: локальные превью-серверы (npm run mock, dev)
+.claude/launch.json
 
 # Logs
 *.log
