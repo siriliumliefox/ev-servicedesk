@@ -27,6 +27,7 @@ npm ci
 (cd backend && poetry install)
 (cd mobile && flutter pub get)
 docker compose up -d          # postgres:16, redis:7
+git config core.hooksPath .githooks   # pre-commit: gitleaks
 
 # проверки
 (cd backend && poetry run ruff check . && poetry run pytest -q)
@@ -57,10 +58,13 @@ docker compose config -q
 ## Безопасность
 - Не читать и не выводить `.env`; в документации только имена переменных (см. `.env.example`).
 - Не коммитить секреты, персональные данные, экспорт Claude (`light_metadata` особенно).
-- Перед commit: `git diff --cached` + поиск секретов.
+- Перед commit: `git diff --cached` + поиск секретов. Pre-commit hook `.githooks/pre-commit` запускает
+  `gitleaks git --pre-commit --staged`; без gitleaks коммит блокируется. Подключение (один раз на клон):
+  `brew install gitleaks && git config core.hooksPath .githooks`. В CI — `docs-ci` (gitleaks-action).
+  `--no-verify` не использовать.
 
 ## Известные ловушки
-- Poetry должен использовать Python 3.12 (`poetry env use python3.12`).
+- Poetry 2.5.1 (как в CI, Dockerfile и `poetry.lock`); окружение — Python 3.12 (`poetry env use python3.12`).
 - После переноса папки пересоздавать `backend/.venv`, `mobile/.dart_tool`, Flutter `ephemeral`.
 - Adminer: сервер `postgres`, не `db`.
 - Не класть `node_modules` и `.git` в архивы; не создавать `.git` в домашнем каталоге.

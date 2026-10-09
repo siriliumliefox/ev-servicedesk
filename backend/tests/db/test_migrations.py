@@ -13,6 +13,14 @@ from app.models.enums import PG_ENUMS
 from tests.db.conftest import alembic_config
 
 EXPECTED_TABLES = set(Base.metadata.tables)
+EXPECTED_FUNCTIONS = {
+    "vehicle_guard",
+    "set_updated_at",
+    "mileage_correction_before_insert",
+    "mileage_correction_after_insert",
+    "append_only_guard",
+    "pd_consent_guard",
+}
 
 
 def _snapshot(engine: Engine) -> dict[str, set[str]]:
@@ -40,7 +48,7 @@ def _snapshot(engine: Engine) -> dict[str, set[str]]:
 def test_upgrade_downgrade_upgrade(migrated_engine: Engine, db_url: URL) -> None:
     cfg = alembic_config(db_url)
     head = ScriptDirectory.from_config(cfg).get_current_head()
-    assert head == "0003"
+    assert head == "0004"
 
     command.downgrade(cfg, "base")
     empty = _snapshot(migrated_engine)
@@ -50,7 +58,7 @@ def test_upgrade_downgrade_upgrade(migrated_engine: Engine, db_url: URL) -> None
     full = _snapshot(migrated_engine)
     assert full["tables"] == EXPECTED_TABLES
     assert full["enums"] == set(PG_ENUMS)
-    assert full["functions"] == {"vehicle_guard"}
+    assert full["functions"] == EXPECTED_FUNCTIONS
     with migrated_engine.connect() as c:
         assert MigrationContext.configure(c).get_current_revision() == head
 

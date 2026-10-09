@@ -6,7 +6,7 @@ from app.models.aggregates import (
     MaintenanceRegulation,
     VehicleAggregateStatus,
 )
-from app.models.auth import AppUser, RefreshToken
+from app.models.auth import AppUser, PdConsent, RefreshToken
 from app.models.base import Base
 from app.models.knowledge import DecisionTreeNode, KnowledgeArticle
 from app.models.notifications import (
@@ -16,7 +16,7 @@ from app.models.notifications import (
     PushToken,
 )
 from app.models.tickets import Ticket, TicketAttachment, TicketMessage
-from app.models.vehicles import FirmwareRelease, Vehicle, VehicleModel
+from app.models.vehicles import FirmwareRelease, Vehicle, VehicleMileageCorrection, VehicleModel
 
 __all__ = [
     "AggregateType",
@@ -30,6 +30,7 @@ __all__ = [
     "Notification",
     "NotificationDelivery",
     "NotificationRecipient",
+    "PdConsent",
     "PushToken",
     "RefreshToken",
     "Ticket",
@@ -37,5 +38,6 @@ __all__ = [
     "TicketMessage",
     "Vehicle",
     "VehicleAggregateStatus",
+    "VehicleMileageCorrection",
     "VehicleModel",
 ]

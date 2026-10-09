@@ -33,7 +33,7 @@ class CreatedAtMixin:
 
 
 class TimestampMixin(CreatedAtMixin):
-    """updated_at обновляет ORM (onupdate); прямые SQL-UPDATE должны выставлять его сами."""
+    """updated_at выставляет триггер БД trg_set_updated_at при любом UPDATE (ADR 0006)."""
 
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

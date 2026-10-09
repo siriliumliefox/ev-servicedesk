@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, CheckConstraint, DateTime, ForeignKey, String, text
+from sqlalchemy import BigInteger, CheckConstraint, DateTime, ForeignKey, Index, String, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, CreatedAtMixin, IdMixin, TimestampMixin
@@ -17,9 +17,6 @@ class AppUser(IdMixin, TimestampMixin, Base):
         CheckConstraint(r"phone ~ '^\+[1-9][0-9]{7,14}$'", name="phone_e164"),
         CheckConstraint("phone IS NOT NULL OR anonymized_at IS NOT NULL", name="phone_required"),
         CheckConstraint("role = 'client' OR password_hash IS NOT NULL", name="staff_password"),
-        CheckConstraint(
-            "(pd_consent_at IS NULL) = (pd_policy_version IS NULL)", name="pd_consent_pair"
-        ),
     )
 
     # E.164; UNIQUE-индекс одновременно служит индексом поиска по телефону.
@@ -30,8 +27,6 @@ class AppUser(IdMixin, TimestampMixin, Base):
     # bcrypt/argon2 (N-08); обязателен для engineer/admin (staff login).
     password_hash: Mapped[str | None] = mapped_column(String(255))
     is_active: Mapped[bool] = mapped_column(server_default=text("true"), nullable=False)
-    pd_consent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    pd_policy_version: Mapped[str | None] = mapped_column(String(20))
     anonymized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
@@ -47,3 +42,43 @@ class RefreshToken(IdMixin, CreatedAtMixin, Base):
     token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class PdConsent(IdMixin, TimestampMixin, Base):
+    """История согласий на обработку ПД (Закон РБ № 99-З, ст. 5 и 10; ADR 0006).
+
+    Строка = факт согласия с конкретной редакцией политики и датой (доказательство для НЦЗПД).
+    Отзыв = withdrawn_at; в течение 15 дней после отзыва пользователь анонимизируется
+    (app_user.anonymized_at), если нет иных правовых оснований. Триггер pd_consent_guard
+    запрещает DELETE и любые UPDATE, кроме однократной установки withdrawn_at.
+    """
+
+    __tablename__ = "pd_consent"
+    __table_args__ = (
+        CheckConstraint("btrim(policy_version) <> ''", name="policy_version_not_blank"),
+        CheckConstraint(
+            "withdrawn_at IS NULL OR withdrawn_at >= given_at", name="withdrawn_after_given"
+        ),
+        # Не более одного действующего согласия на пользователя.
+        Index(
+            "uq_pd_consent_active",
+            "user_id",
+            unique=True,
+            postgresql_where=text("withdrawn_at IS NULL"),
+        ),
+        # Очередь анонимизации: отозванные согласия.
+        Index(
+            "ix_pd_consent_withdrawn_at",
+            "withdrawn_at",
+            postgresql_where=text("withdrawn_at IS NOT NULL"),
+        ),
+    )
+
+    user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("app_user.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    policy_version: Mapped[str] = mapped_column(String(20), nullable=False)
+    given_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    withdrawn_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

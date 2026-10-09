@@ -16,8 +16,6 @@ erDiagram
         varchar_50 telegram_id UK "nullable"
         varchar_255 password_hash "nullable"
         boolean is_active
-        timestamptz pd_consent_at "nullable"
-        varchar_20 pd_policy_version "nullable"
         timestamptz anonymized_at "nullable"
         timestamptz created_at
         timestamptz updated_at
@@ -95,6 +93,15 @@ erDiagram
         timestamptz read_at "nullable"
         timestamptz created_at
     }
+    pd_consent {
+        bigint id PK
+        bigint user_id FK "unique (user_id) where withdrawn_at IS NULL"
+        varchar_20 policy_version
+        timestamptz given_at
+        timestamptz withdrawn_at "nullable"
+        timestamptz created_at
+        timestamptz updated_at
+    }
     push_token {
         bigint id PK
         bigint user_id FK
@@ -164,6 +171,15 @@ erDiagram
         timestamptz created_at
         timestamptz updated_at
     }
+    vehicle_mileage_correction {
+        bigint id PK
+        bigint vehicle_id FK
+        bigint corrected_by_user_id FK
+        integer old_mileage
+        integer new_mileage
+        varchar_500 reason
+        timestamptz created_at
+    }
     vehicle_model {
         bigint id PK
         varchar_100 brand
@@ -189,6 +205,7 @@ erDiagram
     push_token ||--o{ notification_delivery : "push_token_id (CASCADE)"
     notification ||--o{ notification_recipient : "notification_id (CASCADE)"
     app_user ||--o{ notification_recipient : "user_id (CASCADE)"
+    app_user ||--o{ pd_consent : "user_id (RESTRICT)"
     app_user ||--o{ push_token : "user_id (CASCADE)"
     app_user ||--o{ refresh_token : "user_id (CASCADE)"
     app_user |o--o{ ticket : "assigned_engineer_id (RESTRICT)"
@@ -206,3 +223,5 @@ erDiagram
     vehicle_model ||--o{ vehicle : "vehicle_model_id (RESTRICT)"
     aggregate_type ||--o{ vehicle_aggregate_status : "aggregate_type_id (RESTRICT)"
     vehicle ||--o{ vehicle_aggregate_status : "vehicle_id (CASCADE)"
+    app_user ||--o{ vehicle_mileage_correction : "corrected_by_user_id (RESTRICT)"
+    vehicle ||--o{ vehicle_mileage_correction : "vehicle_id (RESTRICT)"
