@@ -1,0 +1,83 @@
+# Spectral — стиль контракта docs/openapi.yaml (Глава 3, ADR 0007).
+# Семантика (роли ↔ RBAC_MATRIX, пагинация, поля ↔ ORM) — backend/tests/contract.
+# Запуск: npm run lint:api
+extends: ["spectral:oas"]
+
+rules:
+  # Все предупреждения базового набора — ошибки: контракт v1 заморожен.
+  operation-description: error
+  operation-tags: error
+  operation-operationId: error
+  info-contact: error
+
+  ev-operation-id-camel-case:
+    description: operationId — camelCase (имена методов сгенерированных клиентов).
+    severity: error
+    given: "$.paths[*][get,post,put,patch,delete].operationId"
+    then:
+      function: casing
+      functionOptions: { type: camel }
+
+  ev-path-segments-kebab-case:
+    description: Сегменты пути — kebab-case, параметры — {camelCase}.
+    severity: error
+    given: "$.paths"
+    then:
+      field: "@key"
+      function: pattern
+      functionOptions:
+        match: "^(/([a-z][a-z0-9]*(-[a-z0-9]+)*|\\{[a-z][a-zA-Z0-9]*\\}))+$"
+
+  ev-property-snake-case:
+    description: Поля JSON — snake_case (совпадают с колонками БД).
+    severity: error
+    given: "$.components.schemas..properties"
+    then:
+      field: "@key"
+      function: casing
+      functionOptions: { type: snake }
+
+  ev-query-param-snake-case:
+    description: Query-параметры — snake_case.
+    severity: error
+    given: "$..parameters[?(@.in == 'query')].name"
+    then:
+      function: casing
+      functionOptions: { type: snake }
+
+  ev-error-responses-shared:
+    description: Ответы 4xx/5xx и default — только через #/components/responses (единый Error).
+    severity: error
+    resolved: false
+    given: "$.paths[*][get,post,put,patch,delete].responses[?(@property == 'default' || @property >= '400')]"
+    then:
+      field: "$ref"
+      function: truthy
+
+  ev-request-body-named-schema:
+    description: Тело запроса — именованная схема (а не inline), для генерации клиентов.
+    severity: error
+    resolved: false
+    given: "$.paths[*][post,put,patch].requestBody.content.application/json.schema"
+    then:
+      field: "$ref"
+      function: truthy
+
+  ev-secured-operation-roles:
+    description: Защищённая операция объявляет x-required-roles и x-rbac-action.
+    severity: error
+    given: "$.paths[*][?(@.operationId && !(@.security && @.security.length == 0))]"
+    then:
+      - field: x-required-roles
+        function: truthy
+      - field: x-rbac-action
+        function: truthy
+
+  ev-no-array-collections:
+    description: Коллекция — объект {items, meta} (PaginationMeta), не голый массив.
+    severity: error
+    resolved: false
+    given: "$.paths[*].get.responses[?(@property >= '200' && @property < '300')].content.application/json.schema"
+    then:
+      field: type
+      function: falsy

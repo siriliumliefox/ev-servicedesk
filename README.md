@@ -50,6 +50,17 @@ npm run dev --workspace web-admin
 ## Контракт API
 `docs/openapi.yaml` — источник истины. `docs/EV_ServiceDesk_SwaggerUI.html` — открыть в браузере для интерактивной документации (работает офлайн).
 
+Версия **1.0.0 заморожена** — правила изменений и проверки в ADR 0007.
+
+```bash
+npm run mock        # mock-сервер Prism: http://localhost:4010 (любой Bearer-токен)
+npm run lint:api    # Spectral (.spectral.yaml)
+npm run test:mock   # smoke-тест mock-сервера клиентом web-shared
+npm run gen:api     # типы web-shared/src/api/schema.ts из openapi.yaml
+```
+
+Клиент для веб-панелей: `createApiClient` из `@ev-servicedesk/web-shared` (адрес — `VITE_API_BASE_URL`, по умолчанию mock).
+
 ## Окружения и секреты
 `docs/ENVIRONMENTS.md` — модель local/dev/staging/production, разделение секретов, настройка GitHub Environments со «стоп-краном» перед production.
 

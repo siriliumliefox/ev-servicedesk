@@ -3,10 +3,28 @@ name: docs-ci
 on:
   pull_request:
     branches: [develop, main]
-    paths: ["docs/**", "scripts/sync_swagger_html.py", ".github/workflows/docs-ci.yml"]
+    paths:
+      - "docs/**"
+      - "scripts/sync_swagger_html.py"
+      - "scripts/mock_smoke.mts"
+      - "scripts/check_api_breaking.sh"
+      - ".spectral.yaml"
+      - "web-shared/src/api/**"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/docs-ci.yml"
   push:
     branches: [develop]
-    paths: ["docs/**", "scripts/sync_swagger_html.py"]
+    paths:
+      - "docs/**"
+      - "scripts/sync_swagger_html.py"
+      - "scripts/mock_smoke.mts"
+      - "scripts/check_api_breaking.sh"
+      - ".spectral.yaml"
+      - "web-shared/src/api/**"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/docs-ci.yml"
 
 permissions:
   contents: read
@@ -32,6 +50,29 @@ jobs:
 
       - name: Swagger UI HTML in sync with openapi.yaml
         run: python3 scripts/sync_swagger_html.py --check
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"   # ≥ 22.18: scripts/mock_smoke.mts запускается без сборки
+          cache: "npm"
+
+      - name: Install dependencies (Spectral, Prism, openapi-typescript)
+        run: npm ci
+
+      - name: Lint OpenAPI (Spectral)
+        run: npm run lint:api
+
+      - name: Generated API types in sync (web-shared/src/api/schema.ts)
+        run: |
+          npm run gen:api
+          git diff --exit-code -- web-shared/src/api/schema.ts
+
+      - name: Mock server smoke test (Prism + web-shared client)
+        run: npm run test:mock
+
+      - name: Breaking changes vs base branch (oasdiff, ADR 0007)
+        if: github.event_name == 'pull_request'
+        run: scripts/check_api_breaking.sh "origin/${{ github.base_ref }}"
 
       - name: Secret scan (gitleaks)
         uses: gitleaks/gitleaks-action@v2
