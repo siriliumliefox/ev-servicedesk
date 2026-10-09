@@ -8,8 +8,8 @@
 
 | Сущность | Таблицы |
 |---|---|
-| User | `app_user`, `refresh_token` |
-| Vehicle | `vehicle`, `vehicle_model` |
+| User | `app_user`, `refresh_token`, `pd_consent` |
+| Vehicle | `vehicle`, `vehicle_model`, `vehicle_mileage_correction` |
 | Aggregate | `aggregate_type`, `vehicle_aggregate_status`, `maintenance_record` |
 | MaintenanceRegulation | `maintenance_regulation` |
 | Ticket | `ticket`, `ticket_attachment` |
@@ -18,7 +18,7 @@
 | Notification | `notification`, `notification_recipient`, `push_token`, `notification_delivery` |
 | FirmwareRelease | `firmware_release` |
 
-Итого 18 таблиц, 6 ENUM, 1 триггер (`trg_vehicle_guard`). Связи 1:N — все FK; M:N —
+Итого 20 таблиц, 6 ENUM; триггеры: `trg_vehicle_guard`, `trg_set_updated_at` (на каждой таблице с `updated_at`), корректировка пробега и защита `pd_consent` (ADR 0006). Связи 1:N — все FK; M:N —
 `notification_recipient` (notification × user), `notification_delivery` (notification × push_token).
 
 ## Бэклог baseline v1 → данные
@@ -27,7 +27,7 @@
 |---|---|
 | C-01, X-02, N-06 | `app_user.phone` (E.164, UNIQUE); SMS-коды — Redis (ADR 0005) |
 | C-02, X-05 | `vehicle.vin` (CHECK, частичный UNIQUE), `vehicle_model` |
-| C-03 | `vehicle.mileage`, `maintenance_record` |
+| C-03 | `vehicle.mileage`, `maintenance_record`, `vehicle_mileage_correction` (ADR 0006) |
 | C-04, C-05 | `vehicle_aggregate_status`, `maintenance_regulation` (расчёт — Глава 5) |
 | C-06 | `knowledge_article.vehicle_model_id`, `.firmware_release_id`, `vehicle.current_firmware_release_id` |
 | C-07 | `decision_tree_node`, `ticket.source_article_id`, `ticket.source_node_id` |
@@ -51,10 +51,10 @@
 | A-07 | `aggregate_type` (seed — миграция 0002) |
 | X-01 | `app_user.role`; object-level — см. ниже |
 | X-04, N-08 | `password_hash`, `refresh_token.token_hash` (SHA-256) |
-| N-07 | `pd_consent_at`, `pd_policy_version`, `anonymized_at` (ADR 0005) |
+| N-07 | `pd_consent` (история, отзыв), `app_user.anonymized_at` (ADR 0005, 0006) |
 | N-10 | `maintenance_regulation` + `vehicle_aggregate_status` + `notification` (type = maintenance) |
 
-## Ревью «по ролям» (сверено с `openapi.yaml` 1.0.0-rc2)
+## Ревью «по ролям» (сверено с `openapi.yaml` 1.0.0-rc3)
 
 | Роль / экран | Поля OpenAPI | Источник в БД |
 |---|---|---|
@@ -70,6 +70,8 @@
 | admin: регламенты / агрегаты | `MaintenanceRegulation.*`, `AggregateType.*` | `maintenance_regulation`, `aggregate_type` |
 | admin: прошивки / рассылки | `FirmwareRelease.*`, `Notification.*` | `firmware_release`, `notification` |
 | admin: пользователи | `UserPublic.*` | `app_user` |
+| admin: корректировка пробега | `MileageCorrectionRequest.*` | `vehicle_mileage_correction`, `vehicle.mileage` |
+| client: согласие/отзыв ПД | `VerifyCodeRequest.pd_policy_version`, `withdrawPdConsent` | `pd_consent` |
 | admin: аналитика | (Глава 16) | `ticket.created_at/resolved_at`, `notification_delivery.opened_at` |
 
 ## Object-level доступ (RBAC_MATRIX, RBAC-01)
@@ -92,6 +94,10 @@
 | Смена владельца не ломает историю ТО | soft-delete + новая запись | `test_owner_change_keeps_maintenance_history` |
 | VIN/владелец/модель неизменяемы | `trg_vehicle_guard` | `test_vehicle_identity_is_immutable` |
 | Пробег ≥ 0 и не уменьшается (409) | CHECK + `trg_vehicle_guard` | `test_mileage_cannot_*`, `test_conditional_mileage_update_reports_conflict` |
+| Уменьшение пробега — только admin через журнал, с проверкой актуальности | триггеры `mileage_correction_*`, `vehicle_guard` v2 | `test_admin_correction_lowers_mileage_with_audit`, `test_only_admin_can_correct`, `test_stale_correction_rejected`, `test_direct_decrease_still_forbidden_even_for_admin` |
+| Журнал корректировок append-only | `vehicle_mileage_correction_append_only` | `test_correction_log_is_append_only` |
+| `updated_at` выставляет БД при любом UPDATE | `trg_set_updated_at` | `test_every_updated_at_table_has_trigger`, `test_raw_sql_update_bumps_updated_at` |
+| Одно действующее согласие ПД; доказательство неизменно, отзыв однократен | `uq_pd_consent_active`, `pd_consent_withdraw_only` | `test_single_active_consent_and_history`, `test_consent_evidence_is_immutable`, `test_consent_withdrawal_is_final` |
 | Телефон E.164, уникален | `ck_app_user_phone_e164`, `uq_app_user_phone` | `test_phone_must_be_e164`, `test_phone_unique` |
 | Одна запись статуса на (авто, агрегат) | `uq_vehicle_aggregate_status_*` | `test_one_status_per_vehicle_and_aggregate` |
 | Один активный регламент на (модель, агрегат) | `uq_maintenance_regulation_active` | `test_regulation_interval_rules` |

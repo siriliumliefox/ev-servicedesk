@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: EV-ServiceDesk API
-  version: "1.0.0-rc2"
+  version: "1.0.0-rc3"
   description: >
     API дипломного проекта «EV-ServiceDesk» (ООО «ЕТСавтоГомель»).
     Контракты сервисов: Auth, Vehicle, Aggregates & Maintenance, Tickets,
@@ -84,6 +84,13 @@ paths:
                       is_new_user: { type: boolean }
                       user: { $ref: '#/components/schemas/UserPublic' }
         '400': { $ref: '#/components/responses/BadRequest' }
+        '422':
+          description: >-
+            PD_CONSENT_REQUIRED — нет действующего согласия на обработку ПД и не передан
+            pd_policy_version (99-З, ст. 5); либо иная ошибка валидации.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
         '429': { $ref: '#/components/responses/RateLimited' }
 
   /auth/refresh:
@@ -122,6 +129,24 @@ paths:
         default: { $ref: '#/components/responses/ServerError' }
         '204': { description: Токен отозван }
         '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /auth/pd-consent:
+    delete:
+      tags: [Auth]
+      summary: Отозвать согласие на обработку персональных данных
+      operationId: withdrawPdConsent
+      x-required-roles: [client]
+      description: >
+        99-З, ст. 10: отзыв в любое время и в той же форме, в которой дано согласие
+        (в приложении). Фиксирует pd_consent.withdrawn_at, отзывает все refresh-токены и
+        ставит пользователя в очередь анонимизации: удаление ПД и уведомление
+        субъекта не позднее 15 дней, если нет иных правовых оснований.
+        409 PD_CONSENT_NOT_ACTIVE — действующего согласия нет (уже отозвано).
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '202': { description: "Согласие отозвано, удаление ПД запланировано" }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
 
   /auth/staff/login:
     post:
@@ -318,6 +343,36 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
 
+
+  /vehicles/{vehicleId}/mileage-corrections:
+    parameters:
+      - { name: vehicleId, in: path, required: true, schema: { type: integer } }
+    post:
+      tags: [Vehicle]
+      summary: Исправить ошибочно введённый пробег (вниз)
+      operationId: correctVehicleMileage
+      x-required-roles: [admin]
+      description: >
+        Единственный способ уменьшить пробег (ADR 0006). Создаёт запись в append-only
+        журнале VehicleMileageCorrection с причиной и автором; пробег меняется атомарно
+        триггером БД. 409 — expected_current_mileage не совпал с текущим или mileage не меньше
+        текущего (для увеличения — updateVehicleMileage).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MileageCorrectionRequest' }
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '201':
+          description: Пробег исправлен, запись аудита создана
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Vehicle' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
   /vehicles/{vehicleId}/maintenance-records:
     parameters:
       - { name: vehicleId, in: path, required: true, schema: { type: integer } }
@@ -1181,6 +1236,15 @@ components:
       properties:
         phone: { $ref: '#/components/schemas/PhoneE164' }
         code: { type: string, example: "1234" }
+        pd_policy_version:
+          type: string
+          maxLength: 20
+          nullable: true
+          example: "2026-10"
+          description: >-
+            Редакция политики обработки ПД, с которой пользователь согласился в приложении.
+            Обязательна при первой регистрации и при отсутствии действующего согласия;
+            фиксируется в pd_consent с датой (99-З, ст. 5). Без согласия — 422 PD_CONSENT_REQUIRED.
 
     RefreshRequest:
       type: object
@@ -1214,7 +1278,11 @@ components:
       required: [id, phone, role, created_at]
       properties:
         id: { type: integer }
-        phone: { $ref: '#/components/schemas/PhoneE164' }
+        phone:
+          allOf:
+            - $ref: '#/components/schemas/PhoneE164'
+          nullable: true
+          description: E.164; null — пользователь анонимизирован (ПД удалены по 99-З, ADR 0006).
         role: { type: string, enum: [client, engineer, admin] }
         telegram_id: { type: string, nullable: true }
         created_at: { type: string, format: date-time }
@@ -1275,6 +1343,17 @@ components:
       required: [mileage]
       properties:
         mileage: { type: integer, minimum: 0 }
+
+    MileageCorrectionRequest:
+      type: object
+      required: [expected_current_mileage, mileage, reason]
+      properties:
+        expected_current_mileage:
+          type: integer
+          minimum: 0
+          description: Пробег, который видел администратор (защита от гонки → 409 при расхождении).
+        mileage: { type: integer, minimum: 0, description: "Новое значение, строго меньше текущего" }
+        reason: { type: string, minLength: 1, maxLength: 500 }
 
     # aggregate_type_code (не id) — публичный контракт ссылается на стабильный
     # бизнес-ключ справочника AggregateType, а не на внутренний surrogate id (Глава 2).

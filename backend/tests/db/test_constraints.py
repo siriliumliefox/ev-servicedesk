@@ -168,15 +168,6 @@ def test_staff_requires_password_hash(conn: Connection, role: str) -> None:
     )
 
 
-def test_pd_consent_requires_policy_version(conn: Connection) -> None:
-    assert_violation(
-        conn,
-        "ck_app_user_pd_consent_pair",
-        "INSERT INTO app_user (phone, role, pd_consent_at) VALUES (:p, 'client', now())",
-        p=fake_phone(),
-    )
-
-
 def test_refresh_token_stores_only_sha256(conn: Connection) -> None:
     assert_violation(
         conn,

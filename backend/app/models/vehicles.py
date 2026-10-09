@@ -82,3 +82,29 @@ class Vehicle(IdMixin, TimestampMixin, Base):
     mileage: Mapped[int] = mapped_column(Integer, server_default=text("0"), nullable=False)
     current_firmware_release_id: Mapped[int | None] = mapped_column(BigInteger, index=True)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class VehicleMileageCorrection(IdMixin, CreatedAtMixin, Base):
+    """Append-only журнал корректировки пробега вниз (ADR 0006).
+
+    Единственный способ уменьшить vehicle.mileage: INSERT строки. Триггеры БД проверяют,
+    что автор — admin, old_mileage равен текущему пробегу, и атомарно применяют new_mileage.
+    UPDATE/DELETE запрещены.
+    """
+
+    __tablename__ = "vehicle_mileage_correction"
+    __table_args__ = (
+        CheckConstraint("new_mileage >= 0", name="new_mileage_non_negative"),
+        CheckConstraint("new_mileage < old_mileage", name="decrease_only"),
+        CheckConstraint("btrim(reason) <> ''", name="reason_not_blank"),
+    )
+
+    vehicle_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("vehicle.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    corrected_by_user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("app_user.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    old_mileage: Mapped[int] = mapped_column(Integer, nullable=False)
+    new_mileage: Mapped[int] = mapped_column(Integer, nullable=False)
+    reason: Mapped[str] = mapped_column(String(500), nullable=False)
