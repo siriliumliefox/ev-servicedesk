@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: EV-ServiceDesk API
-  version: "1.0.0-rc3"
+  version: "1.0.0"
   description: >
     API дипломного проекта «EV-ServiceDesk» (ООО «ЕТСавтоГомель»).
     Контракты сервисов: Auth, Vehicle, Aggregates & Maintenance, Tickets,
@@ -15,6 +15,10 @@ servers:
     description: Production
   - url: https://staging-api.ev-servicedesk.example.com/v1
     description: Staging
+  - url: http://localhost:4010
+    description: Local mock (Prism, `npm run mock`) — параллельная разработка клиентов
+  - url: http://localhost:8000/v1
+    description: Local backend (uvicorn)
 
 security:
   - bearerAuth: []
@@ -27,6 +31,8 @@ tags:
   - name: Tickets
   - name: KnowledgeBase
   - name: Notifications
+  - name: Users
+  - name: Analytics
 
 paths:
   # ===================== AUTH SERVICE (шаг 2) =====================
@@ -56,6 +62,7 @@ paths:
                 properties:
                   ttl_seconds: { type: integer, example: 120 }
         '400': { $ref: '#/components/responses/ValidationError' }
+        '422': { $ref: '#/components/responses/ValidationError' }
         '429': { $ref: '#/components/responses/RateLimited' }
 
   /auth/phone/verify-code:
@@ -63,7 +70,9 @@ paths:
       tags: [Auth]
       summary: Подтвердить SMS-код — вход или создание аккаунта (role=client)
       operationId: verifyPhoneCode
-      description: Проверяет код; создаёт пользователя при первом обращении.
+      description: >
+        Проверяет код; создаёт пользователя при первом обращении.
+        422 PD_CONSENT_REQUIRED — нет действующего согласия на обработку ПД и не передан pd_policy_version (99-З, ст. 5); либо иная ошибка валидации.
       security: []
       requestBody:
         required: true
@@ -84,13 +93,7 @@ paths:
                       is_new_user: { type: boolean }
                       user: { $ref: '#/components/schemas/UserPublic' }
         '400': { $ref: '#/components/responses/BadRequest' }
-        '422':
-          description: >-
-            PD_CONSENT_REQUIRED — нет действующего согласия на обработку ПД и не передан
-            pd_policy_version (99-З, ст. 5); либо иная ошибка валидации.
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/Error' }
+        '422': { $ref: '#/components/responses/ValidationError' }
         '429': { $ref: '#/components/responses/RateLimited' }
 
   /auth/refresh:
@@ -113,12 +116,15 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/AuthTokens' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '422': { $ref: '#/components/responses/ValidationError' }
 
   /auth/logout:
     post:
       tags: [Auth]
       summary: Отозвать refresh-токен (выход с устройства)
       operationId: logout
+      x-required-roles: [client, engineer, admin]
+      x-rbac-action: ["Регистрация/авторизация (свой аккаунт)"]
       description: Инвалидирует refresh-токен текущего устройства.
       requestBody:
         required: true
@@ -129,6 +135,7 @@ paths:
         default: { $ref: '#/components/responses/ServerError' }
         '204': { description: Токен отозван }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '422': { $ref: '#/components/responses/ValidationError' }
 
   /auth/pd-consent:
     delete:
@@ -136,6 +143,7 @@ paths:
       summary: Отозвать согласие на обработку персональных данных
       operationId: withdrawPdConsent
       x-required-roles: [client]
+      x-rbac-action: ["Отзыв согласия на обработку ПД"]
       description: >
         99-З, ст. 10: отзыв в любое время и в той же форме, в которой дано согласие
         (в приложении). Фиксирует pd_consent.withdrawn_at, отзывает все refresh-токены и
@@ -146,6 +154,7 @@ paths:
         default: { $ref: '#/components/responses/ServerError' }
         '202': { description: "Согласие отозвано, удаление ПД запланировано" }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
 
   /auth/staff/login:
@@ -176,6 +185,7 @@ paths:
                     properties:
                       user: { $ref: '#/components/schemas/UserPublic' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '422': { $ref: '#/components/responses/ValidationError' }
 
   /auth/telegram/link:
     post:
@@ -184,6 +194,7 @@ paths:
       operationId: linkTelegram
       description: Сохраняет telegram_id для уже авторизованного пользователя.
       x-required-roles: [client]
+      x-rbac-action: ["Регистрация/авторизация (свой аккаунт)"]
       requestBody:
         required: true
         content:
@@ -197,7 +208,9 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/UserPublic' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
 
   # ===================== VEHICLE SERVICE (шаг 3) =====================
   # VIN-декодер вызывается ВНУТРИ POST /vehicles (серверная интеграция/мок),
@@ -211,20 +224,23 @@ paths:
       operationId: searchVehicleModels
       description: Возвращает модели по подстроке бренда/модели для ручного выбора.
       x-required-roles: [client, engineer, admin]
+      x-rbac-action: ["Добавление авто (VIN)", "CRUD регламентов ТО", "Публикация новостей/акций/прошивок"]
       parameters:
         - name: search
           in: query
           schema: { type: string }
           description: Подстрока по бренду/модели
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
       responses:
         default: { $ref: '#/components/responses/ServerError' }
         '200':
           description: Список моделей
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: '#/components/schemas/VehicleModel' }
+              schema: { $ref: '#/components/schemas/VehicleModelList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '422': { $ref: '#/components/responses/ValidationError' }
 
   /vehicles:
     get:
@@ -233,26 +249,32 @@ paths:
       operationId: listVehicles
       description: Возвращает все автомобили, привязанные к текущему клиенту.
       x-required-roles: [client]
+      x-rbac-action: ["Просмотр авто (карточка)"]
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
       responses:
         default: { $ref: '#/components/responses/ServerError' }
         '200':
           description: Список авто
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: '#/components/schemas/Vehicle' }
+              schema: { $ref: '#/components/schemas/VehicleList' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
     post:
       tags: [Vehicle]
       summary: Добавить автомобиль по VIN
       operationId: createVehicle
       x-required-roles: [client]
+      x-rbac-action: ["Добавление авто (VIN)"]
       description: >
         Марка/модель/комплектация определяются через VIN-декодер (или мок).
         Если декодер не смог распознать VIN — 422 с кодом VIN_DECODE_FAILED,
         и клиент должен передать vehicle_model_id вручную повторным запросом
         (Vehicle без VehicleModel создать нельзя — FK NOT NULL, Глава 2).
+        409 — VIN уже привязан к другому аккаунту.
       requestBody:
         required: true
         content:
@@ -265,12 +287,10 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Vehicle' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
         '422': { $ref: '#/components/responses/ValidationError' }
-        '409':
-          description: VIN уже привязан к другому аккаунту
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/Error' }
 
   /vehicles/{vehicleId}:
     parameters:
@@ -280,6 +300,7 @@ paths:
       summary: Карточка автомобиля (марка/модель/пробег)
       operationId: getVehicle
       x-required-roles: [client, engineer, admin]
+      x-rbac-action: ["Просмотр авто (карточка)"]
       description: >
         Не включает статусы агрегатов — зона ответственности Aggregates
         Service (шаг 4). RBAC-роль сама по себе не даёт доступа к ЛЮБОМУ
@@ -294,6 +315,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Vehicle' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
     delete:
@@ -302,9 +324,11 @@ paths:
       operationId: deleteVehicle
       description: Помечает автомобиль неактивным, не удаляя связанные записи.
       x-required-roles: [client, admin]
+      x-rbac-action: ["Удаление авто (soft-delete)"]
       responses:
         default: { $ref: '#/components/responses/ServerError' }
         '204': { description: Удалено }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
@@ -316,6 +340,7 @@ paths:
       summary: Обновить пробег
       operationId: updateVehicleMileage
       x-required-roles: [client, engineer, admin]
+      x-rbac-action: ["Обновление пробега авто"]
       description: >
         Отдельный узкий эндпоинт вместо общего PATCH /vehicles/{id} — VIN и
         модель после создания не редактируются, менять можно только пробег.
@@ -323,6 +348,7 @@ paths:
         с текущим состоянием ресурса, не ошибка формата входных данных.
         Object-level (RBAC-01): client — только свой автомобиль; engineer — только
         автомобиль из назначенного ему тикета; admin — любой. Иначе 403.
+        409 — Новый пробег меньше текущего.
       requestBody:
         required: true
         content:
@@ -335,13 +361,11 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Vehicle' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
-        '409':
-          description: Новый пробег меньше текущего
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/Error' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
 
 
   /vehicles/{vehicleId}/mileage-corrections:
@@ -352,6 +376,7 @@ paths:
       summary: Исправить ошибочно введённый пробег (вниз)
       operationId: correctVehicleMileage
       x-required-roles: [admin]
+      x-rbac-action: ["Исправление пробега вниз (с причиной, аудит)"]
       description: >
         Единственный способ уменьшить пробег (ADR 0006). Создаёт запись в append-only
         журнале VehicleMileageCorrection с причиной и автором; пробег меняется атомарно
@@ -369,6 +394,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Vehicle' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
@@ -382,6 +408,7 @@ paths:
       operationId: listMaintenanceRecords
       description: Постраничная история работ по автомобилю.
       x-required-roles: [client, engineer, admin]
+      x-rbac-action: ["Просмотр авто (карточка)"]
       parameters:
         - $ref: '#/components/parameters/PageParam'
         - $ref: '#/components/parameters/PageSizeParam'
@@ -392,13 +419,16 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/MaintenanceRecordList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
     post:
       tags: [Vehicle]
       summary: Зафиксировать выполненную работу
       operationId: createMaintenanceRecord
       x-required-roles: [engineer, admin]
+      x-rbac-action: ["Фиксация замены агрегата"]
       description: Клиент этим эндпоинтом не пользуется — история заполняется инженером/админом.
       requestBody:
         required: true
@@ -412,8 +442,10 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/MaintenanceRecord' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
 
   # ===================== AGGREGATES & MAINTENANCE SERVICE (шаг 4) =====================
   /aggregate-types:
@@ -423,20 +455,25 @@ paths:
       operationId: listAggregateTypes
       description: Возвращает все типы агрегатов, включая добавленные администратором.
       x-required-roles: [client, engineer, admin]
+      x-rbac-action: ["Просмотр справочника агрегатов"]
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
       responses:
         default: { $ref: '#/components/responses/ServerError' }
         '200':
           description: Список типов агрегатов
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: '#/components/schemas/AggregateType' }
+              schema: { $ref: '#/components/schemas/AggregateTypeList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '422': { $ref: '#/components/responses/ValidationError' }
     post:
       tags: [Aggregates]
       summary: Добавить тип агрегата в справочник
       operationId: createAggregateType
       x-required-roles: [admin]
+      x-rbac-action: ["Изменение справочника агрегатов"]
       description: Расширение набора агрегатов на схеме без релиза кода (ТЗ, раздел 5).
       requestBody:
         required: true
@@ -450,8 +487,10 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AggregateType' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
 
   /maintenance-regulations:
     get:
@@ -460,6 +499,7 @@ paths:
       operationId: listMaintenanceRegulations
       description: Возвращает активные (или все, если include_archived) регламенты.
       x-required-roles: [engineer, admin]
+      x-rbac-action: ["CRUD регламентов ТО"]
       parameters:
         - name: vehicle_model_id
           in: query
@@ -469,20 +509,24 @@ paths:
           in: query
           required: false
           schema: { type: boolean, default: false }
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
       responses:
         default: { $ref: '#/components/responses/ServerError' }
         '200':
           description: Список регламентов
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: '#/components/schemas/MaintenanceRegulation' }
+              schema: { $ref: '#/components/schemas/MaintenanceRegulationList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
     post:
       tags: [Aggregates]
       summary: Создать/пересмотреть регламент (upsert по модели+агрегату)
       operationId: reviseMaintenanceRegulation
       x-required-roles: [admin]
+      x-rbac-action: ["CRUD регламентов ТО"]
       description: >
         Не PATCH: если для пары (vehicle_model_id, aggregate_type_code) уже
         есть активный регламент, сервер атомарно архивирует его
@@ -502,6 +546,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/MaintenanceRegulation' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '422': { $ref: '#/components/responses/ValidationError' }
 
@@ -513,10 +558,12 @@ paths:
       summary: Архивировать регламент (без замены)
       operationId: archiveMaintenanceRegulation
       x-required-roles: [admin]
+      x-rbac-action: ["CRUD регламентов ТО"]
       description: Прекращает отслеживание пары модель+агрегат; история расчётов по прошлым авто не затрагивается.
       responses:
         default: { $ref: '#/components/responses/ServerError' }
         '204': { description: Архивирован }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
@@ -528,21 +575,25 @@ paths:
       summary: Статусы всех агрегатов авто (для интерактивной схемы)
       operationId: listAggregateStatuses
       x-required-roles: [client, engineer, admin]
+      x-rbac-action: ["Просмотр статусов агрегатов"]
       description: >
         Алгоритм и пороги — Глава 5 ТЗ. Отдельное значение status=unknown
         (не ошибка) для агрегата без истории замены — edge-case "новый авто
         без истории" явно предусмотрен, а не считается сбоем.
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
       responses:
         default: { $ref: '#/components/responses/ServerError' }
         '200':
           description: Статусы агрегатов
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: '#/components/schemas/AggregateStatus' }
+              schema: { $ref: '#/components/schemas/AggregateStatusList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
 
   /vehicles/{vehicleId}/aggregate-statuses/{aggregateTypeCode}/replace:
     parameters:
@@ -553,6 +604,7 @@ paths:
       summary: Зафиксировать замену агрегата (сброс счётчика)
       operationId: replaceAggregateStatus
       x-required-roles: [engineer, admin]
+      x-rbac-action: ["Фиксация замены агрегата"]
       description: >
         Единственная точка входа для инженера при замене: сбрасывает счётчик
         (обновляет VehicleAggregateStatus) И создаёт соответствующую запись
@@ -574,8 +626,10 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AggregateStatus' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
 
   # ===================== UPLOADS (общая утилита для Tickets/KB) =====================
   /uploads/presign:
@@ -584,6 +638,7 @@ paths:
       summary: Получить presigned URL для прямой загрузки файла в S3
       operationId: createPresignedUpload
       x-required-roles: [client, engineer]
+      x-rbac-action: ["Создание тикета", "Сообщения в чате тикета"]
       description: >
         Клиент загружает файл напрямую в S3 по upload_url, минуя API-сервер
         (не гоняем бинарные данные через backend). file_url затем передаётся
@@ -600,7 +655,9 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/PresignResponse' }
-        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
 
   # ===================== TICKETS SERVICE (шаг 5) =====================
   /tickets:
@@ -609,6 +666,7 @@ paths:
       summary: Список тикетов (канбан-доска инженера / история клиента)
       operationId: listTickets
       x-required-roles: [client, engineer, admin]
+      x-rbac-action: ["Просмотр тикета"]
       description: >
         client — только свои тикеты. engineer/admin — фильтры по
         status/category/overdue для канбана (Глава 21).
@@ -635,11 +693,14 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/TicketList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '422': { $ref: '#/components/responses/ValidationError' }
     post:
       tags: [Tickets]
       summary: Создать тикет
       operationId: createTicket
       x-required-roles: [client]
+      x-rbac-action: ["Создание тикета"]
       description: >
         source_article_id/source_node_id — при эскалации из дерева решений
         (Knowledge Base), иначе null. Вложения — через /uploads/presign
@@ -656,6 +717,8 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/TicketDetail' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '422': { $ref: '#/components/responses/ValidationError' }
 
   /tickets/{ticketId}:
@@ -666,6 +729,7 @@ paths:
       summary: Карточка тикета с автопривязанным контекстом авто
       operationId: getTicket
       x-required-roles: [client, engineer, admin]
+      x-rbac-action: ["Просмотр тикета"]
       description: >
         vehicle_context собирается из Vehicle Service и Aggregates Service
         (модель, текущая прошивка, статусы агрегатов на момент обращения) —
@@ -677,6 +741,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/TicketDetail' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
@@ -689,15 +754,12 @@ paths:
       operationId: updateTicketStatus
       description: Валидирует допустимость перехода между статусами на сервере.
       x-required-roles: [engineer, admin]
+      x-rbac-action: ["Смена статуса тикета"]
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              type: object
-              required: [status]
-              properties:
-                status: { type: string, enum: [new, in_progress, waiting_vendor, resolved] }
+            schema: { $ref: '#/components/schemas/TicketStatusUpdateRequest' }
       responses:
         default: { $ref: '#/components/responses/ServerError' }
         '200':
@@ -705,7 +767,9 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/TicketDetail' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/ValidationError' }
 
   /tickets/{ticketId}/claim:
@@ -716,6 +780,7 @@ paths:
       summary: Инженер берёт тикет в работу (самоназначение)
       operationId: claimTicket
       x-required-roles: [engineer]
+      x-rbac-action: ["Назначение тикета инженеру"]
       description: >
         Оптимистичная блокировка: если тикет уже назначен другим инженером —
         409, а не тихая перезапись (тест конкурентного доступа, Глава 21).
@@ -726,11 +791,10 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/TicketDetail' }
-        '409':
-          description: Тикет уже взят другим инженером
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/Error' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
 
   /tickets/{ticketId}/assign:
     parameters:
@@ -741,15 +805,12 @@ paths:
       operationId: assignTicket
       description: Позволяет администратору назначить или снять инженера с тикета.
       x-required-roles: [admin]
+      x-rbac-action: ["Назначение тикета инженеру"]
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              type: object
-              required: [assigned_engineer_id]
-              properties:
-                assigned_engineer_id: { type: integer, nullable: true }
+            schema: { $ref: '#/components/schemas/TicketAssignRequest' }
       responses:
         default: { $ref: '#/components/responses/ServerError' }
         '200':
@@ -757,7 +818,10 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/TicketDetail' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
 
   /tickets/{ticketId}/messages:
     parameters:
@@ -767,6 +831,7 @@ paths:
       summary: История чата тикета
       operationId: listTicketMessages
       x-required-roles: [client, engineer, admin]
+      x-rbac-action: ["Сообщения в чате тикета"]
       description: >
         REST — персистентная история и фallback (long-polling). Реал-тайм
         доставка — по WebSocket, вне зоны OpenAPI-контракта (описывается
@@ -781,12 +846,16 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/TicketMessageList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
     post:
       tags: [Tickets]
       summary: Отправить сообщение в тикет
       operationId: createTicketMessage
       description: Добавляет сообщение в чат тикета; доступно всем сторонам диалога.
       x-required-roles: [client, engineer, admin]
+      x-rbac-action: ["Сообщения в чате тикета"]
       requestBody:
         required: true
         content:
@@ -799,7 +868,10 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/TicketMessage' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
 
   # ===================== KNOWLEDGE BASE SERVICE (шаг 5) =====================
   /knowledge-articles:
@@ -808,6 +880,7 @@ paths:
       summary: Список/поиск статей
       operationId: listKnowledgeArticles
       x-required-roles: [client, engineer, admin]
+      x-rbac-action: ["Просмотр статей / дерева решений"]
       description: client видит только is_published=true; engineer/admin — все, включая черновики.
       parameters:
         - name: vehicle_model_id
@@ -828,12 +901,15 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/KnowledgeArticleList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '422': { $ref: '#/components/responses/ValidationError' }
     post:
       tags: [KnowledgeBase]
       summary: Создать статью (черновик)
       operationId: createKnowledgeArticle
       description: Создаёт неопубликованную статью для дальнейшего редактирования.
       x-required-roles: [admin]
+      x-rbac-action: ["CRUD статей базы знаний"]
       requestBody:
         required: true
         content:
@@ -846,7 +922,9 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/KnowledgeArticle' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
 
   /knowledge-articles/{articleId}:
     parameters:
@@ -857,6 +935,7 @@ paths:
       operationId: getKnowledgeArticle
       description: Возвращает статью по идентификатору.
       x-required-roles: [client, engineer, admin]
+      x-rbac-action: ["Просмотр статей / дерева решений"]
       responses:
         default: { $ref: '#/components/responses/ServerError' }
         '200':
@@ -864,12 +943,14 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/KnowledgeArticle' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
     patch:
       tags: [KnowledgeBase]
       summary: Редактировать/опубликовать статью
       operationId: updateKnowledgeArticle
       x-required-roles: [admin]
+      x-rbac-action: ["CRUD статей базы знаний"]
       description: >
         Редактирование инкрементирует version. Полная история версий не
         хранится (не требуется ТЗ) — version нужен для отображения
@@ -886,17 +967,23 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/KnowledgeArticle' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
     delete:
       tags: [KnowledgeBase]
       summary: Снять статью с публикации
       operationId: unpublishKnowledgeArticle
       x-required-roles: [admin]
+      x-rbac-action: ["CRUD статей базы знаний"]
       description: Soft — is_published=false. Жёсткое удаление не предусмотрено (Ticket.source_article_id ссылается на статьи).
       responses:
         default: { $ref: '#/components/responses/ServerError' }
         '204': { description: Снято с публикации }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
 
   /knowledge-articles/{articleId}/decision-tree:
     parameters:
@@ -906,22 +993,30 @@ paths:
       summary: Дерево решений статьи (все узлы)
       operationId: listDecisionTreeNodes
       x-required-roles: [client, engineer, admin]
+      x-rbac-action: ["Просмотр статей / дерева решений"]
       description: Клиент проходит от узла с is_root=true, следуя options[].next_node_id.
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
       responses:
         default: { $ref: '#/components/responses/ServerError' }
         '200':
           description: Узлы дерева
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: '#/components/schemas/DecisionTreeNode' }
+              schema: { $ref: '#/components/schemas/DecisionTreeNodeList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
     post:
       tags: [KnowledgeBase]
       summary: Добавить узел дерева решений
       operationId: createDecisionTreeNode
-      description: Создаёт узел; сервер проверяет уникальность is_root=true для статьи.
+      description: >
+        Создаёт узел; сервер проверяет уникальность is_root=true для статьи.
+        409 — Нарушение инварианта (напр. второй is_root=true).
       x-required-roles: [admin]
+      x-rbac-action: ["CRUD статей базы знаний"]
       requestBody:
         required: true
         content:
@@ -934,12 +1029,11 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/DecisionTreeNode' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
-        '409':
-          description: Нарушение инварианта (напр. второй is_root=true)
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/Error' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
 
   /knowledge-articles/{articleId}/decision-tree/validate:
     parameters:
@@ -949,6 +1043,7 @@ paths:
       summary: Проверить дерево на тупики перед публикацией
       operationId: validateDecisionTree
       x-required-roles: [admin]
+      x-rbac-action: ["CRUD статей базы знаний"]
       description: >
         Операционализация теста из чек-листа Главы 14 ("отсутствие тупиков в
         дереве решений") — админ прогоняет проверку сам, не дожидаясь QA.
@@ -959,6 +1054,9 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/DecisionTreeValidationResult' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
 
   /decision-tree-nodes/{nodeId}:
     parameters:
@@ -969,6 +1067,7 @@ paths:
       operationId: updateDecisionTreeNode
       description: Обновляет текст вопроса и варианты переходов узла дерева решений.
       x-required-roles: [admin]
+      x-rbac-action: ["CRUD статей базы знаний"]
       requestBody:
         required: true
         content:
@@ -981,22 +1080,26 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/DecisionTreeNode' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
     delete:
       tags: [KnowledgeBase]
       summary: Удалить узел
       operationId: deleteDecisionTreeNode
-      description: Отклоняется с 409, если на узел ссылаются другие узлы.
+      description: >
+        Отклоняется с 409, если на узел ссылаются другие узлы.
+        409 — На узел ссылаются другие узлы — сначала обновите их options.
       x-required-roles: [admin]
+      x-rbac-action: ["CRUD статей базы знаний"]
       responses:
         default: { $ref: '#/components/responses/ServerError' }
         '204': { description: Удалён }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
-        '409':
-          description: На узел ссылаются другие узлы — сначала обновите их options
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/Error' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
 
   # ===================== NOTIFICATIONS SERVICE (шаг 5) =====================
   /push-tokens:
@@ -1005,20 +1108,20 @@ paths:
       summary: Зарегистрировать FCM push-токен устройства
       operationId: registerPushToken
       description: Сохраняет токен устройства для последующей push-рассылки.
-      x-required-roles: [client, engineer]
+      x-required-roles: [client]
+      x-rbac-action: ["Получение push-уведомлений"]
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              type: object
-              required: [token]
-              properties:
-                token: { type: string }
+            schema: { $ref: '#/components/schemas/PushTokenRegisterRequest' }
       responses:
         default: { $ref: '#/components/responses/ServerError' }
         '201': { description: Токен зарегистрирован }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
 
   /push-tokens/{token}:
     parameters:
@@ -1028,10 +1131,13 @@ paths:
       summary: Удалить push-токен (логаут с устройства/отключение уведомлений)
       operationId: deletePushToken
       description: Прекращает отправку push-уведомлений на данное устройство.
-      x-required-roles: [client, engineer]
+      x-required-roles: [client]
+      x-rbac-action: ["Получение push-уведомлений"]
       responses:
         default: { $ref: '#/components/responses/ServerError' }
         '204': { description: Удалён }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
   /notifications:
@@ -1041,6 +1147,7 @@ paths:
       operationId: listNotifications
       description: Постраничная лента уведомлений (прошивки/ТО/новости/акции).
       x-required-roles: [client]
+      x-rbac-action: ["Получение push-уведомлений"]
       parameters:
         - $ref: '#/components/parameters/PageParam'
         - $ref: '#/components/parameters/PageSizeParam'
@@ -1051,11 +1158,15 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/NotificationList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
     post:
       tags: [Notifications]
       summary: Опубликовать уведомление (новости/акции/ручная рассылка)
       operationId: createNotification
       x-required-roles: [admin]
+      x-rbac-action: ["Публикация новостей/акций/прошивок"]
       description: >
         target_vehicle_model_id — единственный источник таргетинга (Глава 2,
         3НФ). Для type=firmware обычно создаётся автоматически через
@@ -1072,7 +1183,9 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Notification' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
 
   /notifications/{notificationId}/read:
     parameters:
@@ -1082,12 +1195,15 @@ paths:
       summary: Отметить уведомление прочитанным
       operationId: markNotificationRead
       x-required-roles: [client]
+      x-rbac-action: ["Получение push-уведомлений"]
       description: >-
         Пишет read_at в NotificationRecipient (лента пользователя, C-13) независимо от push-токенов.
         Открытие push фиксируется отдельно в NotificationDelivery.opened_at (аналитика, Глава 16).
       responses:
         default: { $ref: '#/components/responses/ServerError' }
         '204': { description: Отмечено }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
   /firmware-releases:
@@ -1097,24 +1213,28 @@ paths:
       operationId: listFirmwareReleases
       description: Возвращает релизы, опционально отфильтрованные по модели авто.
       x-required-roles: [client, engineer, admin]
+      x-rbac-action: ["Получение push-уведомлений", "Фиксация текущей прошивки авто", "Публикация новостей/акций/прошивок"]
       parameters:
         - name: vehicle_model_id
           in: query
           schema: { type: integer }
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
       responses:
         default: { $ref: '#/components/responses/ServerError' }
         '200':
           description: Список релизов
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: '#/components/schemas/FirmwareRelease' }
+              schema: { $ref: '#/components/schemas/FirmwareReleaseList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '422': { $ref: '#/components/responses/ValidationError' }
     post:
       tags: [Notifications]
       summary: Опубликовать релиз прошивки
       operationId: createFirmwareRelease
       x-required-roles: [admin]
+      x-rbac-action: ["Публикация новостей/акций/прошивок"]
       description: Атомарно создаёт FirmwareRelease и триггерит Notification(type=firmware) с targeting по vehicle_model_id.
       requestBody:
         required: true
@@ -1128,7 +1248,9 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/FirmwareRelease' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
 
   /vehicles/{vehicleId}/firmware:
     parameters:
@@ -1139,15 +1261,12 @@ paths:
       operationId: setVehicleFirmware
       description: Обновляет current_firmware_release_id автомобиля.
       x-required-roles: [engineer, admin]
+      x-rbac-action: ["Фиксация текущей прошивки авто"]
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              type: object
-              required: [firmware_release_id]
-              properties:
-                firmware_release_id: { type: integer }
+            schema: { $ref: '#/components/schemas/VehicleFirmwareUpdateRequest' }
       responses:
         default: { $ref: '#/components/responses/ServerError' }
         '200':
@@ -1155,8 +1274,216 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Vehicle' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  # ===================== USERS (A-04, профиль) =====================
+  /me:
+    get:
+      tags: [Users]
+      summary: Профиль текущего пользователя
+      operationId: getCurrentUser
+      description: Возвращает пользователя, которому выдан access-токен. Доступно всем ролям.
+      x-required-roles: [client, engineer, admin]
+      x-rbac-action: ["Просмотр своего профиля"]
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '200':
+          description: Текущий пользователь
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserPublic' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /users:
+    get:
+      tags: [Users]
+      summary: Список пользователей (админ-панель)
+      operationId: listUsers
+      description: Фильтры по роли, активности и подстроке телефона. Анонимизированные (phone = null) включаются.
+      x-required-roles: [admin]
+      x-rbac-action: ["Управление пользователями и ролями"]
+      parameters:
+        - name: role
+          in: query
+          schema: { type: string, enum: [client, engineer, admin] }
+        - name: is_active
+          in: query
+          schema: { type: boolean }
+        - name: search
+          in: query
+          schema: { type: string, maxLength: 16 }
+          description: Подстрока телефона (E.164)
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '200':
+          description: Страница пользователей
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+    post:
+      tags: [Users]
+      summary: Создать учётную запись инженера/администратора
+      operationId: createStaffUser
+      description: >
+        Клиенты регистрируются сами (verifyPhoneCode). Персонал создаёт только admin;
+        пароль хранится как password_hash (N-08, ADR 0005). 409 — телефон уже занят.
+      x-required-roles: [admin]
+      x-rbac-action: ["Управление пользователями и ролями"]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/StaffUserCreateRequest' }
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '201':
+          description: Учётная запись создана
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserPublic' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /users/{userId}:
+    parameters:
+      - { name: userId, in: path, required: true, schema: { type: integer } }
+    get:
+      tags: [Users]
+      summary: Карточка пользователя
+      operationId: getUser
+      description: Просмотр любого пользователя администратором.
+      x-required-roles: [admin]
+      x-rbac-action: ["Управление пользователями и ролями"]
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '200':
+          description: Пользователь
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserPublic' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [Users]
+      summary: Сменить роль или заблокировать/разблокировать пользователя
+      operationId: updateUser
+      description: >
+        Смена роли client ↔ staff не поддерживается (у клиента нет пароля) — 409 ROLE_CHANGE_NOT_ALLOWED;
+        допустимо engineer ↔ admin. is_active=false блокирует вход и отзывает refresh-токены.
+        409 LAST_ADMIN — нельзя понизить или заблокировать последнего активного администратора.
+      x-required-roles: [admin]
+      x-rbac-action: ["Управление пользователями и ролями"]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UserUpdateRequest' }
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '200':
+          description: Пользователь обновлён
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserPublic' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  # ===================== ANALYTICS SERVICE (A-05, A-06; реализация — Глава 16) =====================
+  /analytics/ticket-resolution:
+    get:
+      tags: [Analytics]
+      summary: Время реакции и закрытия тикетов (A-05)
+      operationId: getTicketResolutionStats
+      description: >
+        Считается по ticket.created_at, first_response_at, resolved_at за период [date_from, date_to]
+        (по дате создания тикета, включительно). 422 — date_from > date_to или период длиннее 366 дней.
+      x-required-roles: [admin]
+      x-rbac-action: ["Просмотр аналитики (дашборд)"]
+      parameters:
+        - $ref: '#/components/parameters/DateFromParam'
+        - $ref: '#/components/parameters/DateToParam'
+        - name: vehicle_model_id
+          in: query
+          schema: { type: integer }
+        - name: category
+          in: query
+          schema: { type: string, enum: [navigation, audio, sim, app_crash, maintenance] }
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '200':
+          description: Показатели за период
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TicketResolutionStats' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /analytics/problem-models:
+    get:
+      tags: [Analytics]
+      summary: Проблемные модели — тикеты по моделям и категориям (A-06)
+      operationId: listProblemModels
+      description: Модели, отсортированные по убыванию tickets_total за период. Модели без тикетов не включаются.
+      x-required-roles: [admin]
+      x-rbac-action: ["Просмотр аналитики (дашборд)"]
+      parameters:
+        - $ref: '#/components/parameters/DateFromParam'
+        - $ref: '#/components/parameters/DateToParam'
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '200':
+          description: Страница моделей
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProblemModelStatsList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /analytics/maintenance-conversion:
+    get:
+      tags: [Analytics]
+      summary: Конверсия в ТО (A-06)
+      operationId: getMaintenanceConversionStats
+      description: >
+        Две воронки за период: тикеты → работы ТО (maintenance_record.ticket_id) и уведомления
+        type=maintenance → открытие push (notification_delivery.opened_at) → работа ТО по авто
+        получателя в течение 30 дней после уведомления. Rate = null, если знаменатель 0.
+      x-required-roles: [admin]
+      x-rbac-action: ["Просмотр аналитики (дашборд)"]
+      parameters:
+        - $ref: '#/components/parameters/DateFromParam'
+        - $ref: '#/components/parameters/DateToParam'
+        - name: vehicle_model_id
+          in: query
+          schema: { type: integer }
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '200':
+          description: Показатели конверсии
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MaintenanceConversionStats' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
 
 components:
   securitySchemes:
@@ -1183,6 +1510,18 @@ components:
         minimum: 1
         maximum: 100
         default: 20
+    DateFromParam:
+      name: date_from
+      in: query
+      required: true
+      schema: { type: string, format: date }
+      description: Начало периода (включительно)
+    DateToParam:
+      name: date_to
+      in: query
+      required: true
+      schema: { type: string, format: date }
+      description: Конец периода (включительно)
 
   schemas:
     # --- Единый формат ошибок (шаг 6, материализован в шаге 1) ---
@@ -1275,7 +1614,7 @@ components:
 
     UserPublic:
       type: object
-      required: [id, phone, role, created_at]
+      required: [id, phone, role, is_active, created_at]
       properties:
         id: { type: integer }
         phone:
@@ -1284,6 +1623,7 @@ components:
           nullable: true
           description: E.164; null — пользователь анонимизирован (ПД удалены по 99-З, ADR 0006).
         role: { type: string, enum: [client, engineer, admin] }
+        is_active: { type: boolean, description: "false — вход заблокирован администратором" }
         telegram_id: { type: string, nullable: true }
         created_at: { type: string, format: date-time }
 
@@ -1401,8 +1741,8 @@ components:
       type: object
       required: [code, name]
       properties:
-        code: { type: string, example: "brake_fluid" }
-        name: { type: string, example: "Тормозная жидкость" }
+        code: { type: string, maxLength: 50, pattern: '^[a-z][a-z0-9_]{1,49}$', example: "brake_fluid" }
+        name: { type: string, minLength: 1, maxLength: 100, example: "Тормозная жидкость" }
 
     MaintenanceRegulation:
       type: object
@@ -1596,7 +1936,7 @@ components:
     KnowledgeArticleUpdateRequest:
       type: object
       properties:
-        title: { type: string }
+        title: { type: string, maxLength: 200 }
         content: { type: string }
         is_published: { type: boolean }
 
@@ -1709,7 +2049,7 @@ components:
       required: [vehicle_model_id, version, released_at]
       properties:
         vehicle_model_id: { type: integer }
-        version: { type: string, example: "2.4.1" }
+        version: { type: string, minLength: 1, maxLength: 50, example: "2.4.1" }
         released_at: { type: string, format: date }
 
     FirmwareRelease:
@@ -1720,6 +2060,178 @@ components:
         vehicle_model_id: { type: integer }
         version: { type: string }
         released_at: { type: string, format: date }
+
+    # --- Коллекции с единой пагинацией (Глава 3: пагинация на всех коллекциях) ---
+    VehicleModelList:
+      type: object
+      required: [items, meta]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/VehicleModel' }
+        meta: { $ref: '#/components/schemas/PaginationMeta' }
+
+    VehicleList:
+      type: object
+      required: [items, meta]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Vehicle' }
+        meta: { $ref: '#/components/schemas/PaginationMeta' }
+
+    AggregateTypeList:
+      type: object
+      required: [items, meta]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/AggregateType' }
+        meta: { $ref: '#/components/schemas/PaginationMeta' }
+
+    MaintenanceRegulationList:
+      type: object
+      required: [items, meta]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/MaintenanceRegulation' }
+        meta: { $ref: '#/components/schemas/PaginationMeta' }
+
+    AggregateStatusList:
+      type: object
+      required: [items, meta]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/AggregateStatus' }
+        meta: { $ref: '#/components/schemas/PaginationMeta' }
+
+    DecisionTreeNodeList:
+      type: object
+      required: [items, meta]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/DecisionTreeNode' }
+        meta: { $ref: '#/components/schemas/PaginationMeta' }
+
+    FirmwareReleaseList:
+      type: object
+      required: [items, meta]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/FirmwareRelease' }
+        meta: { $ref: '#/components/schemas/PaginationMeta' }
+
+    UserList:
+      type: object
+      required: [items, meta]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/UserPublic' }
+        meta: { $ref: '#/components/schemas/PaginationMeta' }
+
+    # --- Тела запросов, ранее описанные inline ---
+    TicketStatusUpdateRequest:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string, enum: [new, in_progress, waiting_vendor, resolved] }
+
+    TicketAssignRequest:
+      type: object
+      required: [assigned_engineer_id]
+      properties:
+        assigned_engineer_id: { type: integer, nullable: true, description: "null — снять инженера" }
+
+    PushTokenRegisterRequest:
+      type: object
+      required: [token]
+      properties:
+        token: { type: string, minLength: 1, maxLength: 4096 }
+
+    VehicleFirmwareUpdateRequest:
+      type: object
+      required: [firmware_release_id]
+      properties:
+        firmware_release_id: { type: integer, description: "Релиз той же модели, что и авто (иначе 422)" }
+
+    # --- Users (A-04) ---
+    StaffUserCreateRequest:
+      type: object
+      required: [phone, role, password]
+      properties:
+        phone: { $ref: '#/components/schemas/PhoneE164' }
+        role: { type: string, enum: [engineer, admin] }
+        password: { type: string, format: password, minLength: 12, maxLength: 128 }
+
+    UserUpdateRequest:
+      type: object
+      minProperties: 1
+      properties:
+        role: { type: string, enum: [engineer, admin] }
+        is_active: { type: boolean }
+
+    # --- Analytics (A-05, A-06) ---
+    TicketResolutionStats:
+      type: object
+      required: [date_from, date_to, tickets_created, tickets_resolved, tickets_resolved_overdue,
+                 avg_first_response_hours, avg_resolution_hours, median_resolution_hours]
+      properties:
+        date_from: { type: string, format: date }
+        date_to: { type: string, format: date }
+        tickets_created: { type: integer, minimum: 0 }
+        tickets_resolved: { type: integer, minimum: 0 }
+        tickets_resolved_overdue: { type: integer, minimum: 0, description: "resolved_at > sla_due_at" }
+        avg_first_response_hours: { type: number, nullable: true }
+        avg_resolution_hours: { type: number, nullable: true, description: "Среднее resolved_at − created_at (A-05)" }
+        median_resolution_hours: { type: number, nullable: true }
+
+    TicketCategoryCount:
+      type: object
+      required: [category, count]
+      properties:
+        category: { type: string, enum: [navigation, audio, sim, app_crash, maintenance] }
+        count: { type: integer, minimum: 0 }
+
+    ProblemModelStats:
+      type: object
+      required: [vehicle_model, tickets_total, vehicles_total, by_category]
+      properties:
+        vehicle_model: { $ref: '#/components/schemas/VehicleModel' }
+        tickets_total: { type: integer, minimum: 0 }
+        vehicles_total: { type: integer, minimum: 0, description: "Активные авто модели — для нормирования" }
+        by_category:
+          type: array
+          items: { $ref: '#/components/schemas/TicketCategoryCount' }
+
+    ProblemModelStatsList:
+      type: object
+      required: [items, meta]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/ProblemModelStats' }
+        meta: { $ref: '#/components/schemas/PaginationMeta' }
+
+    MaintenanceConversionStats:
+      type: object
+      required: [date_from, date_to, tickets_total, tickets_with_maintenance, ticket_to_maintenance_rate,
+                 notifications_recipients, notifications_opened, recipients_with_maintenance,
+                 notification_to_maintenance_rate]
+      properties:
+        date_from: { type: string, format: date }
+        date_to: { type: string, format: date }
+        tickets_total: { type: integer, minimum: 0 }
+        tickets_with_maintenance: { type: integer, minimum: 0 }
+        ticket_to_maintenance_rate: { type: number, minimum: 0, maximum: 1, nullable: true }
+        notifications_recipients: { type: integer, minimum: 0, description: "Получатели уведомлений type=maintenance" }
+        notifications_opened: { type: integer, minimum: 0 }
+        recipients_with_maintenance: { type: integer, minimum: 0 }
+        notification_to_maintenance_rate: { type: number, minimum: 0, maximum: 1, nullable: true }
 
   responses:
     BadRequest:

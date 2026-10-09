@@ -6,10 +6,16 @@ on:
     paths:
       - "backend/**"
       - "docs/EV_ServiceDesk_Glava2_DDL.sql"  # test_ddl_export сверяет с миграциями
+      - "docs/openapi.yaml"                   # tests/contract: OpenAPI ↔ ORM ↔ RBAC
+      - "docs/requirements/RBAC_MATRIX.md"
       - ".github/workflows/backend-ci.yml"
   push:
     branches: [develop]
-    paths: ["backend/**", "docs/EV_ServiceDesk_Glava2_DDL.sql"]
+    paths:
+      - "backend/**"
+      - "docs/EV_ServiceDesk_Glava2_DDL.sql"
+      - "docs/openapi.yaml"
+      - "docs/requirements/RBAC_MATRIX.md"
 
 jobs:
   backend-ci:

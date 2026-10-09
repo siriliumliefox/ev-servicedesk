@@ -35,6 +35,8 @@ npm run lint --workspaces --if-present
 npm run build --workspaces --if-present
 (cd mobile && flutter analyze && flutter test)
 docker compose config -q
+npm run lint:api && npm run test:mock   # контракт: Spectral + mock (Prism)
+scripts/check_api_breaking.sh           # ломающие изменения OpenAPI против origin/develop (Docker)
 
 # БД (Глава 2): схема только через Alembic; тесты схемы — на БД *_test (TEST_DATABASE_URL)
 (cd backend && poetry run alembic upgrade head)
@@ -52,7 +54,7 @@ docker compose config -q
 ## Архитектура
 - Модульный монолит; доменная логика вне HTTP routes и UI.
 - Схема БД только через Alembic (upgrade + downgrade).
-- OpenAPI, DDL, ORM, Pydantic синхронны; изменение контракта = OpenAPI + тесты + клиенты.
+- OpenAPI, DDL, ORM, Pydantic синхронны; изменение контракта = OpenAPI + тесты + клиенты. После изменения `docs/openapi.yaml`: `npm run gen:api`, Swagger sync, `backend/tests/contract` (ADR 0007).
 - RBAC `client`/`engineer`/`admin` + object-level authorization.
 
 ## Безопасность

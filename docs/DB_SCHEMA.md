@@ -54,7 +54,7 @@
 | N-07 | `pd_consent` (история, отзыв), `app_user.anonymized_at` (ADR 0005, 0006) |
 | N-10 | `maintenance_regulation` + `vehicle_aggregate_status` + `notification` (type = maintenance) |
 
-## Ревью «по ролям» (сверено с `openapi.yaml` 1.0.0-rc3)
+## Ревью «по ролям» (сверено с `openapi.yaml` 1.0.0, ADR 0007)
 
 | Роль / экран | Поля OpenAPI | Источник в БД |
 |---|---|---|
@@ -68,11 +68,13 @@
 | engineer: карточка авто из тикета | `TicketDetail.vehicle_context` | `ticket.vehicle_id` → `vehicle`, `vehicle_aggregate_status` |
 | engineer: замена агрегата | `AggregateReplaceRequest.*` | `vehicle_aggregate_status` + `maintenance_record` |
 | admin: регламенты / агрегаты | `MaintenanceRegulation.*`, `AggregateType.*` | `maintenance_regulation`, `aggregate_type` |
+| engineer: прошивка авто | `setVehicleFirmware`, `listFirmwareReleases` | `vehicle.current_firmware_release_id`, `firmware_release` |
 | admin: прошивки / рассылки | `FirmwareRelease.*`, `Notification.*` | `firmware_release`, `notification` |
-| admin: пользователи | `UserPublic.*` | `app_user` |
+| все роли: профиль | `getCurrentUser` → `UserPublic.*` | `app_user` |
+| admin: пользователи (A-04) | `listUsers`, `createStaffUser`, `updateUser` → `UserPublic.*` (`is_active`) | `app_user` (`role`, `is_active`, `password_hash`) |
 | admin: корректировка пробега | `MileageCorrectionRequest.*` | `vehicle_mileage_correction`, `vehicle.mileage` |
 | client: согласие/отзыв ПД | `VerifyCodeRequest.pd_policy_version`, `withdrawPdConsent` | `pd_consent` |
-| admin: аналитика | (Глава 16) | `ticket.created_at/resolved_at`, `notification_delivery.opened_at` |
+| admin: аналитика (A-05, A-06) | `TicketResolutionStats`, `ProblemModelStats`, `MaintenanceConversionStats` | `ticket.created_at/first_response_at/resolved_at/sla_due_at/category`, `vehicle.vehicle_model_id`, `maintenance_record.ticket_id`, `notification(type=maintenance)`, `notification_recipient`, `notification_delivery.opened_at` |
 
 ## Object-level доступ (RBAC_MATRIX, RBAC-01)
 
