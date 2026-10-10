@@ -15,3 +15,4 @@
 | [0009](0009-aggregate-status-thresholds.md) | Алгоритм «светофор»: глобальные пороги, худший из двух интервалов, точные границы |
 | [0010](0010-design-tokens-source-of-truth.md) | Дизайн-токены: `design/tokens.json` — источник истины, бренд ETS AUTO, темы, Figma на Starter |
 | [0011](0011-mobile-clickable-prototype-flutter.md) | Кликабельный прототип клиента — Flutter на фикстурах вместо Figma; навигация по ТЗ из 4 пунктов |
+| [0012](0012-web-prototypes-react-fixtures.md) | Прототипы веб-кабинета инженера и админ-панели — React на фикстурах; SLA из `sla_due_at`, быстрые ответы из базы знаний, контракт v1 без изменений |

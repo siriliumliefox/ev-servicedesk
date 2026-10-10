@@ -6,6 +6,16 @@ export type ThemeName = "light" | "dark";
 
 const STORAGE_KEY = "ev-theme";
 
+/** `?theme=light|dark` в адресе — тема для ссылки на экран (ревью, скриншоты); выбор не сохраняет. */
+function readQuery(): ThemeName | null {
+  try {
+    const v = new URLSearchParams(window.location.search).get("theme");
+    return v === "light" || v === "dark" ? v : null;
+  } catch {
+    return null;
+  }
+}
+
 function readStored(): ThemeName | null {
   try {
     const v = localStorage.getItem(STORAGE_KEY);
@@ -17,7 +27,7 @@ function readStored(): ThemeName | null {
 
 /** @param fallback тема, если пользователь ещё не выбирал (кабинет инженера — "dark"). */
 export function useTheme(fallback: ThemeName) {
-  const [theme, setTheme] = useState<ThemeName>(() => readStored() ?? fallback);
+  const [theme, setTheme] = useState<ThemeName>(() => readQuery() ?? readStored() ?? fallback);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;

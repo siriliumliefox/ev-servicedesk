@@ -1,88 +1,99 @@
-import { useEffect, useState } from 'react'
+// Кабинет инженера (Глава 8, прототип; ADR 0012): канбан-доска слева, карточка тикета справа (ТЗ раздел 9).
+// Выбранный тикет — в адресе: `#/tickets/1042`. Тёмная тема по умолчанию (ТЗ раздел 6, ночные смены).
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Button,
-  Card,
-  MOCK_API_BASE_URL,
-  StatusBadge,
-  TextField,
-  createApiClient,
+  DemoPanel,
+  ErrorState,
+  LoadingState,
+  useAsync,
+  useHashRoute,
   useTheme,
-  type AggregateStatusValue,
-  type components,
+  type EngineerRepository,
+  type PrototypeRepository,
 } from '@ev-servicedesk/web-shared'
+import { Board } from './board/Board.tsx'
+import { EngineerContext, type EngineerEnv } from './repo.ts'
+import { TicketPanel } from './ticket/TicketPanel.tsx'
 
-type Ticket = components['schemas']['Ticket']
+const systemNow = () => new Date()
 
-// До Auth (Глава 10/21) — mock-сервер Prism (`npm run mock`), токен любой.
-const api = createApiClient(
-  import.meta.env.VITE_API_BASE_URL ?? MOCK_API_BASE_URL,
-  () => import.meta.env.VITE_API_TOKEN ?? 'mock-token',
-)
-
-const STATUSES: AggregateStatusValue[] = ['green', 'yellow', 'red', 'unknown']
-
-function App() {
-  const [tickets, setTickets] = useState<Ticket[] | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  // Тёмная тема инженера по умолчанию (ТЗ раздел 6, ночные смены).
+export default function App({
+  repo,
+  now = systemNow,
+  demo,
+}: {
+  repo: EngineerRepository
+  now?: () => Date
+  /** Панель «Демо» — только для прототипа. */
+  demo?: PrototypeRepository
+}) {
   const { theme, toggle } = useTheme('dark')
+  const [path, navigate] = useHashRoute()
+  const [version, setVersion] = useState(0)
+  const bump = useCallback(() => setVersion((v) => v + 1), [])
+  const me = useAsync(() => repo.getCurrentUser(), [repo, version])
+  const [, setTick] = useState(0)
 
+  // SLA «осталось N мин» пересчитывается раз в минуту.
   useEffect(() => {
-    api
-      .GET('/tickets', { params: { query: { page: 1, page_size: 20 } } })
-      .then(({ data, error, response }) =>
-        data ? setTickets(data.items) : setError(error?.error.message ?? `HTTP ${response.status}`),
-      )
-      .catch(() => setError('API недоступен — запустите `npm run mock`'))
+    const id = window.setInterval(() => setTick((n) => n + 1), 60_000)
+    return () => window.clearInterval(id)
   }, [])
 
+  const match = /^\/tickets\/(\d+)$/.exec(path)
+  const selectedId = match ? Number(match[1]) : null
+
+  useEffect(() => {
+    if (selectedId === null) return
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && navigate('/')
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [selectedId, navigate])
+
+  const env = useMemo<EngineerEnv | null>(
+    () => (me.data ? { repo, now, meId: me.data.id } : null),
+    [repo, now, me.data],
+  )
+
   return (
-    <div className="min-h-screen bg-canvas text-fg">
-      <header className="flex items-center justify-between border-b border-border bg-surface px-6 py-3">
-        <h1 className="text-h2">EV-ServiceDesk — Кабинет инженера</h1>
-        <Button variant="secondary" size="sm" onClick={toggle} aria-pressed={theme === 'dark'}>
-          {theme === 'dark' ? 'Светлая тема' : 'Тёмная тема'}
-        </Button>
+    <div className="flex h-screen min-w-0 flex-col bg-canvas text-fg">
+      <header className="flex items-center justify-between gap-4 border-b border-border bg-surface px-6 py-3">
+        <div className="flex items-center gap-3">
+          <span aria-hidden="true" className="size-3 rounded-full bg-primary" />
+          <h1 className="text-h2">EV-ServiceDesk · Кабинет инженера</h1>
+        </div>
+        <div className="flex items-center gap-3">
+          {me.data && <span className="text-body-sm text-fg-muted">Инженер #{me.data.id}</span>}
+          {demo && <DemoPanel repo={demo} theme={theme} onToggleTheme={toggle} onChange={bump} />}
+          <Button variant="secondary" size="sm" onClick={toggle} aria-pressed={theme === 'dark'}>
+            {theme === 'dark' ? 'Светлая тема' : 'Тёмная тема'}
+          </Button>
+        </div>
       </header>
 
-      {/* Витрина дизайн-системы (Глава 6). Канбан-доска тикетов — Глава 21. */}
-      <main className="mx-auto grid max-w-5xl gap-6 p-6">
-        <Card className="grid gap-3">
-          <h2 className="text-h3">Статусы агрегатов</h2>
-          <div className="flex flex-wrap gap-2">
-            {STATUSES.map((s) => (
-              <StatusBadge key={s} status={s} />
-            ))}
+      {me.error ? (
+        <div className="p-6">
+          <ErrorState error={me.error} onRetry={me.reload} />
+        </div>
+      ) : !env ? (
+        <LoadingState />
+      ) : (
+        <EngineerContext.Provider value={env}>
+          <div className="flex min-h-0 flex-1">
+            <Board version={version} selectedId={selectedId} onSelect={(id) => navigate(`/tickets/${id}`)} />
+            {selectedId !== null && (
+              <TicketPanel
+                key={selectedId}
+                ticketId={selectedId}
+                version={version}
+                onChanged={bump}
+                onClose={() => navigate('/')}
+              />
+            )}
           </div>
-        </Card>
-
-        <Card className="grid gap-3">
-          <h2 className="text-h3">Кнопки</h2>
-          <div className="flex flex-wrap items-center gap-2">
-            <Button>Взять в работу</Button>
-            <Button variant="secondary">Ответить</Button>
-            <Button variant="ghost">Отмена</Button>
-            <Button variant="danger">Закрыть тикет</Button>
-            <Button disabled>Недоступно</Button>
-            <Button size="sm">Компактная</Button>
-          </div>
-        </Card>
-
-        <Card className="grid gap-4 sm:grid-cols-2">
-          <TextField label="VIN" placeholder="LB37622Z0NX000000" hint="17 символов" />
-          <TextField label="Пробег, км" defaultValue="-5" error="Пробег не может быть отрицательным" />
-        </Card>
-
-        <p className="text-body-sm text-fg-muted" data-testid="api-status">
-          {error
-            ? `Ошибка API: ${error}`
-            : tickets === null
-              ? 'Загрузка тикетов…'
-              : `Тикетов с API: ${tickets.length}${tickets[0] ? ` (первый: #${tickets[0].id}, ${tickets[0].status})` : ''}`}
-        </p>
-      </main>
+        </EngineerContext.Provider>
+      )}
     </div>
   )
 }
-
-export default App
