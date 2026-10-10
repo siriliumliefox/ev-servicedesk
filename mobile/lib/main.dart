@@ -1,75 +1,81 @@
 import 'package:flutter/material.dart';
 
+import 'app/app_state.dart';
+import 'data/prototype_repository.dart';
+import 'data/repository.dart';
+import 'screens/home_shell.dart';
+import 'screens/onboarding/phone_screen.dart';
 import 'theme/app_theme.dart';
-import 'ui/bottom_nav.dart';
-import 'ui/status_badge.dart';
 
-// Каркас, Глава 4; тема и компоненты — Глава 6. Реальный флоу онбординга/авторизации — Глава 18.
+// Каркас — Глава 4; тема и компоненты — Глава 6; кликабельный прототип на фикстурах — Глава 7 (ADR 0011).
+// Реальный API и авторизация — Глава 18: ClientRepository на HTTP вместо PrototypeRepository.
 void main() {
-  runApp(const EvServiceDeskApp());
+  runApp(EvServiceDeskApp(repository: PrototypeRepository()));
 }
 
-class EvServiceDeskApp extends StatelessWidget {
-  const EvServiceDeskApp({super.key});
+class EvServiceDeskApp extends StatefulWidget {
+  const EvServiceDeskApp({super.key, required this.repository, this.signedIn = false});
+
+  final ClientRepository repository;
+
+  /// Сразу после входа (тесты, демонстрация главного экрана).
+  final bool signedIn;
+
+  @override
+  State<EvServiceDeskApp> createState() => _EvServiceDeskAppState();
+}
+
+class _EvServiceDeskAppState extends State<EvServiceDeskApp> {
+  late final AppState _state = AppState(widget.repository, signedIn: widget.signedIn);
+  final _navigator = GlobalKey<NavigatorState>();
+  late bool _signedIn;
+
+  @override
+  void initState() {
+    super.initState();
+    _signedIn = _state.signedIn;
+    _state.addListener(_onState);
+    if (_state.signedIn) _state.refresh();
+  }
+
+  /// Вход/выход меняет корневой экран — экраны онбординга (или открытые поверх) закрываются.
+  void _onState() {
+    if (_state.signedIn != _signedIn) {
+      _signedIn = _state.signedIn;
+      _navigator.currentState?.popUntil((r) => r.isFirst);
+    }
+  }
+
+  @override
+  void dispose() {
+    _state.removeListener(_onState);
+    _state.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'EV-ServiceDesk',
-      theme: evTheme(Brightness.light),
-      darkTheme: evTheme(Brightness.dark),
-      home: const _HomeScreen(),
+    return AppScope(
+      state: _state,
+      child: ListenableBuilder(
+        listenable: _state,
+        builder: (context, _) => MaterialApp(
+          title: 'EV-ServiceDesk',
+          navigatorKey: _navigator,
+          theme: evTheme(Brightness.light),
+          darkTheme: evTheme(Brightness.dark),
+          themeMode: _state.themeMode,
+          home: const _Root(),
+        ),
+      ),
     );
   }
 }
 
-class _HomeScreen extends StatefulWidget {
-  const _HomeScreen();
+/// Корневой экран: онбординг или разделы приложения — по состоянию входа.
+class _Root extends StatelessWidget {
+  const _Root();
 
   @override
-  State<_HomeScreen> createState() => _HomeScreenState();
-}
-
-class _HomeScreenState extends State<_HomeScreen> {
-  EvSection _section = EvSection.car;
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('EV-ServiceDesk')),
-      // Витрина дизайн-системы до прототипа экранов (Глава 7).
-      body: ListView(
-        padding: const EdgeInsets.all(EvSpace.s4),
-        children: [
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(EvSpace.s4),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('Статусы агрегатов', style: Theme.of(context).textTheme.titleMedium),
-                  const SizedBox(height: EvSpace.s3),
-                  Wrap(
-                    spacing: EvSpace.s2,
-                    runSpacing: EvSpace.s2,
-                    children: [for (final s in AggregateStatus.values) StatusBadge(status: s)],
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: EvSpace.s4),
-          FilledButton(onPressed: () {}, child: const Text('Создать тикет')),
-          const SizedBox(height: EvSpace.s2),
-          OutlinedButton(onPressed: () {}, child: const Text('Добавить авто')),
-          const SizedBox(height: EvSpace.s4),
-          const TextField(decoration: InputDecoration(labelText: 'VIN', helperText: '17 символов')),
-        ],
-      ),
-      bottomNavigationBar: EvBottomNav(
-        current: _section,
-        onSelected: (s) => setState(() => _section = s),
-      ),
-    );
-  }
+  Widget build(BuildContext context) => AppScope.of(context).signedIn ? const HomeShell() : const PhoneScreen();
 }

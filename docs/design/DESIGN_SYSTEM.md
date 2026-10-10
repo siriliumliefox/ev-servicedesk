@@ -7,7 +7,7 @@
 | Токены (DTCG) | `design/tokens.json` |
 | Генератор / тесты | `scripts/design_tokens.mts` (`npm run tokens`), `scripts/design_tokens.test.mts` (`npm run test:tokens`, CI `web-ci`) |
 | Веб | `web-shared/src/theme/` (`tokens.css` — генерируется, `theme.css`, `useTheme`), компоненты `StatusBadge`, `Button`, `TextField`, `Card` |
-| Flutter | `mobile/lib/theme/` (`tokens.g.dart` — генерируется, `app_theme.dart`), `mobile/lib/ui/` (`StatusBadge`, `EvBottomNav`), тесты `mobile/test/design_system_test.dart` |
+| Flutter | `mobile/lib/theme/` (`tokens.g.dart` — генерируется, `app_theme.dart`), `mobile/lib/ui/` (`StatusBadge`, `EvBottomNav`, состояния `states.dart`), тесты `mobile/test/design_system_test.dart`; экраны — `docs/design/MOBILE_PROTOTYPE.md` |
 | Figma | [EV-ServiceDesk Design System](https://www.figma.com/design/mgvOfQ9AizhhPMpBhxA3b5) — файл команды, тариф Starter, не опубликован (см. ниже) |
 
 ## Бренд
@@ -89,6 +89,8 @@ Sora с сайта ETS AUTO не используется: в нём нет ки
 | Card | слот для бейджа | `Card` | `Card` (`CardThemeData`) |
 | StatusBadge | Status: Green/Yellow/Red/Unknown | `StatusBadge`, `StatusIcon` | `StatusBadge` |
 | NavItem / BottomNav | State: Default/Selected; иконка — свойство Icon | — | `EvBottomNav` (`NavigationBar`) |
+| Tabs | — (глава 7) | — | `TabBar` (`TabBarThemeData`): текст `fg`/`fg-muted`, подчёркивание `primary-text` |
+| Chip (выбор/фильтр) | — (глава 7) | — | `ChoiceChip` (`ChipThemeData`): выбранный — заливка `primary`, текст `on-primary` |
 
 ## Чек-лист консистентности
 - [x] Все цвета — семантические токены; палитра Tailwind по умолчанию отключена (`--color-*: initial`).
@@ -109,6 +111,9 @@ Sora с сайта ETS AUTO не используется: в нём нет ки
 После перехода на Education: объединить `Color Light`/`Color Dark` в `Color` (режимы Light/Dark),
 разнести Cover и Foundations, **Publish** библиотеки.
 
-## Открытые вопросы (глава 7)
-- Подпись «Уведомления» (82 px при 12 px) не помещается в ячейку нижней навигации при ширине 360–390.
-  Варианты — короткая подпись («Оповещ.», «Новости») или 4 пункта + «Ещё»; решить на прототипе.
+## Решено в главе 7
+- Нижняя навигация — 4 пункта по ТЗ (раздел 9): «Авто» / «Обучение» / «Поддержка» / «Новости»;
+  уведомления — лента «Новости» со счётчиком непрочитанных на пункте (ADR 0011). Подпись «Уведомления»
+  в навигации больше не нужна. В Figma `NavItem`/`BottomNav` — обновить подписи при переходе на Education.
+- Вкладки и чипы: брендовый жёлтый на белом даёт 1.5:1, поэтому текст активной вкладки — `fg`, а жёлтый —
+  только заливка выбранного чипа с `on-primary` (тест `mobile/test/design_system_test.dart`).

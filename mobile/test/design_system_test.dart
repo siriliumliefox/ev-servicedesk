@@ -64,8 +64,8 @@ void main() {
       theme: evTheme(Brightness.light),
       home: Scaffold(bottomNavigationBar: EvBottomNav(current: EvSection.car, onSelected: (s) => selected = s)),
     ));
-    await tester.tap(find.text('Тикеты'));
-    expect(selected, EvSection.tickets);
+    await tester.tap(find.text('Поддержка'));
+    expect(selected, EvSection.support);
   });
 
   for (final brightness in Brightness.values) {
@@ -91,4 +91,20 @@ void main() {
     expect(AggregateStatus.values.map((s) => s.label).toList(),
         ['Заменено', 'Скоро менять', 'Требуется замена', 'Нет данных']);
   });
+
+  // Глава 7: вкладки и чипы — только пары токенов с проверенным контрастом (npm run test:tokens):
+  // брендовый жёлтый — лишь заливка с on-primary, текст вкладки — fg, подчёркивание — primary-text.
+  for (final brightness in Brightness.values) {
+    test('вкладки и чипы ($brightness) на парах токенов с контрастом WCAG', () {
+      final theme = evTheme(brightness);
+      final c = theme.extension<EvColors>()!;
+      expect(theme.tabBarTheme.labelColor, c.fg);
+      expect(theme.tabBarTheme.unselectedLabelColor, c.fgMuted);
+      expect(theme.tabBarTheme.indicatorColor, c.primaryText);
+      expect(theme.chipTheme.selectedColor, c.primary);
+      expect(theme.chipTheme.secondaryLabelStyle?.color, c.onPrimary);
+      expect(theme.chipTheme.checkmarkColor, c.onPrimary);
+      expect(theme.chipTheme.labelStyle?.color, c.fg);
+    });
+  }
 }
