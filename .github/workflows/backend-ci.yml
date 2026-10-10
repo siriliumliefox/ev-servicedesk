@@ -1,21 +1,9 @@
 name: backend-ci
 
+# Переиспользуемый workflow: вызывается из ci.yml (job `backend`), который решает,
+# нужен ли он для данного PR/push. Сам по событиям не запускается.
 on:
-  pull_request:
-    branches: [develop, main]
-    paths:
-      - "backend/**"
-      - "docs/EV_ServiceDesk_Glava2_DDL.sql"  # test_ddl_export сверяет с миграциями
-      - "docs/openapi.yaml"                   # tests/contract: OpenAPI ↔ ORM ↔ RBAC
-      - "docs/requirements/RBAC_MATRIX.md"
-      - ".github/workflows/backend-ci.yml"
-  push:
-    branches: [develop]
-    paths:
-      - "backend/**"
-      - "docs/EV_ServiceDesk_Glava2_DDL.sql"
-      - "docs/openapi.yaml"
-      - "docs/requirements/RBAC_MATRIX.md"
+  workflow_call:
 
 jobs:
   backend-ci:

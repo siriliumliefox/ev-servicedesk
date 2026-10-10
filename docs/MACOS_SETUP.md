@@ -10,7 +10,7 @@
 
 - Локально работающий backend (FastAPI), обе веб-панели, каркас мобильного приложения
 - Настоящий репозиторий на GitHub с защищёнными ветками
-- Три независимых окружения (dev/staging/production) с разделёнными секретами
+- Окружения staging и production с разделёнными секретами (модель local → staging → production, ADR 0008)
 - Реально зелёный CI на каждый PR
 
 Если что-то в разделах 1–3 у вас уже стоит — просто пропускайте, команды
@@ -222,7 +222,7 @@ cp .env.example .env
 ```
 Для локальной разработки менять ничего не обязательно — значения уже
 рабочие (`ev_local_only` и т.п. — это **только** для local, не переносите в
-dev/staging/production, см. `docs/ENVIRONMENTS.md`).
+staging/production, см. `docs/ENVIRONMENTS.md`).
 
 Поднимите Postgres + Redis (Docker Desktop должен быть уже открыт и запущен — см. пункт 3):
 ```bash
@@ -321,68 +321,51 @@ cd ..
 
 ## 11. Защита веток и GitHub Environments
 
+Уже применено к репозиторию (Глава 4, ADR 0008); скрипты идемпотентны —
+нужны только для нового репозитория или восстановления настроек. Требуют `gh auth login` с правами admin.
+
 ```bash
-export GITHUB_TOKEN="$(gh auth token)"
-./scripts/setup-branch-protection.sh
+./scripts/setup-branch-protection.sh      # main/develop: только PR, обязательный ci-gate, на админа тоже
 ```
 
 ```bash
-export PROD_APPROVER="$GH_USER"
-./scripts/setup-github-environments.sh
+./scripts/setup-github-environments.sh    # staging ← develop, production ← main + reviewer
 ```
 
-Секреты — по одному значению на каждое окружение, **не переиспользуйте**:
 ```bash
-for env in dev staging production; do
-  echo "=== $env ==="
-  ./scripts/generate-secret.sh | gh secret set JWT_SECRET --env "$env"
-done
+./scripts/set-environment-secrets.sh      # разные JWT_SECRET для staging/production; повторный запуск = ротация
 ```
-`DATABASE_URL`/`REDIS_URL` для dev/staging/production появятся, когда будет
-реальная инфраструктура (Глава 26) — пока в этих окружениях задавать нечего,
-кроме `JWT_SECRET`.
 
-Проверка в браузере: `https://github.com/<логин>/ev-servicedesk/settings/environments` — должны быть видны `dev`, `staging`, `production`, у `production` — вы в Required reviewers.
+Проверка: `https://github.com/<логин>/ev-servicedesk/settings/environments` — `staging` и `production`,
+у `production` — вы в Required reviewers; Actions → `secrets-isolation` → Run workflow (ветка `develop`) — все строки `PASS`.
 
 ---
 
-## 12. Проверка CI по-настоящему
+## 12. Проверка CI
 
 ```bash
-git checkout develop
-git checkout -b feature/0-ci-smoke-test
-echo "# CI smoke test" >> backend/README.md 2>/dev/null || echo "# CI smoke test" > backend/README.md
-git add -A
-git commit -m "test: проверка CI (#0)"
-git push -u origin feature/0-ci-smoke-test
-gh pr create --base develop --title "test: CI smoke test" --body "Closes #0" --fill
 gh pr checks --watch
 ```
 
-Ожидаем: `backend-ci` — зелёный. `web-ci`/`mobile-ci` не запустятся (path-фильтр — правка только в `backend/`, это и есть проверка, что фильтры реально работают, а не просто написаны).
-
-Когда убедитесь, что зелёное — смёржьте и удалите тестовую ветку:
-```bash
-gh pr merge --squash --delete-branch
-```
+На любом PR запускается `ci` (без path-фильтров): job `changes` выбирает нужные проверки
+(`backend`/`web`/`mobile`/`docs`), `secret-scan` идёт всегда, итог — `ci-gate`. Для PR, не
+затрагивающего сервисы, проверки сервисов будут `skipped`, а `ci-gate` — зелёным.
 
 ---
 
-## 13. Проверка CD на staging
+## 13. Проверка CD на staging и откат
 
-```bash
-git checkout develop
-git pull
-```
-Merge в `develop` (шаг 12) уже должен был запустить `cd-staging.yml` — проверьте:
+Merge в `develop` с изменениями в `backend/` или `web-*/` запускает `cd-staging.yml`:
 ```bash
 gh run list --workflow=cd-staging.yml
-gh run watch
 ```
-Job `deploy-staging` в конце просто выведет TODO-сообщение — это ожидаемо
-(реальной инфраструктуры ещё нет, см. `docs/ENVIRONMENTS.md`). Важно, что
-`build-backend-image` и `build-web` — зелёные и реально публикуют
-артефакты (проверить: `https://github.com/<логин>/ev-servicedesk/pkgs/container/backend`).
+Job `deploy-staging` выводит TODO — staging-сервера нет до Главы 26 (ADR 0008).
+Образы: `https://github.com/<логин>/ev-servicedesk/pkgs/container/ev-servicedesk%2Fbackend`.
+
+Откат на ранее собранный коммит (без пересборки, с проверкой digest):
+```bash
+./scripts/rollback-staging.sh <sha>
+```
 
 ---
 

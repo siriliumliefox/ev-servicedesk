@@ -1,30 +1,9 @@
 name: docs-ci
 
+# Переиспользуемый workflow: вызывается из ci.yml (job `docs`), который решает,
+# нужен ли он для данного PR/push. Сам по событиям не запускается.
 on:
-  pull_request:
-    branches: [develop, main]
-    paths:
-      - "docs/**"
-      - "scripts/sync_swagger_html.py"
-      - "scripts/mock_smoke.mts"
-      - "scripts/check_api_breaking.sh"
-      - ".spectral.yaml"
-      - "web-shared/src/api/**"
-      - "package.json"
-      - "package-lock.json"
-      - ".github/workflows/docs-ci.yml"
-  push:
-    branches: [develop]
-    paths:
-      - "docs/**"
-      - "scripts/sync_swagger_html.py"
-      - "scripts/mock_smoke.mts"
-      - "scripts/check_api_breaking.sh"
-      - ".spectral.yaml"
-      - "web-shared/src/api/**"
-      - "package.json"
-      - "package-lock.json"
-      - ".github/workflows/docs-ci.yml"
+  workflow_call:
 
 permissions:
   contents: read
@@ -74,7 +53,3 @@ jobs:
         if: github.event_name == 'pull_request'
         run: scripts/check_api_breaking.sh "origin/${{ github.base_ref }}"
 
-      - name: Secret scan (gitleaks)
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

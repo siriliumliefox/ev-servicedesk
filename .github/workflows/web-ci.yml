@@ -1,12 +1,9 @@
 name: web-ci
 
+# Переиспользуемый workflow: вызывается из ci.yml (job `web`), который решает,
+# нужен ли он для данного PR/push. Сам по событиям не запускается.
 on:
-  pull_request:
-    branches: [develop, main]
-    paths: ["web-engineer/**", "web-admin/**", "web-shared/**", "package.json", ".github/workflows/web-ci.yml"]
-  push:
-    branches: [develop]
-    paths: ["web-engineer/**", "web-admin/**", "web-shared/**"]
+  workflow_call:
 
 jobs:
   web-ci:

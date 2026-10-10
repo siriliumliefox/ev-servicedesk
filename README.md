@@ -62,7 +62,7 @@ npm run gen:api     # типы web-shared/src/api/schema.ts из openapi.yaml
 Клиент для веб-панелей: `createApiClient` из `@ev-servicedesk/web-shared` (адрес — `VITE_API_BASE_URL`, по умолчанию mock).
 
 ## Окружения и секреты
-`docs/ENVIRONMENTS.md` — модель local/dev/staging/production, разделение секретов, настройка GitHub Environments со «стоп-краном» перед production.
+`docs/ENVIRONMENTS.md` — модель local → staging → production (ADR 0008), разделение секретов, настройка GitHub Environments со «стоп-краном» перед production.
 
 ## Ветвление и код-ревью
 `CONTRIBUTING.md` — git-flow, процесс PR, текущая политика ревью.
