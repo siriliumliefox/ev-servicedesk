@@ -32,8 +32,9 @@ class SupportScreen extends StatelessWidget {
             ? null
             : FloatingActionButton.extended(
                 key: const Key('new-ticket'),
+                // Авто не подставляется: при нескольких авто клиент выбирает его в форме.
                 onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(
-                  builder: (_) => TicketCreateScreen(vehicleId: vehicle.id),
+                  builder: (_) => const TicketCreateScreen(),
                 )),
                 icon: const Icon(Icons.add_comment_outlined),
                 label: const Text('Новое обращение'),
@@ -122,7 +123,15 @@ class _Tickets extends StatelessWidget {
             return ListTile(
               key: Key('ticket-${t.id}'),
               title: Text('№${t.id} · ${t.category.label}'),
-              subtitle: Text('${t.description}\n${formatDateTime(t.createdAt)}', maxLines: 3),
+              // Описание из дерева неполадок многострочное — ограничено, чтобы дата была видна всегда.
+              subtitle: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(t.description, maxLines: 2, overflow: TextOverflow.ellipsis),
+                  Text(formatDateTime(t.createdAt), key: Key('ticket-${t.id}-date')),
+                ],
+              ),
               isThreeLine: true,
               trailing: TicketStatusChip(status: t.status),
               onTap: () async {

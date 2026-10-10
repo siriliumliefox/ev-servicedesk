@@ -5,47 +5,59 @@ import '../../app/app_state.dart';
 import '../../data/models.dart';
 import '../../theme/app_theme.dart';
 import '../../ui/format.dart';
+import '../../ui/info_note.dart';
 import '../../ui/states.dart';
 import 'support_screen.dart';
 
 class TicketChatScreen extends StatelessWidget {
-  const TicketChatScreen({super.key, required this.ticket});
+  const TicketChatScreen({super.key, required this.ticket, this.notice});
 
   final Ticket ticket;
+
+  /// Пояснение над перепиской сразу после отправки: что будет дальше (заявка на запись — глава 9).
+  final String? notice;
 
   @override
   Widget build(BuildContext context) {
     final app = AppScope.of(context);
     return Scaffold(
       appBar: AppBar(
+        // Статус — под номером, а не в действиях справа: номер обращения виден целиком на узком экране;
+        // если не помещается и так — ужимается, а не обрезается многоточием (глава 9).
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
           children: [
-            Text('Обращение №${ticket.id}'),
-            Text(ticket.category.label, style: Theme.of(context).textTheme.bodySmall),
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.centerLeft,
+              child: Text('Обращение №${ticket.id}'),
+            ),
+            Row(
+              children: [
+                Flexible(child: Text(ticket.category.label, style: Theme.of(context).textTheme.bodySmall)),
+                const SizedBox(width: EvSpace.s2),
+                TicketStatusChip(status: ticket.status),
+              ],
+            ),
           ],
         ),
-        actions: [
-          Padding(
-            padding: const EdgeInsets.only(right: EvSpace.s4),
-            child: Center(child: TicketStatusChip(status: ticket.status)),
-          ),
-        ],
       ),
       body: AsyncView<List<TicketMessage>>(
         reloadKey: app.revision,
         load: () => app.repository.messages(ticket.id),
-        builder: (context, messages, _) => _Chat(ticket: ticket, initial: messages),
+        builder: (context, messages, _) => _Chat(ticket: ticket, initial: messages, notice: notice),
       ),
     );
   }
 }
 
 class _Chat extends StatefulWidget {
-  const _Chat({required this.ticket, required this.initial});
+  const _Chat({required this.ticket, required this.initial, this.notice});
 
   final Ticket ticket;
   final List<TicketMessage> initial;
+  final String? notice;
 
   @override
   State<_Chat> createState() => _ChatState();
@@ -97,6 +109,11 @@ class _ChatState extends State<_Chat> {
     final resolved = widget.ticket.status == TicketStatus.resolved;
     return Column(
       children: [
+        if (widget.notice != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(EvSpace.s4, EvSpace.s4, EvSpace.s4, 0),
+            child: InfoNote(key: const Key('chat-notice'), text: widget.notice!),
+          ),
         Expanded(
           child: ListView.builder(
             padding: const EdgeInsets.all(EvSpace.s4),

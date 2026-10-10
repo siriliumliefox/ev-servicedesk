@@ -78,9 +78,41 @@ describe('карточка тикета', () => {
     const { click } = setup()
     await click(await card(1050))
     const panel = await screen.findByRole('complementary', { name: 'Карточка тикета #1050' })
-    expect(await within(panel).findByText(/Тикет ведёт Инженер #8/)).toBeInTheDocument()
+    expect(await within(panel).findByText(/Действия доступны назначенному инженеру/)).toHaveTextContent('Тикет ведёт Инженер #8.')
     expect(within(panel).queryByRole('button', { name: 'Взять в работу' })).toBeNull()
     expect(within(panel).getByLabelText('Ответ клиенту')).toBeDisabled()
+  })
+
+  // U-02 (юзабилити-тест R1): подсказка под ответом не зовёт «Взять в работу», когда такой кнопки нет.
+  it('чужой тикет — подсказка называет исполнителя, а не «Возьмите в работу»', async () => {
+    const { click } = setup()
+    await click(await card(1050))
+    const panel = await screen.findByRole('complementary', { name: 'Карточка тикета #1050' })
+    const reply = await within(panel).findByLabelText('Ответ клиенту')
+    expect(reply).toHaveAccessibleDescription('Тикет ведёт Инженер #8 — ответить может только он')
+    expect(within(panel).queryByText(/Возьмите тикет в работу/)).toBeNull()
+  })
+
+  it('неназначенный тикет — подсказка «Возьмите в работу» и кнопка рядом; после claim подсказки нет', async () => {
+    const { click } = setup()
+    await click(await card(1056))
+    const panel = await screen.findByRole('complementary', { name: 'Карточка тикета #1056' })
+    const reply = await within(panel).findByLabelText('Ответ клиенту')
+    expect(reply).toBeDisabled()
+    expect(reply).toHaveAccessibleDescription('Возьмите тикет в работу, чтобы ответить клиенту')
+    await click(within(panel).getByRole('button', { name: 'Взять в работу' }))
+    await within(panel).findByRole('button', { name: 'Решено' })
+    expect(within(panel).getByLabelText('Ответ клиенту')).toBeEnabled()
+    expect(within(panel).getByLabelText('Ответ клиенту')).not.toHaveAccessibleDescription()
+  })
+
+  it('решённый тикет — «Тикет решён — ответ недоступен»', async () => {
+    const { click } = setup()
+    await click(await card(1029))
+    const panel = await screen.findByRole('complementary', { name: 'Карточка тикета #1029' })
+    const reply = await within(panel).findByLabelText('Ответ клиенту')
+    expect(reply).toBeDisabled()
+    expect(reply).toHaveAccessibleDescription('Тикет решён — ответ недоступен')
   })
 
   it('выбранный тикет — в адресе; Escape закрывает карточку', async () => {

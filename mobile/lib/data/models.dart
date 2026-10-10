@@ -89,9 +89,9 @@ enum TicketCategory {
   final String label;
 }
 
-/// Ticket.status — подписи из глоссария.
+/// Ticket.status — подписи из глоссария; у клиента «обращение» — «Новое» (согласование рода, глава 9).
 enum TicketStatus {
-  newTicket('Новый'),
+  newTicket('Новое'),
   inProgress('В работе'),
   waitingVendor('Ожидает вендора'),
   resolved('Решено');

@@ -66,14 +66,13 @@ class _WalkerState extends State<_Walker> {
   }
 
   void _escalate() {
-    final vehicle = AppScope.read(context).vehicle;
-    if (vehicle == null) {
+    if (AppScope.read(context).vehicles.isEmpty) {
       showErrorSnack(context, 'Добавьте авто, чтобы создать обращение');
       return;
     }
+    // Дерево к машине не привязано: при нескольких авто клиент выбирает его в форме (глава 9).
     Navigator.of(context).pushReplacement(MaterialPageRoute<void>(
       builder: (_) => TicketCreateScreen(
-        vehicleId: vehicle.id,
         category: widget.article.category,
         description: _ticketDescription(),
         sourceArticleId: widget.article.id,

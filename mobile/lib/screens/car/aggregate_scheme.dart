@@ -8,23 +8,14 @@ import '../../ui/status_badge.dart';
 
 /// Положение зоны на схеме (доли ширины/высоты). Агрегаты, добавленные в админ-панели
 /// без своего места на схеме, показываются только в списке под схемой.
+/// Боковые зоны отнесены к краям, чтобы полные названия у центральных зон помещались без перекрытия.
 const aggregateSchemePositions = <String, Offset>{
   'ac_refrigerant': Offset(0.5, 0.08),
-  'engine_oil': Offset(0.25, 0.18),
-  'oil_filter': Offset(0.75, 0.18),
+  'engine_oil': Offset(0.19, 0.16),
+  'oil_filter': Offset(0.81, 0.16),
   'air_filter': Offset(0.5, 0.33),
   'cabin_filter': Offset(0.5, 0.53),
   'gearbox_oil': Offset(0.5, 0.82),
-};
-
-/// Короткие подписи на схеме; полные — в списке и карточке.
-const _shortNames = <String, String>{
-  'ac_refrigerant': 'Фреон',
-  'engine_oil': 'Масло ДВС',
-  'oil_filter': 'Масл. фильтр',
-  'air_filter': 'Возд. фильтр',
-  'cabin_filter': 'Салон. фильтр',
-  'gearbox_oil': 'Редуктор',
 };
 
 class AggregateScheme extends StatelessWidget {
@@ -34,12 +25,18 @@ class AggregateScheme extends StatelessWidget {
   final ValueChanged<AggregateStatusItem> onTap;
 
   static const _zone = EvSize.controlMobile; // 48 ≥ 44
-  static const _labelWidth = 72.0;
+
+  /// Подпись — полное название агрегата (как в списке и карточке, глава 9), до 2 строк.
+  /// Ширина — под самое длинное слово: «кондиционера» у центральной зоны, «Масляный» у боковой.
+  static const _labelWidth = 104.0;
+  static const _sideLabelWidth = 76.0;
+
+  /// Центральные зоны (по оси авто) шире: соседей сбоку у них нет.
+  static double _labelWidthAt(Offset position) => position.dx == 0.5 ? _labelWidth : _sideLabelWidth;
 
   @override
   Widget build(BuildContext context) {
     final c = context.evColors;
-    final placed = statuses.where((s) => aggregateSchemePositions.containsKey(s.aggregateTypeCode)).toList();
     return Semantics(
       label: 'Схема автомобиля',
       container: true,
@@ -53,13 +50,14 @@ class AggregateScheme extends StatelessWidget {
                 clipBehavior: Clip.none,
                 children: [
                   Positioned.fill(child: CustomPaint(painter: _CarPainter(c))),
-                  for (final s in placed)
-                    Positioned(
-                      left: aggregateSchemePositions[s.aggregateTypeCode]!.dx * box.maxWidth - _labelWidth / 2,
-                      top: aggregateSchemePositions[s.aggregateTypeCode]!.dy * box.maxHeight - _zone / 2,
-                      width: _labelWidth,
-                      child: _Zone(status: s, onTap: () => onTap(s)),
-                    ),
+                  for (final s in statuses)
+                    if (aggregateSchemePositions[s.aggregateTypeCode] case final at?)
+                      Positioned(
+                        left: at.dx * box.maxWidth - _labelWidthAt(at) / 2,
+                        top: at.dy * box.maxHeight - _zone / 2,
+                        width: _labelWidthAt(at),
+                        child: _Zone(status: s, onTap: () => onTap(s)),
+                      ),
                 ],
               );
             }),
@@ -110,9 +108,10 @@ class _Zone extends StatelessWidget {
                 borderRadius: const BorderRadius.all(Radius.circular(EvRadius.sm)),
               ),
               child: Text(
-                _shortNames[status.aggregateTypeCode] ?? status.aggregateTypeName,
+                status.aggregateTypeName,
                 textAlign: TextAlign.center,
                 maxLines: 2,
+                overflow: TextOverflow.ellipsis,
                 style: EvTypeMobile.caption.copyWith(color: c.fg),
               ),
             ),

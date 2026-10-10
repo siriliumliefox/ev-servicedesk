@@ -18,10 +18,32 @@ import {
 } from '@ev-servicedesk/web-shared'
 import { useAdmin } from '../repo.ts'
 
+/**
+ * Целое из поля ввода (U-04): разряды можно разделять пробелом, как в таблице и карточке, — обычным,
+ * неразрывным (U+00A0) или узким неразрывным (U+202F, так форматирует ru-RU).
+ */
+function parseInteger(value: string): number {
+  return Number(value.replace(/[\s\u00A0\u202F]/g, ''))
+}
+
+/** «12 000 км, 12 мес.» — для подтверждения пересмотра. */
+function intervals(r: MaintenanceRegulation): string {
+  return [
+    r.interval_km == null ? null : `${formatInt(r.interval_km)} км`,
+    r.interval_months == null ? null : `${r.interval_months} мес.`,
+  ]
+    .filter(Boolean)
+    .join(', ')
+}
+
+/** Сохранённый пересмотр: новая версия и прежняя (ушла в историю). */
+type Revision = { name: string; before: MaintenanceRegulation | undefined; after: MaintenanceRegulation }
+
 export function Regulations() {
   const { repo, models } = useAdmin()
   const [modelId, setModelId] = useState(models[0]?.id ?? 0)
   const [showArchive, setShowArchive] = useState(false)
+  const [revised, setRevised] = useState<Revision | null>(null)
   const [version, setVersion] = useState(0)
   const refresh = () => setVersion((v) => v + 1)
   const data = useAsync(
@@ -47,11 +69,37 @@ export function Regulations() {
         </div>
         <div role="group" aria-label="Модель авто" className="flex flex-wrap gap-2">
           {models.map((m) => (
-            <Chip key={m.id} selected={m.id === modelId} onClick={() => setModelId(m.id)}>
+            <Chip
+              key={m.id}
+              selected={m.id === modelId}
+              onClick={() => {
+                setModelId(m.id)
+                setRevised(null)
+              }}
+            >
               {m.brand} {m.model}
             </Chip>
           ))}
         </div>
+
+        {/* A2 (юзабилити-тест): прежнее значение — сразу в подтверждении, история версий — одной кнопкой.
+            Подтверждение снимается сменой модели, архивированием и новым пересмотром — не противоречит таблице. */}
+        {revised && (
+          <div
+            role="status"
+            className="flex flex-wrap items-center justify-between gap-3 rounded-md bg-status-green-bg px-4 py-3 text-body-sm text-status-green-fg"
+          >
+            <span>
+              Сохранено: {revised.name} — {intervals(revised.after)}{' '}
+              {revised.before ? `(было ${intervals(revised.before)})` : '(раньше не отслеживался)'}
+            </span>
+            {revised.before && !showArchive && (
+              <Button size="sm" variant="secondary" onClick={() => setShowArchive(true)}>
+                Показать историю версий
+              </Button>
+            )}
+          </div>
+        )}
 
         {data.error ? (
           <ErrorState error={data.error} onRetry={data.reload} />
@@ -65,6 +113,7 @@ export function Regulations() {
             regulations={data.data[1]}
             showArchive={showArchive}
             onChanged={refresh}
+            onRevised={setRevised}
           />
         )}
       </section>
@@ -83,12 +132,15 @@ function RegulationTable({
   regulations,
   showArchive,
   onChanged,
+  onRevised,
 }: {
   modelId: number
   types: AggregateType[]
   regulations: MaintenanceRegulation[]
   showArchive: boolean
   onChanged: () => void
+  /** null — подтверждение устарело: агрегат архивирован или открыт новый пересмотр. */
+  onRevised: (revision: Revision | null) => void
 }) {
   const [editing, setEditing] = useState<string | null>(null)
   return (
@@ -117,11 +169,26 @@ function RegulationTable({
                   current={active}
                   onDone={(saved) => {
                     setEditing(null)
-                    if (saved) onChanged()
+                    if (saved) {
+                      onRevised({ name: type.name, before: active, after: saved })
+                      onChanged()
+                    }
                   }}
                 />
               ) : (
-                <RegulationRow key={type.code} type={type} regulation={active} onEdit={() => setEditing(type.code)} onChanged={onChanged} />
+                <RegulationRow
+                  key={type.code}
+                  type={type}
+                  regulation={active}
+                  onEdit={() => {
+                    setEditing(type.code)
+                    onRevised(null)
+                  }}
+                  onChanged={() => {
+                    onRevised(null)
+                    onChanged()
+                  }}
+                />
               ),
               ...(showArchive
                 ? history.map((r) => (
@@ -219,7 +286,8 @@ function RegulationForm({
   modelId: number
   type: AggregateType
   current: MaintenanceRegulation | undefined
-  onDone: (saved: boolean) => void
+  /** Новая версия регламента или null — отмена. */
+  onDone: (saved: MaintenanceRegulation | null) => void
 }) {
   const { repo } = useAdmin()
   const [km, setKm] = useState(current?.interval_km?.toString() ?? '')
@@ -232,13 +300,13 @@ function RegulationForm({
     setBusy(true)
     setError(null)
     try {
-      await repo.reviseMaintenanceRegulation({
+      const saved = await repo.reviseMaintenanceRegulation({
         vehicle_model_id: modelId,
         aggregate_type_code: type.code,
-        interval_km: km.trim() ? Number(km) : null,
-        interval_months: months.trim() ? Number(months) : null,
+        interval_km: km.trim() ? parseInteger(km) : null,
+        interval_months: months.trim() ? parseInteger(months) : null,
       })
-      onDone(true)
+      onDone(saved)
     } catch (err) {
       setError(err)
       setBusy(false)
@@ -268,7 +336,7 @@ function RegulationForm({
             <Button type="submit" size="sm" disabled={busy}>
               Сохранить
             </Button>
-            <Button size="sm" variant="ghost" onClick={() => onDone(false)}>
+            <Button size="sm" variant="ghost" onClick={() => onDone(null)}>
               Отмена
             </Button>
           </div>
@@ -299,7 +367,7 @@ function ThresholdsForm({ initial }: { initial: { yellow_from_percent: number; r
     setError(null)
     setSaved(false)
     try {
-      await repo.updateAggregateStatusThresholds({ yellow_from_percent: Number(yellow), red_above_percent: Number(red) })
+      await repo.updateAggregateStatusThresholds({ yellow_from_percent: parseInteger(yellow), red_above_percent: parseInteger(red) })
       setSaved(true)
     } catch (err) {
       setError(err)

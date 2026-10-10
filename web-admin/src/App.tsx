@@ -21,11 +21,12 @@ import { AdminContext, type AdminEnv } from './repo.ts'
 
 const systemNow = () => new Date()
 
+// hint — что в разделе (юзабилити-тест, U-08: «где публикация, а где руководство по проблеме»).
 const SECTIONS = [
-  { path: '/', label: 'Дашборд' },
-  { path: '/regulations', label: 'Регламенты ТО' },
-  { path: '/articles', label: 'База знаний' },
-  { path: '/publications', label: 'Публикации' },
+  { path: '/', label: 'Дашборд', hint: 'показатели поддержки' },
+  { path: '/regulations', label: 'Регламенты ТО', hint: 'интервалы замены и пороги' },
+  { path: '/articles', label: 'База знаний', hint: 'статьи и деревья неполадок' },
+  { path: '/publications', label: 'Публикации', hint: 'рассылки: новости, акции, прошивки' },
 ] as const
 
 export default function App({
@@ -59,16 +60,24 @@ export default function App({
           <span aria-hidden="true" className="size-3 rounded-full bg-primary" />
           EV-ServiceDesk
         </p>
-        {SECTIONS.map((s) => (
+        {SECTIONS.map((s, i) => (
+          // Имя ссылки — название раздела, пояснение — описание (aria-describedby).
           <a
             key={s.path}
             href={`#${s.path}`}
             aria-current={s === section ? 'page' : undefined}
-            className={`rounded-md px-3 py-2 text-label no-underline ${
+            aria-labelledby={`nav-${i}-label`}
+            aria-describedby={`nav-${i}-hint`}
+            className={`grid rounded-md px-3 py-2 no-underline ${
               s === section ? 'bg-fg text-canvas' : 'text-fg hover:bg-surface-subtle'
             }`}
           >
-            {s.label}
+            <span id={`nav-${i}-label`} className="text-label">
+              {s.label}
+            </span>
+            <span id={`nav-${i}-hint`} className={`text-caption ${s === section ? 'opacity-80' : 'text-fg-muted'}`}>
+              {s.hint}
+            </span>
           </a>
         ))}
       </nav>
@@ -97,7 +106,10 @@ export default function App({
                 {section.path === '/regulations' && <Regulations />}
                 {section.path === '/articles' &&
                   (article ? (
+                    // key: другая статья (в т. ч. «Назад»/«Вперёд» браузера) — редактор с чистого листа,
+                    // без итога публикации прошлой статьи.
                     <ArticleEditor
+                      key={article}
                       articleId={article === 'new' ? null : Number(article)}
                       onSaved={(id) => navigate(`/articles/${id}`)}
                       onBack={() => navigate('/articles')}

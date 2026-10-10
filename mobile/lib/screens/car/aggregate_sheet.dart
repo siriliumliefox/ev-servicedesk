@@ -30,14 +30,15 @@ class AggregateSheet extends StatelessWidget {
   final AggregateStatusItem status;
   final ScrollController? scrollController;
 
-  void _book(BuildContext context) {
+  /// Запись — та же форма обращения в режиме записи: авто и агрегат известны, время — пожеланием (глава 9).
+  void _book(BuildContext context, ServiceBooking booking) {
     final nav = Navigator.of(context);
     nav.pop();
     nav.push(MaterialPageRoute<void>(
       builder: (_) => TicketCreateScreen(
         vehicleId: vehicle.id,
-        category: TicketCategory.maintenance,
-        description: 'Запись на замену: ${status.aggregateTypeName}',
+        booking: booking,
+        description: '${booking.title}: ${status.aggregateTypeName}',
       ),
     ));
   }
@@ -98,13 +99,13 @@ class AggregateSheet extends StatelessWidget {
         needsService
             ? FilledButton.icon(
                 key: const Key('book-service'),
-                onPressed: () => _book(context),
+                onPressed: () => _book(context, ServiceBooking.replacement),
                 icon: const Icon(Icons.event_available),
                 label: const Text('Записаться на замену'),
               )
             : OutlinedButton.icon(
                 key: const Key('book-service'),
-                onPressed: () => _book(context),
+                onPressed: () => _book(context, ServiceBooking.maintenance),
                 icon: const Icon(Icons.event_available),
                 label: const Text('Записаться на ТО'),
               ),
