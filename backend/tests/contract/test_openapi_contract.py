@@ -212,8 +212,17 @@ SCHEMA_TABLE = {
     "MaintenanceRegulationCreateRequest": ("maintenance_regulation", {"aggregate_type_code"}),
     "AggregateStatus": (
         "vehicle_aggregate_status",
-        {"aggregate_type_code", "aggregate_type_name", "status", "percentage", "remaining_km"},
+        {
+            "aggregate_type_code",
+            "aggregate_type_name",
+            "status",
+            "percentage",
+            "remaining_km",
+            "remaining_days",
+        },
     ),
+    "AggregateStatusThresholds": ("aggregate_status_thresholds", set()),
+    "AggregateStatusThresholdsUpdateRequest": ("aggregate_status_thresholds", set()),
     "Ticket": ("ticket", {"is_overdue"}),
     "TicketCreateRequest": ("ticket", {"attachments"}),
     "TicketMessage": ("ticket_message", {"author", "attachments"}),

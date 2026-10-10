@@ -2,6 +2,14 @@ erDiagram
 %% EV-ServiceDesk — ER-диаграмма (Глава 2)
 %% СГЕНЕРИРОВАНО из backend/app/models: cd backend && poetry run python scripts/export_erd.py
 %% Не редактировать вручную. ||--o{ — обязательный FK, |o--o{ — необязательный.
+    aggregate_status_thresholds {
+        smallint id PK
+        smallint yellow_from_percent
+        smallint red_above_percent
+        bigint updated_by_user_id FK "nullable"
+        timestamptz created_at
+        timestamptz updated_at
+    }
     aggregate_type {
         bigint id PK
         varchar_50 code UK
@@ -189,6 +197,7 @@ erDiagram
         timestamptz updated_at
     }
 
+    app_user |o--o{ aggregate_status_thresholds : "updated_by_user_id (RESTRICT)"
     knowledge_article ||--o{ decision_tree_node : "article_id (CASCADE)"
     vehicle_model ||--o{ firmware_release : "vehicle_model_id (RESTRICT)"
     firmware_release |o--o{ knowledge_article : "firmware_release_id, vehicle_model_id (RESTRICT)"

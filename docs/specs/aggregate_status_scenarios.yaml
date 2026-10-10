@@ -1,0 +1,143 @@
+# Сценарии статуса агрегата «светофор» (Глава 5, Issue #31, ADR 0009).
+# Машиночитаемая копия таблиц §5 docs/specs/AGGREGATE_STATUS_ALGORITHM.md.
+# Прогоняет: backend/tests/domain/test_aggregate_status.py (там же — проверка синхронности с таблицами).
+# Поля: regulation {interval_km, interval_months} | null (нет активного регламента);
+#       last {replaced_at, mileage} | null (нет истории); expect | null (агрегат не возвращается).
+
+defaults:
+  today: 2026-10-10
+  thresholds: { yellow_from_percent: 70, red_above_percent: 100 }
+
+status:
+  - id: S01
+    regulation: { interval_km: 10000 }
+    last: { mileage: 20000 }
+    current_mileage: 26900
+    expect: { status: green, percentage: "69.0", remaining_km: 3100, remaining_days: null }
+  - id: S02
+    regulation: { interval_km: 10000 }
+    last: { mileage: 20000 }
+    current_mileage: 27000
+    expect: { status: yellow, percentage: "70.0", remaining_km: 3000, remaining_days: null }
+  - id: S03
+    regulation: { interval_km: 10000 }
+    last: { mileage: 20000 }
+    current_mileage: 30000
+    expect: { status: yellow, percentage: "100.0", remaining_km: 0, remaining_days: null }
+  - id: S04
+    regulation: { interval_km: 10000 }
+    last: { mileage: 20000 }
+    current_mileage: 30100
+    expect: { status: red, percentage: "101.0", remaining_km: -100, remaining_days: null }
+  - id: S05
+    note: точно 69,99%
+    regulation: { interval_km: 10000 }
+    last: { mileage: 20000 }
+    current_mileage: 26999
+    expect: { status: green, percentage: "69.9", remaining_km: 3001, remaining_days: null }
+  - id: S06
+    note: точно 100,01% — показывается 100.0, цвет определяет status
+    regulation: { interval_km: 10000 }
+    last: { mileage: 20000 }
+    current_mileage: 30001
+    expect: { status: red, percentage: "100.0", remaining_km: -1, remaining_days: null }
+  - id: S07
+    note: E1 — новый авто без истории
+    regulation: { interval_km: 10000, interval_months: 12 }
+    last: null
+    current_mileage: 15000
+    expect: { status: unknown, percentage: null, remaining_km: null, remaining_days: null }
+  - id: S08
+    regulation: { interval_km: 10000, interval_months: 12 }
+    last: { replaced_at: 2026-10-10, mileage: 20000 }
+    current_mileage: 20000
+    expect: { status: green, percentage: "0.0", remaining_km: 10000, remaining_days: 365 }
+  - id: S09
+    regulation: { interval_months: 24 }
+    last: { replaced_at: 2025-10-10 }
+    current_mileage: 50000
+    expect: { status: green, percentage: "50.0", remaining_km: null, remaining_days: 365 }
+  - id: S10
+    note: оба интервала, время хуже
+    regulation: { interval_km: 10000, interval_months: 12 }
+    last: { replaced_at: 2025-12-10, mileage: 20000 }
+    current_mileage: 22000
+    expect: { status: yellow, percentage: "83.2", remaining_km: 8000, remaining_days: 61 }
+  - id: S11
+    note: оба интервала, пробег хуже
+    regulation: { interval_km: 10000, interval_months: 12 }
+    last: { replaced_at: 2026-08-10, mileage: 20000 }
+    current_mileage: 30500
+    expect: { status: red, percentage: "105.0", remaining_km: -500, remaining_days: 304 }
+  - id: S12
+    note: E3 — пробег исправлен ниже пробега замены
+    regulation: { interval_km: 10000 }
+    last: { mileage: 20000 }
+    current_mileage: 19500
+    expect: { status: green, percentage: "0.0", remaining_km: 10000, remaining_days: null }
+  - id: S13
+    note: E4 — дата замены позже today
+    regulation: { interval_months: 12 }
+    last: { replaced_at: 2026-10-15 }
+    current_mileage: 0
+    expect: { status: green, percentage: "0.0", remaining_km: null, remaining_days: 370 }
+  - id: S14
+    note: E11 — конец месяца, ровно срок
+    regulation: { interval_months: 1 }
+    last: { replaced_at: 2026-01-31 }
+    current_mileage: 0
+    today: 2026-02-28
+    expect: { status: yellow, percentage: "100.0", remaining_km: null, remaining_days: 0 }
+  - id: S15
+    note: E11 — конец месяца, просрочено на день
+    regulation: { interval_months: 1 }
+    last: { replaced_at: 2026-01-31 }
+    current_mileage: 0
+    today: 2026-03-01
+    expect: { status: red, percentage: "103.5", remaining_km: null, remaining_days: -1 }
+  - id: S16
+    note: E2 — известна только дата, регламент по пробегу
+    regulation: { interval_km: 10000 }
+    last: { replaced_at: 2026-01-01 }
+    current_mileage: 25000
+    expect: { status: unknown, percentage: null, remaining_km: null, remaining_days: null }
+  - id: S17
+    note: E10 — пороги 60/90
+    regulation: { interval_km: 10000 }
+    last: { mileage: 20000 }
+    current_mileage: 26500
+    thresholds: { yellow_from_percent: 60, red_above_percent: 90 }
+    expect: { status: yellow, percentage: "65.0", remaining_km: 3500, remaining_days: null }
+  - id: S18
+    note: E10 — пороги 60/90
+    regulation: { interval_km: 10000 }
+    last: { mileage: 20000 }
+    current_mileage: 29500
+    thresholds: { yellow_from_percent: 60, red_above_percent: 90 }
+    expect: { status: red, percentage: "95.0", remaining_km: 500, remaining_days: null }
+  - id: S19
+    note: нет активного регламента — агрегат не возвращается (§2.1, E9)
+    regulation: null
+    last: { mileage: 20000 }
+    current_mileage: 25000
+    expect: null
+
+replacement:
+  - id: R01
+    current: null
+    new: { replaced_at: 2026-10-01, mileage: 20000 }
+    becomes_current: true
+  - id: R02
+    current: { replaced_at: 2026-03-01, mileage: 10000 }
+    new: { replaced_at: 2026-10-01, mileage: 20000 }
+    becomes_current: true
+  - id: R03
+    note: E7 — тот же день
+    current: { replaced_at: 2026-10-01, mileage: 20000 }
+    new: { replaced_at: 2026-10-01, mileage: 20000 }
+    becomes_current: true
+  - id: R04
+    note: E6 — задним числом, только история
+    current: { replaced_at: 2026-10-01, mileage: 20000 }
+    new: { replaced_at: 2026-03-01, mileage: 10000 }
+    becomes_current: false

@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: EV-ServiceDesk API
-  version: "1.0.0"
+  version: "1.1.0"
   description: >
     API дипломного проекта «EV-ServiceDesk» (ООО «ЕТСавтоГомель»).
     Контракты сервисов: Auth, Vehicle, Aggregates & Maintenance, Tickets,
@@ -27,6 +27,14 @@ tags:
   - name: Auth
   - name: Vehicle
   - name: Aggregates
+    description: >
+      Aggregates & Maintenance Service: справочник агрегатов, регламенты ТО, пороги и
+      статусы «светофор». Спецификация алгоритма и таблица тестовых сценариев (Глава 5,
+      ADR 0009): docs/specs/AGGREGATE_STATUS_ALGORITHM.md,
+      docs/specs/aggregate_status_scenarios.yaml.
+    externalDocs:
+      description: Спецификация алгоритма «светофор» и тестовые сценарии (Глава 5)
+      url: https://github.com/siriliumliefox/ev-servicedesk/blob/develop/docs/specs/AGGREGATE_STATUS_ALGORITHM.md
   - name: Uploads
   - name: Tickets
   - name: KnowledgeBase
@@ -577,9 +585,13 @@ paths:
       x-required-roles: [client, engineer, admin]
       x-rbac-action: ["Просмотр статусов агрегатов"]
       description: >
-        Алгоритм и пороги — Глава 5 ТЗ. Отдельное значение status=unknown
-        (не ошибка) для агрегата без истории замены — edge-case "новый авто
-        без истории" явно предусмотрен, а не считается сбоем.
+        Алгоритм — docs/specs/AGGREGATE_STATUS_ALGORITHM.md (Глава 5, ADR 0009),
+        сценарии — docs/specs/aggregate_status_scenarios.yaml. Возвращаются только
+        агрегаты, для которых у модели авто есть активный регламент ТО. Отдельное
+        значение status=unknown (не ошибка) — для агрегата без истории замены:
+        edge-case "новый авто без истории" явно предусмотрен, а не считается сбоем.
+        Статус вычисляется при каждом запросе по текущему регламенту и порогам
+        (getAggregateStatusThresholds).
       parameters:
         - $ref: '#/components/parameters/PageParam'
         - $ref: '#/components/parameters/PageSizeParam'
@@ -614,6 +626,11 @@ paths:
         сцепки — Глава 17). Публичный POST .../maintenance-records
         (Vehicle Service, шаг 3) остаётся для работ БЕЗ привязки к
         конкретному отслеживаемому агрегату.
+        Правила (docs/specs/AGGREGATE_STATUS_ALGORITHM.md, §3–4): replaced_at в будущем →
+        422; mileage_at_replacement больше текущего пробега авто → 409 (сначала
+        updateVehicleMileage). Счётчик сбрасывается, только если дата замены не раньше
+        текущей последней замены; замена задним числом попадает лишь в историю ТО,
+        а ответ содержит прежний статус.
       requestBody:
         required: true
         content:
@@ -629,6 +646,52 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /aggregate-status-thresholds:
+    get:
+      tags: [Aggregates]
+      summary: Пороги статусов «светофор»
+      operationId: getAggregateStatusThresholds
+      description: >
+        Глобальные пороги (ADR 0009): green — меньше yellow_from_percent, yellow — от
+        yellow_from_percent до red_above_percent включительно, red — больше
+        red_above_percent. Клиенту не нужны: статус вычисляет сервер.
+      x-required-roles: [engineer, admin]
+      x-rbac-action: ["CRUD регламентов ТО"]
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '200':
+          description: Текущие пороги
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AggregateStatusThresholds' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    put:
+      tags: [Aggregates]
+      summary: Изменить пороги статусов «светофор»
+      operationId: updateAggregateStatusThresholds
+      description: >
+        Заменяет оба порога. 422 — нарушено 1 ≤ yellow_from_percent < red_above_percent ≤ 200.
+        Новые пороги сразу применяются ко всем статусам; история прошлых порогов не ведётся.
+      x-required-roles: [admin]
+      x-rbac-action: ["CRUD регламентов ТО"]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AggregateStatusThresholdsUpdateRequest' }
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '200':
+          description: Пороги обновлены
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AggregateStatusThresholds' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '422': { $ref: '#/components/responses/ValidationError' }
 
   # ===================== UPLOADS (общая утилита для Tickets/KB) =====================
@@ -1775,15 +1838,48 @@ components:
           type: string
           enum: [green, yellow, red, unknown]
           description: >
-            green <70% интервала, yellow 70–100%, red >100%,
+            По точному проценту выработки p и порогам (по умолчанию 70/100):
+            green p < 70, yellow 70 ≤ p ≤ 100, red p > 100;
             unknown — нет истории замены (не ошибка, Глава 5).
+            Правила — docs/specs/AGGREGATE_STATUS_ALGORITHM.md.
         percentage:
           type: number
           nullable: true
-          description: "% выработки интервала, null при status=unknown"
+          description: >
+            % выработки интервала — худший из пробега и времени, усечён вниз до 0.1
+            (только для показа, цвет определяет status). null при status=unknown.
         last_replaced_at: { type: string, format: date, nullable: true }
         last_replaced_mileage: { type: integer, nullable: true }
-        remaining_km: { type: integer, nullable: true }
+        remaining_km:
+          type: integer
+          nullable: true
+          description: Остаток до конца интервала по пробегу; < 0 — перепробег; null — нет интервала/данных.
+        remaining_days:
+          type: integer
+          nullable: true
+          description: >
+            Остаток до конца интервала по времени в днях; < 0 — просрочено; null — нет
+            интервала/данных. Добавлено в 1.1.0.
+
+    AggregateStatusThresholds:
+      type: object
+      required: [yellow_from_percent, red_above_percent, updated_at]
+      properties:
+        yellow_from_percent: { type: integer, minimum: 1, maximum: 199, example: 70 }
+        red_above_percent: { type: integer, minimum: 2, maximum: 200, example: 100 }
+        updated_at: { type: string, format: date-time }
+        updated_by_user_id:
+          type: integer
+          nullable: true
+          description: Кто изменил последним; null — значения по умолчанию из миграции.
+
+    AggregateStatusThresholdsUpdateRequest:
+      type: object
+      required: [yellow_from_percent, red_above_percent]
+      description: 1 ≤ yellow_from_percent < red_above_percent ≤ 200, иначе 422.
+      properties:
+        yellow_from_percent: { type: integer, minimum: 1, maximum: 199 }
+        red_above_percent: { type: integer, minimum: 2, maximum: 200 }
 
     AggregateReplaceRequest:
       type: object

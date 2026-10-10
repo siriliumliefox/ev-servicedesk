@@ -365,7 +365,7 @@ export interface paths {
         };
         /**
          * Статусы всех агрегатов авто (для интерактивной схемы)
-         * @description Алгоритм и пороги — Глава 5 ТЗ. Отдельное значение status=unknown (не ошибка) для агрегата без истории замены — edge-case "новый авто без истории" явно предусмотрен, а не считается сбоем.
+         * @description Алгоритм — docs/specs/AGGREGATE_STATUS_ALGORITHM.md (Глава 5, ADR 0009), сценарии — docs/specs/aggregate_status_scenarios.yaml. Возвращаются только агрегаты, для которых у модели авто есть активный регламент ТО. Отдельное значение status=unknown (не ошибка) — для агрегата без истории замены: edge-case "новый авто без истории" явно предусмотрен, а не считается сбоем. Статус вычисляется при каждом запросе по текущему регламенту и порогам (getAggregateStatusThresholds).
          */
         get: operations["listAggregateStatuses"];
         put?: never;
@@ -390,9 +390,33 @@ export interface paths {
         put?: never;
         /**
          * Зафиксировать замену агрегата (сброс счётчика)
-         * @description Единственная точка входа для инженера при замене: сбрасывает счётчик (обновляет VehicleAggregateStatus) И создаёт соответствующую запись в истории ТО (MaintenanceRecord, Vehicle Service) одним вызовом — межсервисная синхронизация статуса и истории, чтобы инженер не забыл вызвать второй эндпоинт и данные не разошлись (реализация сцепки — Глава 17). Публичный POST .../maintenance-records (Vehicle Service, шаг 3) остаётся для работ БЕЗ привязки к конкретному отслеживаемому агрегату.
+         * @description Единственная точка входа для инженера при замене: сбрасывает счётчик (обновляет VehicleAggregateStatus) И создаёт соответствующую запись в истории ТО (MaintenanceRecord, Vehicle Service) одним вызовом — межсервисная синхронизация статуса и истории, чтобы инженер не забыл вызвать второй эндпоинт и данные не разошлись (реализация сцепки — Глава 17). Публичный POST .../maintenance-records (Vehicle Service, шаг 3) остаётся для работ БЕЗ привязки к конкретному отслеживаемому агрегату. Правила (docs/specs/AGGREGATE_STATUS_ALGORITHM.md, §3–4): replaced_at в будущем → 422; mileage_at_replacement больше текущего пробега авто → 409 (сначала updateVehicleMileage). Счётчик сбрасывается, только если дата замены не раньше текущей последней замены; замена задним числом попадает лишь в историю ТО, а ответ содержит прежний статус.
          */
         post: operations["replaceAggregateStatus"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/aggregate-status-thresholds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Пороги статусов «светофор»
+         * @description Глобальные пороги (ADR 0009): green — меньше yellow_from_percent, yellow — от yellow_from_percent до red_above_percent включительно, red — больше red_above_percent. Клиенту не нужны: статус вычисляет сервер.
+         */
+        get: operations["getAggregateStatusThresholds"];
+        /**
+         * Изменить пороги статусов «светофор»
+         * @description Заменяет оба порога. 422 — нарушено 1 ≤ yellow_from_percent < red_above_percent ≤ 200. Новые пороги сразу применяются ко всем статусам; история прошлых порогов не ведётся.
+         */
+        put: operations["updateAggregateStatusThresholds"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1111,16 +1135,34 @@ export interface components {
             aggregate_type_code: string;
             aggregate_type_name: string;
             /**
-             * @description green <70% интервала, yellow 70–100%, red >100%, unknown — нет истории замены (не ошибка, Глава 5).
+             * @description По точному проценту выработки p и порогам (по умолчанию 70/100): green p < 70, yellow 70 ≤ p ≤ 100, red p > 100; unknown — нет истории замены (не ошибка, Глава 5). Правила — docs/specs/AGGREGATE_STATUS_ALGORITHM.md.
              * @enum {string}
              */
             status: "green" | "yellow" | "red" | "unknown";
-            /** @description % выработки интервала, null при status=unknown */
+            /** @description % выработки интервала — худший из пробега и времени, усечён вниз до 0.1 (только для показа, цвет определяет status). null при status=unknown. */
             percentage?: number | null;
             /** Format: date */
             last_replaced_at?: string | null;
             last_replaced_mileage?: number | null;
+            /** @description Остаток до конца интервала по пробегу; < 0 — перепробег; null — нет интервала/данных. */
             remaining_km?: number | null;
+            /** @description Остаток до конца интервала по времени в днях; < 0 — просрочено; null — нет интервала/данных. Добавлено в 1.1.0. */
+            remaining_days?: number | null;
+        };
+        AggregateStatusThresholds: {
+            /** @example 70 */
+            yellow_from_percent: number;
+            /** @example 100 */
+            red_above_percent: number;
+            /** Format: date-time */
+            updated_at: string;
+            /** @description Кто изменил последним; null — значения по умолчанию из миграции. */
+            updated_by_user_id?: number | null;
+        };
+        /** @description 1 ≤ yellow_from_percent < red_above_percent ≤ 200, иначе 422. */
+        AggregateStatusThresholdsUpdateRequest: {
+            yellow_from_percent: number;
+            red_above_percent: number;
         };
         AggregateReplaceRequest: {
             /** Format: date */
@@ -2144,6 +2186,58 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["ValidationError"];
+            default: components["responses"]["ServerError"];
+        };
+    };
+    getAggregateStatusThresholds: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Текущие пороги */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AggregateStatusThresholds"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["ServerError"];
+        };
+    };
+    updateAggregateStatusThresholds: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AggregateStatusThresholdsUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Пороги обновлены */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AggregateStatusThresholds"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             422: components["responses"]["ValidationError"];
             default: components["responses"]["ServerError"];
         };
