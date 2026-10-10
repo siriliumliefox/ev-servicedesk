@@ -11,14 +11,14 @@
 | User | `app_user`, `refresh_token`, `pd_consent` |
 | Vehicle | `vehicle`, `vehicle_model`, `vehicle_mileage_correction` |
 | Aggregate | `aggregate_type`, `vehicle_aggregate_status`, `maintenance_record` |
-| MaintenanceRegulation | `maintenance_regulation` |
+| MaintenanceRegulation | `maintenance_regulation`, `aggregate_status_thresholds` (пороги «светофора», ADR 0009) |
 | Ticket | `ticket`, `ticket_attachment` |
 | TicketMessage | `ticket_message` |
 | KnowledgeArticle | `knowledge_article`, `decision_tree_node` |
 | Notification | `notification`, `notification_recipient`, `push_token`, `notification_delivery` |
 | FirmwareRelease | `firmware_release` |
 
-Итого 20 таблиц, 6 ENUM; триггеры: `trg_vehicle_guard`, `trg_set_updated_at` (на каждой таблице с `updated_at`), корректировка пробега и защита `pd_consent` (ADR 0006). Связи 1:N — все FK; M:N —
+Итого 21 таблица, 6 ENUM; триггеры: `trg_vehicle_guard`, `trg_set_updated_at` (на каждой таблице с `updated_at`), корректировка пробега и защита `pd_consent` (ADR 0006), `trg_singleton_row_guard` (ADR 0009). Связи 1:N — все FK; M:N —
 `notification_recipient` (notification × user), `notification_delivery` (notification × push_token).
 
 ## Бэклог baseline v1 → данные
@@ -28,7 +28,7 @@
 | C-01, X-02, N-06 | `app_user.phone` (E.164, UNIQUE); SMS-коды — Redis (ADR 0005) |
 | C-02, X-05 | `vehicle.vin` (CHECK, частичный UNIQUE), `vehicle_model` |
 | C-03 | `vehicle.mileage`, `maintenance_record`, `vehicle_mileage_correction` (ADR 0006) |
-| C-04, C-05 | `vehicle_aggregate_status`, `maintenance_regulation` (расчёт — Глава 5) |
+| C-04, C-05 | `vehicle_aggregate_status`, `maintenance_regulation`, `aggregate_status_thresholds` (расчёт — `docs/specs/AGGREGATE_STATUS_ALGORITHM.md`) |
 | C-06 | `knowledge_article.vehicle_model_id`, `.firmware_release_id`, `vehicle.current_firmware_release_id` |
 | C-07 | `decision_tree_node`, `ticket.source_article_id`, `ticket.source_node_id` |
 | C-08, X-03 | `ticket`, `ticket_attachment` (object_key, ADR 0004) |
@@ -68,6 +68,7 @@
 | engineer: карточка авто из тикета | `TicketDetail.vehicle_context` | `ticket.vehicle_id` → `vehicle`, `vehicle_aggregate_status` |
 | engineer: замена агрегата | `AggregateReplaceRequest.*` | `vehicle_aggregate_status` + `maintenance_record` |
 | admin: регламенты / агрегаты | `MaintenanceRegulation.*`, `AggregateType.*` | `maintenance_regulation`, `aggregate_type` |
+| admin: пороги «светофора» | `AggregateStatusThresholds.*` | `aggregate_status_thresholds` (ADR 0009) |
 | engineer: прошивка авто | `setVehicleFirmware`, `listFirmwareReleases` | `vehicle.current_firmware_release_id`, `firmware_release` |
 | admin: прошивки / рассылки | `FirmwareRelease.*`, `Notification.*` | `firmware_release`, `notification` |
 | все роли: профиль | `getCurrentUser` → `UserPublic.*` | `app_user` |
@@ -103,6 +104,7 @@
 | Телефон E.164, уникален | `ck_app_user_phone_e164`, `uq_app_user_phone` | `test_phone_must_be_e164`, `test_phone_unique` |
 | Одна запись статуса на (авто, агрегат) | `uq_vehicle_aggregate_status_*` | `test_one_status_per_vehicle_and_aggregate` |
 | Один активный регламент на (модель, агрегат) | `uq_maintenance_regulation_active` | `test_regulation_interval_rules` |
+| Пороги «светофора»: одна строка 70/100, `1 ≤ yellow < red ≤ 200`, не удаляется | `ck_aggregate_status_thresholds_*`, `trg_singleton_row_guard` | `test_thresholds.py` |
 | Атомарный claim тикета | условный UPDATE + row lock | `test_concurrent_claim_has_single_winner` |
 | Только хэши секретов | `ck_refresh_token_token_hash_sha256`, `ck_app_user_staff_password` | `test_refresh_token_stores_only_sha256`, `test_staff_requires_password_hash` |
 | Вложение и сообщение — одного тикета | `fk_ticket_attachment_message_same_ticket` | `test_attachment_message_must_belong_to_same_ticket` |

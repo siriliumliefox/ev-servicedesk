@@ -1,6 +1,6 @@
 """Aggregates & Maintenance: справочник, регламенты, статусы, история ТО.
 
-C-03, C-04, C-05, E-05, A-01, A-06, A-07.
+C-03, C-04, C-05, E-05, A-01, A-06, A-07; пороги «светофора» — ADR 0009.
 """
 
 from datetime import date
@@ -12,6 +12,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    SmallInteger,
     String,
     UniqueConstraint,
     text,
@@ -61,6 +62,37 @@ class MaintenanceRegulation(IdMixin, TimestampMixin, Base):
     interval_km: Mapped[int | None] = mapped_column(Integer)
     interval_months: Mapped[int | None] = mapped_column(Integer)
     is_archived: Mapped[bool] = mapped_column(server_default=text("false"), nullable=False)
+
+
+class AggregateStatusThresholds(TimestampMixin, Base):
+    """Пороги «светофора» (ADR 0009): ровно одна строка (id = 1), seed — миграция 0005."""
+
+    __tablename__ = "aggregate_status_thresholds"
+    __table_args__ = (
+        CheckConstraint("id = 1", name="singleton"),
+        CheckConstraint(
+            "yellow_from_percent >= 1 AND yellow_from_percent < red_above_percent "
+            "AND red_above_percent <= 200",
+            name="percent_order",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(
+        SmallInteger,
+        primary_key=True,
+        autoincrement=False,
+        server_default=text("1"),
+        sort_order=-100,
+    )
+    yellow_from_percent: Mapped[int] = mapped_column(
+        SmallInteger, server_default=text("70"), nullable=False
+    )
+    red_above_percent: Mapped[int] = mapped_column(
+        SmallInteger, server_default=text("100"), nullable=False
+    )
+    updated_by_user_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("app_user.id", ondelete="RESTRICT"), index=True
+    )
 
 
 class VehicleAggregateStatus(IdMixin, TimestampMixin, Base):

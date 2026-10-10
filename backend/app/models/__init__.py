@@ -1,6 +1,7 @@
 """ORM-модели EV-ServiceDesk. Импорт всех модулей регистрирует таблицы в Base.metadata."""
 
 from app.models.aggregates import (
+    AggregateStatusThresholds,
     AggregateType,
     MaintenanceRecord,
     MaintenanceRegulation,
@@ -19,6 +20,7 @@ from app.models.tickets import Ticket, TicketAttachment, TicketMessage
 from app.models.vehicles import FirmwareRelease, Vehicle, VehicleMileageCorrection, VehicleModel
 
 __all__ = [
+    "AggregateStatusThresholds",
     "AggregateType",
     "AppUser",
     "Base",

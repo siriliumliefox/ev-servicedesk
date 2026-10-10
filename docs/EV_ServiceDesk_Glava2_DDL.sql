@@ -581,5 +581,38 @@ CREATE TRIGGER trg_pd_consent_guard BEFORE UPDATE OR DELETE ON pd_consent FOR EA
 
 UPDATE alembic_version SET version_num='0004' WHERE alembic_version.version_num = '0003';
 
+-- Running upgrade 0004 -> 0005
+
+CREATE TABLE aggregate_status_thresholds (
+    id SMALLINT DEFAULT 1 NOT NULL, 
+    yellow_from_percent SMALLINT DEFAULT 70 NOT NULL, 
+    red_above_percent SMALLINT DEFAULT 100 NOT NULL, 
+    updated_by_user_id BIGINT, 
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
+    CONSTRAINT pk_aggregate_status_thresholds PRIMARY KEY (id), 
+    CONSTRAINT ck_aggregate_status_thresholds_singleton CHECK (id = 1), 
+    CONSTRAINT ck_aggregate_status_thresholds_percent_order CHECK (yellow_from_percent >= 1 AND yellow_from_percent < red_above_percent AND red_above_percent <= 200), 
+    CONSTRAINT fk_aggregate_status_thresholds_updated_by_user_id_app_user FOREIGN KEY(updated_by_user_id) REFERENCES app_user (id) ON DELETE RESTRICT
+);
+
+CREATE INDEX ix_aggregate_status_thresholds_updated_by_user_id ON aggregate_status_thresholds (updated_by_user_id);
+
+INSERT INTO aggregate_status_thresholds (id) VALUES (1);
+
+CREATE TRIGGER trg_set_updated_at BEFORE UPDATE ON aggregate_status_thresholds FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE FUNCTION singleton_row_guard() RETURNS trigger
+        LANGUAGE plpgsql AS $$
+        BEGIN
+            RAISE EXCEPTION '% row cannot be deleted', TG_TABLE_NAME
+                USING ERRCODE = 'check_violation', CONSTRAINT = TG_TABLE_NAME || '_singleton';
+        END;
+        $$;
+
+CREATE TRIGGER trg_singleton_row_guard BEFORE DELETE ON aggregate_status_thresholds FOR EACH ROW EXECUTE FUNCTION singleton_row_guard();
+
+UPDATE alembic_version SET version_num='0005' WHERE alembic_version.version_num = '0004';
+
 COMMIT;
 

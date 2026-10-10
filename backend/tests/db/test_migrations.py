@@ -20,6 +20,7 @@ EXPECTED_FUNCTIONS = {
     "mileage_correction_after_insert",
     "append_only_guard",
     "pd_consent_guard",
+    "singleton_row_guard",
 }
 
 
@@ -48,7 +49,7 @@ def _snapshot(engine: Engine) -> dict[str, set[str]]:
 def test_upgrade_downgrade_upgrade(migrated_engine: Engine, db_url: URL) -> None:
     cfg = alembic_config(db_url)
     head = ScriptDirectory.from_config(cfg).get_current_head()
-    assert head == "0004"
+    assert head == "0005"
 
     command.downgrade(cfg, "base")
     empty = _snapshot(migrated_engine)
