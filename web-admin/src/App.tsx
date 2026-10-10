@@ -1,19 +1,15 @@
-import { StatusBadge } from '@ev-servicedesk/web-shared'
+import { Card, StatusBadge } from '@ev-servicedesk/web-shared'
 
 function App() {
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50">
-      <div className="text-center space-y-3">
-        <h1 className="text-2xl font-semibold text-gray-800">
-          EV-ServiceDesk — Админ-панель
-        </h1>
-        <p className="text-gray-500">
-          Каркас, Глава 4. Конструктор регламентов ТО — Глава 22.
-        </p>
-        <div className="flex gap-2 justify-center">
+    <div className="flex min-h-screen items-center justify-center bg-canvas">
+      <Card className="space-y-3 text-center">
+        <h1 className="text-h1 text-fg">EV-ServiceDesk — Админ-панель</h1>
+        <p className="text-fg-muted">Каркас, Глава 4. Конструктор регламентов ТО — Глава 22.</p>
+        <div className="flex justify-center gap-2">
           <StatusBadge status="unknown" />
         </div>
-      </div>
+      </Card>
     </div>
   )
 }

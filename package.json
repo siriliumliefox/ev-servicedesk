@@ -10,7 +10,9 @@
     "lint:api": "spectral lint docs/openapi.yaml --fail-severity=warn",
     "gen:api": "openapi-typescript docs/openapi.yaml -o web-shared/src/api/schema.ts",
     "mock": "prism mock docs/openapi.yaml --port 4010 --host 127.0.0.1 --errors",
-    "test:mock": "node scripts/mock_smoke.mts"
+    "test:mock": "node scripts/mock_smoke.mts",
+    "tokens": "node scripts/design_tokens.mts",
+    "test:tokens": "node --test scripts/design_tokens.test.mts"
   },
   "devDependencies": {
     "@stoplight/prism-cli": "5.16.0",

@@ -54,6 +54,10 @@ jobs:
               - "web-engineer/**"
               - "web-admin/**"
               - "web-shared/**"
+              - "design/**"                            # tokens.json → tokens.css / tokens.g.dart (Глава 6)
+              - "mobile/lib/theme/tokens.g.dart"
+              - "scripts/design_tokens.mts"
+              - "scripts/design_tokens.test.mts"
               - "package.json"
               - "package-lock.json"
               - ".github/workflows/web-ci.yml"
