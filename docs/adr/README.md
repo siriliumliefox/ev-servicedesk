@@ -13,3 +13,4 @@
 | [0007](0007-api-contract-v1-freeze.md) | Контракт API v1: заморозка, правила и проверки |
 | [0008](0008-ci-gate-environments-staging-server.md) | CI-гейт, защита веток, окружения local → staging → production, staging-сервер — глава 26 |
 | [0009](0009-aggregate-status-thresholds.md) | Алгоритм «светофор»: глобальные пороги, худший из двух интервалов, точные границы |
+| [0010](0010-design-tokens-source-of-truth.md) | Дизайн-токены: `design/tokens.json` — источник истины, бренд ETS AUTO, темы, Figma на Starter |

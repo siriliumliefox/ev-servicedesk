@@ -1,0 +1,38 @@
+/* Тема EV-ServiceDesk для веба (Глава 6, ADR 0010). Подключение в приложении — после Tailwind:
+     @import "tailwindcss";
+     @import "@ev-servicedesk/web-shared/theme.css";
+     @source "../../web-shared/src";
+   Токены — tokens.css (генерируется из design/tokens.json, руками не править). */
+@import "@fontsource-variable/inter";
+@import "./tokens.css";
+
+@layer base {
+  html {
+    font-family: var(--font-sans);
+    font-size: var(--text-body);
+    line-height: var(--text-body--line-height);
+    background-color: var(--ev-canvas);
+    color: var(--ev-fg);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--ev-focus-ring);
+    outline-offset: 2px;
+  }
+
+  a {
+    color: var(--ev-primary-text);
+    text-decoration-line: underline;
+    text-underline-offset: 2px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    ::before,
+    ::after {
+      transition-duration: 0ms !important;
+      animation-duration: 0ms !important;
+    }
+  }
+}

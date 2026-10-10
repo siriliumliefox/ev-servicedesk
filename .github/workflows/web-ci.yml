@@ -22,6 +22,12 @@ jobs:
       - name: Install dependencies (root — workspaces)
         run: npm ci
 
+      # Контраст WCAG, тап-зоны, сетка, синхронность tokens.css / tokens.g.dart с design/tokens.json
+      # (Глава 6, ADR 0010). Не зависит от приложения — один раз на матрицу.
+      - name: Design tokens
+        if: matrix.app == 'web-engineer'
+        run: npm run test:tokens
+
       - name: Lint
         run: npm run lint --workspace ${{ matrix.app }}
 

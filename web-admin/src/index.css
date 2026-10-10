@@ -1,1 +1,4 @@
 @import "tailwindcss";
+@import "@ev-servicedesk/web-shared/theme.css";
+/* web-shared подключён через node_modules — Tailwind не сканирует его без явного @source. */
+@source "../../web-shared/src";

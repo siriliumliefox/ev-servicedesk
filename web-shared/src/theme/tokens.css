@@ -1,0 +1,218 @@
+/* СГЕНЕРИРОВАНО scripts/design_tokens.mts из design/tokens.json — не редактировать.
+   Обновление: npm run tokens. Глава 6, ADR 0010. */
+
+/* Тёмная тема — атрибут data-theme="dark" на <html> (или на поддереве).
+   Без атрибута тема следует системной настройке (prefers-color-scheme). */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+/* Палитра и шкалы Tailwind по умолчанию отключены: в разметке — только токены. */
+@theme {
+  --color-*: initial;
+  --text-*: initial;
+  --radius-*: initial;
+  --shadow-*: initial;
+  --font-*: initial;
+
+  --font-sans: "Inter Variable", Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  /* Типографика веба (кабинет инженера, админ-панель): text-h1, text-body, … */
+  --text-display: 32px;
+  --text-display--line-height: 40px;
+  --text-display--font-weight: 700;
+  --text-display--letter-spacing: -0.02em;
+  --text-h1: 26px;
+  --text-h1--line-height: 34px;
+  --text-h1--font-weight: 700;
+  --text-h1--letter-spacing: -0.01em;
+  --text-h2: 20px;
+  --text-h2--line-height: 28px;
+  --text-h2--font-weight: 600;
+  --text-h2--letter-spacing: 0em;
+  --text-h3: 16px;
+  --text-h3--line-height: 24px;
+  --text-h3--font-weight: 600;
+  --text-h3--letter-spacing: 0em;
+  --text-body: 15px;
+  --text-body--line-height: 22px;
+  --text-body--font-weight: 400;
+  --text-body--letter-spacing: 0em;
+  --text-body-sm: 13px;
+  --text-body-sm--line-height: 18px;
+  --text-body-sm--font-weight: 400;
+  --text-body-sm--letter-spacing: 0em;
+  --text-label: 14px;
+  --text-label--line-height: 20px;
+  --text-label--font-weight: 600;
+  --text-label--letter-spacing: 0em;
+  --text-caption: 12px;
+  --text-caption--line-height: 16px;
+  --text-caption--font-weight: 500;
+  --text-caption--letter-spacing: 0.01em;
+
+  /* Отступы: p-1 = 4px, p-4 = 16px — шкала space в tokens.json. */
+  --spacing: 4px;
+
+  --radius-none: 0px;
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 20px;
+  --radius-full: 9999px;
+
+  --shadow-sm: 0px 1px 2px 0px #0000000f;
+  --shadow-md: 0px 4px 12px 0px #0000001a;
+  --shadow-lg: 0px 12px 32px 0px #00000029;
+
+  --size-tap-target-min: 44px;
+  --size-control-mobile: 48px;
+  --size-control-web: 40px;
+  --size-control-web-sm: 32px;
+  --size-bottom-nav: 64px;
+  --size-icon-sm: 16px;
+  --size-icon-md: 20px;
+  --size-icon-lg: 24px;
+
+  --duration-fast: 120ms;
+  --duration-normal: 200ms;
+  --duration-slow: 320ms;
+}
+
+/* Семантические цвета: bg-surface, text-fg, border-border-strong, bg-status-red-bg, … */
+@theme inline {
+  --color-canvas: var(--ev-canvas);
+  --color-surface: var(--ev-surface);
+  --color-surface-subtle: var(--ev-surface-subtle);
+  --color-fg: var(--ev-fg);
+  --color-fg-muted: var(--ev-fg-muted);
+  --color-fg-disabled: var(--ev-fg-disabled);
+  --color-border: var(--ev-border);
+  --color-border-strong: var(--ev-border-strong);
+  --color-primary: var(--ev-primary);
+  --color-primary-hover: var(--ev-primary-hover);
+  --color-on-primary: var(--ev-on-primary);
+  --color-primary-text: var(--ev-primary-text);
+  --color-focus-ring: var(--ev-focus-ring);
+  --color-danger: var(--ev-danger);
+  --color-danger-hover: var(--ev-danger-hover);
+  --color-on-danger: var(--ev-on-danger);
+  --color-danger-text: var(--ev-danger-text);
+  --color-info-text: var(--ev-info-text);
+  --color-status-green-bg: var(--ev-status-green-bg);
+  --color-status-green-fg: var(--ev-status-green-fg);
+  --color-status-green-solid: var(--ev-status-green-solid);
+  --color-status-yellow-bg: var(--ev-status-yellow-bg);
+  --color-status-yellow-fg: var(--ev-status-yellow-fg);
+  --color-status-yellow-solid: var(--ev-status-yellow-solid);
+  --color-status-red-bg: var(--ev-status-red-bg);
+  --color-status-red-fg: var(--ev-status-red-fg);
+  --color-status-red-solid: var(--ev-status-red-solid);
+  --color-status-unknown-bg: var(--ev-status-unknown-bg);
+  --color-status-unknown-fg: var(--ev-status-unknown-fg);
+  --color-status-unknown-solid: var(--ev-status-unknown-solid);
+}
+
+:root,
+[data-theme="light"] {
+  color-scheme: light;
+  --ev-canvas: #fafafa;
+  --ev-surface: #ffffff;
+  --ev-surface-subtle: #f4f4f5;
+  --ev-fg: #171717;
+  --ev-fg-muted: #52525b;
+  --ev-fg-disabled: #a1a1aa;
+  --ev-border: #e4e4e7;
+  --ev-border-strong: #71717a;
+  --ev-primary: #f9ce12;
+  --ev-primary-hover: #e6bc00;
+  --ev-on-primary: #171717;
+  --ev-primary-text: #7a5c00;
+  --ev-focus-ring: #171717;
+  --ev-danger: #b91c1c;
+  --ev-danger-hover: #991b1b;
+  --ev-on-danger: #ffffff;
+  --ev-danger-text: #b91c1c;
+  --ev-info-text: #004f91;
+  --ev-status-green-bg: #dcfce7;
+  --ev-status-green-fg: #166534;
+  --ev-status-green-solid: #15803d;
+  --ev-status-yellow-bg: #fef3c7;
+  --ev-status-yellow-fg: #92400e;
+  --ev-status-yellow-solid: #b86e00;
+  --ev-status-red-bg: #fee2e2;
+  --ev-status-red-fg: #991b1b;
+  --ev-status-red-solid: #dc2626;
+  --ev-status-unknown-bg: #f4f4f5;
+  --ev-status-unknown-fg: #3f3f46;
+  --ev-status-unknown-solid: #71717a;
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+  --ev-canvas: #0f0f10;
+  --ev-surface: #18181b;
+  --ev-surface-subtle: #27272a;
+  --ev-fg: #f4f4f5;
+  --ev-fg-muted: #a1a1aa;
+  --ev-fg-disabled: #52525b;
+  --ev-border: #3f3f46;
+  --ev-border-strong: #71717a;
+  --ev-primary: #f9ce12;
+  --ev-primary-hover: #ffd83d;
+  --ev-on-primary: #171717;
+  --ev-primary-text: #f9ce12;
+  --ev-focus-ring: #f9ce12;
+  --ev-danger: #f87171;
+  --ev-danger-hover: #fca5a5;
+  --ev-on-danger: #171717;
+  --ev-danger-text: #f87171;
+  --ev-info-text: #60a5fa;
+  --ev-status-green-bg: #052e16;
+  --ev-status-green-fg: #86efac;
+  --ev-status-green-solid: #22c55e;
+  --ev-status-yellow-bg: #451a03;
+  --ev-status-yellow-fg: #fcd34d;
+  --ev-status-yellow-solid: #f59e0b;
+  --ev-status-red-bg: #450a0a;
+  --ev-status-red-fg: #fca5a5;
+  --ev-status-red-solid: #ef4444;
+  --ev-status-unknown-bg: #27272a;
+  --ev-status-unknown-fg: #d4d4d8;
+  --ev-status-unknown-solid: #a1a1aa;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    color-scheme: dark;
+    --ev-canvas: #0f0f10;
+    --ev-surface: #18181b;
+    --ev-surface-subtle: #27272a;
+    --ev-fg: #f4f4f5;
+    --ev-fg-muted: #a1a1aa;
+    --ev-fg-disabled: #52525b;
+    --ev-border: #3f3f46;
+    --ev-border-strong: #71717a;
+    --ev-primary: #f9ce12;
+    --ev-primary-hover: #ffd83d;
+    --ev-on-primary: #171717;
+    --ev-primary-text: #f9ce12;
+    --ev-focus-ring: #f9ce12;
+    --ev-danger: #f87171;
+    --ev-danger-hover: #fca5a5;
+    --ev-on-danger: #171717;
+    --ev-danger-text: #f87171;
+    --ev-info-text: #60a5fa;
+    --ev-status-green-bg: #052e16;
+    --ev-status-green-fg: #86efac;
+    --ev-status-green-solid: #22c55e;
+    --ev-status-yellow-bg: #451a03;
+    --ev-status-yellow-fg: #fcd34d;
+    --ev-status-yellow-solid: #f59e0b;
+    --ev-status-red-bg: #450a0a;
+    --ev-status-red-fg: #fca5a5;
+    --ev-status-red-solid: #ef4444;
+    --ev-status-unknown-bg: #27272a;
+    --ev-status-unknown-fg: #d4d4d8;
+    --ev-status-unknown-solid: #a1a1aa;
+  }
+}
