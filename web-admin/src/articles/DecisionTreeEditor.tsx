@@ -10,7 +10,7 @@ import {
   LoadingState,
   TextArea,
   TextField,
-  useAsync,
+  type AsyncState,
   type DecisionTreeNode,
   type DecisionTreeNodeCreateRequest,
   type DecisionTreeValidationResult,
@@ -26,14 +26,21 @@ const PROBLEM_LABELS: Record<NonNullable<DecisionTreeValidationResult['issues'][
 
 type Option = { label: string; next: string }
 
-export function DecisionTreeEditor({ articleId }: { articleId: number }) {
+export function DecisionTreeEditor({
+  articleId,
+  nodes,
+  onChanged,
+}: {
+  articleId: number
+  /** Шаги грузит редактор статьи: их число — на вкладке «Дерево решений · N шагов». */
+  nodes: AsyncState<DecisionTreeNode[]>
+  onChanged: () => void
+}) {
   const { repo } = useAdmin()
-  const [version, setVersion] = useState(0)
   const refresh = () => {
-    setVersion((v) => v + 1)
+    onChanged()
     setResult(null)
   }
-  const nodes = useAsync(() => repo.listDecisionTreeNodes(articleId), [repo, articleId, version])
   const [editing, setEditing] = useState<number | 'new' | null>(null)
   const [result, setResult] = useState<DecisionTreeValidationResult | null>(null)
   const [error, setError] = useState<unknown>(null)
@@ -63,9 +70,15 @@ export function DecisionTreeEditor({ articleId }: { articleId: number }) {
   return (
     <section aria-labelledby="tree-title" className="grid gap-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 id="tree-title" className="text-h3">
-          Дерево решений
-        </h2>
+        <div className="grid gap-1">
+          <h2 id="tree-title" className="text-h3">
+            Дерево решений
+          </h2>
+          <p className="text-body-sm text-fg-muted">
+            Вопросы и варианты ответа, которые клиент проходит в приложении («Поддержка» → «Неполадки»). Шаг-эскалация
+            предлагает клиенту создать обращение.
+          </p>
+        </div>
         <span className="flex gap-2">
           <Button variant="secondary" size="sm" onClick={validate}>
             Проверить дерево
