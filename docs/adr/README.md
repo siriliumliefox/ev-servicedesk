@@ -12,3 +12,4 @@
 | [0006](0006-mileage-correction-updated-at-pd-consent.md) | Корректировка пробега, updated_at в БД, история согласий ПД |
 | [0007](0007-api-contract-v1-freeze.md) | Контракт API v1: заморозка, правила и проверки |
 | [0008](0008-ci-gate-environments-staging-server.md) | CI-гейт, защита веток, окружения local → staging → production, staging-сервер — глава 26 |
+| [0009](0009-aggregate-status-thresholds.md) | Алгоритм «светофор»: глобальные пороги, худший из двух интервалов, точные границы |
