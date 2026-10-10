@@ -145,6 +145,27 @@ ThemeData evTheme(Brightness brightness) {
         borderRadius: BorderRadius.vertical(top: Radius.circular(EvRadius.xl)),
       ),
     ),
+    // Выбор категории/фильтра (глава 7): выбранный — брендовая заливка с тёмным текстом, как индикатор навигации.
+    chipTheme: ChipThemeData(
+      backgroundColor: c.surface,
+      selectedColor: c.primary,
+      checkmarkColor: c.onPrimary,
+      side: WidgetStateBorderSide.resolveWith(
+        (states) => BorderSide(color: states.contains(WidgetState.selected) ? c.primary : c.borderStrong),
+      ),
+      labelStyle: EvTypeMobile.bodySm.copyWith(color: c.fg, fontWeight: FontWeight.w600),
+      secondaryLabelStyle: EvTypeMobile.bodySm.copyWith(color: c.onPrimary, fontWeight: FontWeight.w600),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(EvRadius.md))),
+    ),
+    // Вкладки: жёлтый на белом — 1.5:1, поэтому текст fg, подчёркивание primary-text (≥ 3:1 в обеих темах).
+    tabBarTheme: TabBarThemeData(
+      labelColor: c.fg,
+      unselectedLabelColor: c.fgMuted,
+      indicatorColor: c.primaryText,
+      dividerColor: c.border,
+      labelStyle: EvTypeMobile.label,
+      unselectedLabelStyle: EvTypeMobile.label.copyWith(fontWeight: FontWeight.w500),
+    ),
     dividerTheme: DividerThemeData(color: c.border, space: EvSpace.s4, thickness: 1),
     focusColor: c.focusRing.withValues(alpha: 0.12),
   );
