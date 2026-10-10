@@ -13,6 +13,7 @@ import {
   allowedTransitions,
   formatDateTime,
   useAsync,
+  type TicketDetail,
   type TicketMessage,
   type TicketStatus,
 } from '@ev-servicedesk/web-shared'
@@ -182,7 +183,7 @@ export function TicketPanel({
                   rows={3}
                   value={draft}
                   disabled={!isMine}
-                  hint={isMine ? undefined : 'Возьмите тикет в работу, чтобы ответить клиенту'}
+                  hint={replyHint(t, meId)}
                   onChange={(e) => setDraft(e.target.value)}
                 />
                 <div className="flex justify-between gap-2">
@@ -209,6 +210,17 @@ export function TicketPanel({
       )}
     </aside>
   )
+}
+
+/**
+ * Почему ответ клиенту недоступен (U-02, юзабилити-тест R1). «Взять в работу» есть только у свободного
+ * нерешённого тикета, поэтому у чужого и решённого подсказка не зовёт его брать — иначе ведёт в тупик.
+ */
+function replyHint(ticket: TicketDetail, meId: number): string | undefined {
+  if (ticket.assigned_engineer_id === meId) return undefined
+  if (ticket.status === 'resolved') return 'Тикет решён — ответ недоступен'
+  if (ticket.assigned_engineer_id == null) return 'Возьмите тикет в работу, чтобы ответить клиенту'
+  return `Тикет ведёт ${assigneeLabel(ticket.assigned_engineer_id, meId)} — ответить может только он`
 }
 
 function Message({ message, meId }: { message: TicketMessage; meId: number }) {
