@@ -36,3 +36,4 @@ mobile/.packages
 
 # Logs
 *.log
+# ci-gate test
