@@ -5,17 +5,11 @@ name: mobile-ci
 # Реальная нативная сборка (`flutter build ios`/`flutter build macos`) появится
 # в Главах 18–20 вместе с папками ios/macos — тогда этому job понадобится
 # отдельный шаг на macos-latest (дороже по CI-минутам, ~10x множитель GitHub).
-# Этот workflow НЕ была прогнан вживую (Flutter SDK недоступен в среде
-# подготовки проекта) — синтаксис соответствует официальному
-# subosito/flutter-action, но реальный зелёный статус проверите сами.
 
+# Переиспользуемый workflow: вызывается из ci.yml (job `mobile`), который решает,
+# нужен ли он для данного PR/push. Сам по событиям не запускается.
 on:
-  pull_request:
-    branches: [develop, main]
-    paths: ["mobile/**", ".github/workflows/mobile-ci.yml"]
-  push:
-    branches: [develop]
-    paths: ["mobile/**"]
+  workflow_call:
 
 jobs:
   mobile-ci:

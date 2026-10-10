@@ -49,6 +49,7 @@ scripts/check_api_breaking.sh           # ломающие изменения Op
 - Начало: прочитать главу в `MASTER_CHECKLIST.md`, `PROJECT_STATUS.md`, ADR; проверить Git; показать план и DoD.
 - Итерации: изменение → тест → проверки → diff → дальше.
 - `DONE` только при выполненном оригинальном DoD, зелёном CI и смерженном PR. Иначе `PARTIAL`/`BLOCKED`.
+- `main`/`develop` защищены (ADR 0008): только PR, обязательная проверка `ci-gate` (`ci.yml`), прямой push отклоняется — в том числе для админа.
 - Статусы проверок: `PASS`, `FAIL`, `NOT RUN`, `BLOCKED`.
 
 ## Архитектура
@@ -62,7 +63,7 @@ scripts/check_api_breaking.sh           # ломающие изменения Op
 - Не коммитить секреты, персональные данные, экспорт Claude (`light_metadata` особенно).
 - Перед commit: `git diff --cached` + поиск секретов. Pre-commit hook `.githooks/pre-commit` запускает
   `gitleaks git --pre-commit --staged`; без gitleaks коммит блокируется. Подключение (один раз на клон):
-  `brew install gitleaks && git config core.hooksPath .githooks`. В CI — `docs-ci` (gitleaks-action).
+  `brew install gitleaks && git config core.hooksPath .githooks`. В CI — job `secret-scan` в `ci.yml` (gitleaks-action, каждый PR).
   `--no-verify` не использовать.
 
 ## Известные ловушки

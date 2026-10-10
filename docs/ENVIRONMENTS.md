@@ -1,87 +1,86 @@
 # Окружения и секреты — EV-ServiceDesk
 
-Глава 4, шаг 3. Четыре уровня, каждый — свои секреты, ничего не переиспользуется между ними.
+Глава 4, [ADR 0008](adr/0008-ci-gate-environments-staging-server.md). Модель: **local → staging → production**.
+Секреты между окружениями не переиспользуются.
 
 ## Модель
 
 | Окружение | Где живёт | Ветка деплоя | Секреты | Защита |
 |---|---|---|---|---|
-| **local** | MacBook Pro M5 Pro разработчика | любая (не деплоится) | `.env` (gitignored), local-safe заглушки из `.env.example` | нет — это ваша машина |
-| **dev** | GitHub Environment `dev` | `develop` (авто) | GitHub Environment Secrets, уникальные | нет — быстрая итерация |
-| **staging** | GitHub Environment `staging` | `develop` (авто, Глава 4 шаг 5) | GitHub Environment Secrets, уникальные | ветка ограничена `develop` |
-| **production** | GitHub Environment `production` | `main` (вручную/по тегу релиза) | GitHub Environment Secrets, уникальные | ветка ограничена `main` + **required reviewer** перед деплоем |
+| **local** | машина разработчика | любая (не деплоится) | `.env` (gitignored), значения-заглушки из `.env.example` | — |
+| **staging** | GitHub Environment `staging`; сервер — Глава 26 | только `develop` (авто, `cd-staging.yml`) | Environment Secrets, уникальные | деплой только из `develop`, обход админом выключен |
+| **production** | GitHub Environment `production`; сервер — Глава 26 | только `main` | Environment Secrets, уникальные | деплой только из `main` + **required reviewer** (владелец), обход админом выключен |
+
+Окружения `dev` нет: при одном разработчике оно дублировало бы staging (та же ветка `develop`),
+не давая отдельной проверки (ADR 0008).
+
+Состояние (проверено API GitHub, 2026-10-10): `staging` — политика ветки `develop`, секрет `JWT_SECRET`;
+`production` — политика ветки `main`, reviewer `siriliumliefox`, секрет `JWT_SECRET`.
 
 ## Почему GitHub Environments, а не Vault/AWS Secrets Manager
 
-На этом этапе (Глава 4) реальной облачной инфраструктуры ещё нет — она
-появится в Главе 26. GitHub Environments — единственное, что уже доступно
-бесплатно вместе с репозиторием, и покрывает ровно то, что нужно сейчас:
-разделённые секреты + ограничение по ветке + reviewer-гейт на прод. Когда
-Глава 26 поднимет реальную инфраструктуру, физическое хранение секретов
-может переехать в облачный secrets manager — но модель разделения
-(dev/staging/production никогда не шарят значения) не изменится.
+Облачной инфраструктуры пока нет (Глава 26). GitHub Environments бесплатны вместе с репозиторием и
+покрывают нужное сейчас: разделённые секреты, ограничение по ветке, reviewer перед production. Когда
+появится инфраструктура, хранение секретов может переехать в облачный secrets manager — модель
+разделения не изменится.
 
-## Важное отличие от код-ревью (Глава 4, шаг 2)
+## Reviewer на production при команде из одного человека
 
-PR-ревью на GitHub не даёт approve собственного PR — отсюда компромисс с
-`required_approving_review_count: 0` в `CONTRIBUTING.md`. Environment
-protection rules — **другой механизм**, self-approve там разрешён. Поэтому
-`scripts/setup-github-environments.sh` назначает вас же required reviewer
-на `production`: перед каждым прод-деплоем придётся явно нажать «Approve»
-в интерфейсе GitHub Actions — настоящая пауза для проверки, а не фикция,
-даже при команде из одного человека.
+PR-ревью GitHub не позволяет одобрить собственный PR — поэтому обязательного approve в branch protection
+нет (см. `CONTRIBUTING.md`). Environment protection — другой механизм: одобрить собственный деплой можно
+(`prevent_self_review: false`), поэтому владелец назначен reviewer'ом `production`. Перед каждым
+прод-деплоем нужно явно нажать «Approve» в GitHub Actions.
 
 ## Переменные окружения
 
-Полный список и комментарии — `.env.example` в корне репозитория. Кратко:
+Полный список — `.env.example`. Кратко:
 
 | Переменная | Отличается по окружениям? | Источник значения |
 |---|---|---|
-| `DATABASE_URL` | Да, всегда | своя БД на каждое окружение (даже если физически один сервер — разные `POSTGRES_DB`) |
-| `REDIS_URL` | Да, всегда | аналогично |
-| `JWT_SECRET` | Да, всегда | `scripts/generate-secret.sh`, никогда не переиспользовать |
-| `SMS_PROVIDER_API_KEY` | Да (когда провайдер выбран) | пока пусто — отдельное бизнес-решение, не техническое |
-| `S3_*` | Да | свой bucket/credentials на окружение |
-| `FCM_SERVICE_ACCOUNT_JSON` | Обычно один Firebase-проект с разными app id на dev/prod — уточнить в Главе 15 |
+| `DATABASE_URL` | Да | своя БД на окружение — Глава 26 |
+| `REDIS_URL` | Да | аналогично — Глава 26 |
+| `JWT_SECRET` | Да | `scripts/set-environment-secrets.sh` (задан для staging и production) |
+| `SMS_PROVIDER_API_KEY` | Да (когда провайдер выбран) | пока пусто — бизнес-решение |
+| `S3_*` | Да | свой bucket/credentials на окружение — Глава 26 |
+| `FCM_SERVICE_ACCOUNT_JSON` | уточнить в Главе 15 | обычно один Firebase-проект с разными app id |
 
-## Первоначальная настройка (когда репозиторий появится на GitHub)
+## Настройка (идемпотентно, нужен `gh auth login` с правами admin)
 
 ```bash
-# 1. Ветки и защита (Глава 4, шаг 2 — если ещё не сделано)
-export GITHUB_TOKEN=...
-export GITHUB_REPO=owner/ev-servicedesk
-./scripts/setup-branch-protection.sh
-
-# 2. Окружения + reviewer на прод
-export PROD_APPROVER=<ваш GitHub-логин>
-./scripts/setup-github-environments.sh
-
-# 3. Секреты — по одному на переменную, значения РАЗНЫЕ на каждое окружение
-for env in dev staging production; do
-  gh secret set JWT_SECRET --env "$env"        # вставит вывод generate-secret.sh
-  gh secret set DATABASE_URL --env "$env"
-  gh secret set REDIS_URL --env "$env"
-done
+./scripts/setup-branch-protection.sh     # main/develop: PR, ci-gate, линейная история, на админа тоже
+./scripts/setup-github-environments.sh   # staging ← develop; production ← main + reviewer; удаляет dev
+./scripts/set-environment-secrets.sh     # генерирует и записывает JWT_SECRET; повторный запуск = ротация
 ```
 
-## CD на staging (Глава 4, шаг 5)
+`set-environment-secrets.sh` не печатает значения: `openssl rand` → stdin `gh secret set`. В переменные
+репозитория пишется только отпечаток `JWT_SECRET_FP_<ENV>` (первые 16 hex SHA-256) для проверки изоляции.
 
-`workflows/cd-staging.yml` запускается при мерже в `develop`:
-1. Собирает и публикует backend-образ в `ghcr.io` (тег — и `staging`, и `staging-<sha>` для отката) — **реально рабочий шаг**.
-2. Собирает статику `web-engineer`/`web-admin`, кладёт как build-артефакт — **реально рабочий шаг**.
-3. «Выкатывает» на staging-сервер — **заглушка**: сервера ещё нет (Глава 26). Когда появится, поменяется только этот job, первые два трогать не придётся.
+### Проверка изоляции секретов
 
-### Откат
-`scripts/rollback-staging.sh <git-sha>` — перезапускает деплой уже
-собранного образа по SHA, ничего не пересобирая. Быстрее отката через git
-revert + новый деплой. Реально сработает только после Главы 26 (нужен
-настоящий шаг деплоя, не заглушка) — сам механизм (`workflow_dispatch` +
-переиспользование готового образа по тегу) уже готов и не потребует правок.
+Workflow `secrets-isolation.yml` (ручной запуск):
+- из `develop`: job без окружения не видит `JWT_SECRET`; политики веток и reviewer заданы; отпечатки
+  окружений различаются; job в `staging` видит секрет со своим отпечатком и не видит секрет `production`;
+- из `main` (после одобрения): то же для `production`.
 
+```bash
+gh workflow run secrets-isolation.yml --ref develop
+```
 
-Ни один из скриптов в этой сессии не выполнялся против настоящего GitHub —
-нет ни репозитория, ни токена в этой песочнице. Синтаксис обоих скриптов
-проверен (`bash -n`), логика — на API-документации GitHub Environments.
-**Реальная проверка изоляции секретов dev/prod возможна только после того,
-как вы прогоните эти скрипты на своём репозитории** — это тот пункт DoD,
-который я не могу закрыть за вас, только подготовить.
+## CD на staging
+
+`cd-staging.yml` при push в `develop` (изменения в `backend/`, `web-*/`):
+1. Собирает backend-образ и публикует в `ghcr.io/<repo>/backend` с тегами `staging-<sha>` и `staging`.
+2. Собирает статику `web-engineer`/`web-admin` (build-артефакты, хранятся 14 дней).
+3. «Выкатывает» на staging — **заглушка** до Главы 26: сервера нет (ADR 0008). Меняется только этот job.
+
+### Откат без пересборки
+
+```bash
+./scripts/rollback-staging.sh <sha>
+```
+
+Запускает `cd-staging.yml` из `develop` с `git_sha`: сборка пропускается, существующий
+`backend:staging-<sha>` перетегируется в `backend:staging` (`docker buildx imagetools create`), затем digest
+сверяется — в логе `PASS`/`FAIL`. Откатиться можно на коммит, который уже собирался `cd-staging.yml`.
+Пока сервера нет, «откат» меняет то, на что указывает тег `staging`; после Главы 26 сервер будет
+подтягивать именно этот тег.

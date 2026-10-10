@@ -1,0 +1,132 @@
+name: ci
+
+# Единая точка входа CI (Глава 4, ADR 0008).
+# Запускается на КАЖДОМ PR без path-фильтров — иначе обязательная проверка
+# «висела» бы в ожидании на PR, который не затронул ни один сервис. Какие
+# проверки нужны, решает job `changes`; отдельные workflow (*-ci.yml) —
+# переиспользуемые (workflow_call) и сами не запускаются.
+# В branch protection `main`/`develop` обязательна только проверка `ci-gate`.
+
+on:
+  pull_request:
+  push:
+    branches: [develop, main]
+  workflow_dispatch:   # ручной прогон — все проверки, без фильтра
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.backend == 'true' }}
+      web: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.web == 'true' }}
+      mobile: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.mobile == 'true' }}
+      docs: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.docs == 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # PR — изменения относительно базовой ветки; push — относительно
+      # предыдущего коммита этой же ветки.
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          base: ${{ github.ref_name }}
+          filters: |
+            backend:
+              - "backend/**"
+              - "docs/EV_ServiceDesk_Glava2_DDL.sql"   # test_ddl_export сверяет с миграциями
+              - "docs/openapi.yaml"                    # tests/contract: OpenAPI ↔ ORM ↔ RBAC
+              - "docs/requirements/RBAC_MATRIX.md"
+              - ".github/workflows/backend-ci.yml"
+              - ".github/workflows/ci.yml"
+            web:
+              - "web-engineer/**"
+              - "web-admin/**"
+              - "web-shared/**"
+              - "package.json"
+              - "package-lock.json"
+              - ".github/workflows/web-ci.yml"
+              - ".github/workflows/ci.yml"
+            mobile:
+              - "mobile/**"
+              - ".github/workflows/mobile-ci.yml"
+              - ".github/workflows/ci.yml"
+            docs:
+              - "docs/**"
+              - "scripts/sync_swagger_html.py"
+              - "scripts/mock_smoke.mts"
+              - "scripts/check_api_breaking.sh"
+              - ".spectral.yaml"
+              - "web-shared/src/api/**"
+              - "package.json"
+              - "package-lock.json"
+              - ".github/workflows/docs-ci.yml"
+              - ".github/workflows/ci.yml"
+
+  backend:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    uses: ./.github/workflows/backend-ci.yml
+
+  web:
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
+    uses: ./.github/workflows/web-ci.yml
+
+  mobile:
+    needs: changes
+    if: needs.changes.outputs.mobile == 'true'
+    uses: ./.github/workflows/mobile-ci.yml
+
+  docs:
+    needs: changes
+    if: needs.changes.outputs.docs == 'true'
+    uses: ./.github/workflows/docs-ci.yml
+
+  # Поиск секретов — на каждом PR, независимо от изменённых путей.
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Secret scan (gitleaks)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Единственная обязательная проверка. Зелёная, только если `changes` и
+  # `secret-scan` успешны, а каждая проверка сервиса — успешна или не нужна
+  # (skipped). Падение, отмена или пропуск из-за упавшей зависимости — красный.
+  ci-gate:
+    needs: [changes, backend, web, mobile, docs, secret-scan]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Результаты проверок
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+
+          needs = json.loads(os.environ["NEEDS"])
+          must_run = {"changes", "secret-scan"}
+          failed = False
+          for name, job in sorted(needs.items()):
+              result = job["result"]
+              ok = result == "success" or (result == "skipped" and name not in must_run)
+              print(f"{'PASS' if ok else 'FAIL'}  {name}: {result}")
+              failed |= not ok
+          sys.exit(1 if failed else 0)
+          PY
