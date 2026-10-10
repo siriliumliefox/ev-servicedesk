@@ -30,6 +30,9 @@ class _CodeScreenState extends State<CodeScreen> {
   final _controller = TextEditingController();
   bool _consent = false;
   String? _error;
+
+  /// Ошибка согласия ПД — у галочки, а не у поля кода (глава 9, раунд 1).
+  String? _consentError;
   bool _busy = false;
   late int _resendIn = widget.ttlSeconds;
   Timer? _timer;
@@ -69,19 +72,15 @@ class _CodeScreenState extends State<CodeScreen> {
   }
 
   Future<void> _submit() async {
-    if (_controller.text.length != 4) {
-      setState(() => _error = 'Введите 4 цифры из SMS');
-      return;
-    }
-    if (!_consent) {
-      setState(() => _error = 'Чтобы продолжить, примите согласие на обработку персональных данных');
-      return;
-    }
-    final app = AppScope.read(context);
+    final codeError = _controller.text.length != 4 ? 'Введите 4 цифры из SMS' : null;
+    final consentError = _consent ? null : 'Чтобы продолжить, примите согласие на обработку персональных данных';
     setState(() {
-      _error = null;
-      _busy = true;
+      _error = codeError;
+      _consentError = consentError;
     });
+    if (codeError != null || consentError != null) return;
+    final app = AppScope.read(context);
+    setState(() => _busy = true);
     try {
       await app.repository.verifyCode(widget.phone, _controller.text, pdPolicyVersion: pdPolicyVersion);
       final vehicles = await app.repository.vehicles();
@@ -95,7 +94,13 @@ class _CodeScreenState extends State<CodeScreen> {
         await app.signIn();
       }
     } on ApiException catch (e) {
-      setState(() => _error = e.message);
+      setState(() {
+        if (e.code == 'PD_CONSENT_REQUIRED') {
+          _consentError = e.message;
+        } else {
+          _error = e.message;
+        }
+      });
     } on Exception catch (e) {
       if (mounted) showErrorSnack(context, e);
     } finally {
@@ -161,22 +166,34 @@ class _CodeScreenState extends State<CodeScreen> {
                   : TextButton(onPressed: _resend, child: const Text('Отправить код повторно')),
             ),
             const SizedBox(height: EvSpace.s4),
-            CheckboxListTile(
-              key: const Key('consent'),
-              value: _consent,
-              onChanged: (v) => setState(() => _consent = v ?? false),
-              controlAffinity: ListTileControlAffinity.leading,
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Согласен(на) на обработку персональных данных'),
-              subtitle: Align(
-                alignment: Alignment.centerLeft,
-                child: TextButton(
-                  onPressed: _showPolicy,
-                  style: TextButton.styleFrom(padding: EdgeInsets.zero),
-                  child: const Text('Политика обработки ПД'),
+            // Ошибка согласия — ещё и подсказкой (hint) галочки: VoiceOver зачитает её, когда фокус на галочке.
+            // MergeSemantics — чтобы подсказка попала в узел галочки, а не в отдельный узел элемента списка.
+            MergeSemantics(
+              child: Semantics(
+                hint: _consentError,
+                child: CheckboxListTile(
+                  key: const Key('consent'),
+                  value: _consent,
+                  isError: _consentError != null,
+                  onChanged: (v) => setState(() {
+                    _consent = v ?? false;
+                    if (_consent) _consentError = null;
+                  }),
+                  controlAffinity: ListTileControlAffinity.leading,
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Согласен(на) на обработку персональных данных'),
+                  subtitle: Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton(
+                      onPressed: _showPolicy,
+                      style: TextButton.styleFrom(padding: EdgeInsets.zero),
+                      child: const Text('Политика обработки ПД'),
+                    ),
+                  ),
                 ),
               ),
             ),
+            if (_consentError != null) FieldError(_consentError!, key: const Key('consent-error')),
             const SizedBox(height: EvSpace.s6),
             FilledButton(
               onPressed: _busy ? null : _submit,

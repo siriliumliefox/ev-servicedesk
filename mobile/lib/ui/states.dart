@@ -132,6 +132,27 @@ class _AsyncViewState<T> extends State<AsyncView<T>> {
   }
 }
 
+/// Ошибка у поля без InputDecoration (галочка, группа чипов): под полем, цветом danger-text (глава 9).
+/// Живая область (liveRegion) — VoiceOver на iOS и macOS зачитывает ошибку, когда она появляется;
+/// SemanticsRole.alert эмбеддеры iOS/macOS не используют. Связь с полем — подсказкой (hint) у самого поля.
+class FieldError extends StatelessWidget {
+  const FieldError(this.message, {super.key});
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      container: true,
+      liveRegion: true,
+      child: Padding(
+        padding: const EdgeInsets.only(top: EvSpace.s1),
+        child: Text(message, style: EvTypeMobile.caption.copyWith(color: context.evColors.dangerText)),
+      ),
+    );
+  }
+}
+
 /// Сообщение об ошибке действия (отправка формы и т.п.).
 void showErrorSnack(BuildContext context, Object error) {
   final text = error is OfflineException ? 'Нет подключения к интернету. Попробуйте позже' : error.toString();

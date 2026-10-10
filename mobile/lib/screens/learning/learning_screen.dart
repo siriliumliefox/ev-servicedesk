@@ -1,5 +1,6 @@
 // «Обучение»: инструкции для модели выбранного авто (GET /knowledge-articles?article_type=guide).
-// Правило 3-х кликов: обучающий материал — 2 тапа («Обучение» → статья).
+// Правило 3-х кликов: обучающий материал — 2 тапа («Обучение» → статья); для другого авто аккаунта — 4
+// («Обучение» → переключатель → авто → статья): переключатель тот же, что на «Авто» (U-06, глава 9).
 import 'package:flutter/material.dart';
 
 import '../../app/app_state.dart';
@@ -7,6 +8,7 @@ import '../../data/models.dart';
 import '../../theme/app_theme.dart';
 import '../../ui/demo_panel.dart';
 import '../../ui/states.dart';
+import '../car/vehicle_switcher.dart';
 
 class LearningScreen extends StatelessWidget {
   const LearningScreen({super.key});
@@ -15,10 +17,21 @@ class LearningScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final app = AppScope.of(context);
     final vehicle = app.vehicle;
+    // Несколько авто — статьи выбранного, сменить можно здесь же; одно авто — модель в заголовке.
+    final switchable = vehicle != null && app.vehicles.length > 1;
     return Scaffold(
       appBar: AppBar(
-        title: Text(vehicle == null ? 'Обучение' : 'Обучение · ${vehicle.vehicleModel.title}'),
+        title: Text(vehicle == null || switchable ? 'Обучение' : 'Обучение · ${vehicle.vehicleModel.title}'),
         actions: const [DemoButton()],
+        bottom: switchable
+            ? PreferredSize(
+                preferredSize: const Size.fromHeight(EvSize.controlMobile + EvSpace.s2),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(EvSpace.s2, 0, EvSpace.s2, EvSpace.s2),
+                  child: Align(alignment: Alignment.centerLeft, child: VehicleSwitcher(vehicle: vehicle)),
+                ),
+              )
+            : null,
       ),
       body: vehicle == null
           ? const EmptyState(

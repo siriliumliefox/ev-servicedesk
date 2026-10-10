@@ -99,6 +99,9 @@ class _PhoneScreenState extends State<PhoneScreen> {
                 hintText: '29 123 45 67',
                 errorText: _error,
                 helperText: 'Пришлём SMS с кодом для входа или регистрации',
+                // Подсказка и ошибка переносятся, а не обрезаются многоточием на узких экранах (глава 9).
+                helperMaxLines: 3,
+                errorMaxLines: 3,
               ),
             ),
             const SizedBox(height: EvSpace.s6),

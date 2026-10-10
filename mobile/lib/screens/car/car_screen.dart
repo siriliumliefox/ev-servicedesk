@@ -9,21 +9,9 @@ import '../../ui/status_badge.dart';
 import '../../ui/demo_panel.dart';
 import '../../ui/format.dart';
 import '../../ui/states.dart';
-import '../onboarding/add_vehicle_screen.dart';
 import 'aggregate_scheme.dart';
 import 'aggregate_sheet.dart';
-
-void openAddVehicle(BuildContext context) {
-  final app = AppScope.read(context);
-  Navigator.of(context).push(MaterialPageRoute<void>(
-    builder: (context) => AddVehicleScreen(
-      onAdded: (v) {
-        app.vehicleAdded(v);
-        Navigator.of(context).pop();
-      },
-    ),
-  ));
-}
+import 'vehicle_switcher.dart';
 
 class CarScreen extends StatelessWidget {
   const CarScreen({super.key});
@@ -103,6 +91,31 @@ class CarScreen extends StatelessWidget {
   }
 }
 
+/// Сводка над схемой (U-01): «Нет данных» — не норма. Нет данных ни по одному агрегату (новое авто без истории ТО) —
+/// отдельная подсказка; по части — счётчик рядом с остальными; «Все агрегаты в норме» — только если все «Заменено».
+/// Пустой список (у модели нет агрегатов в регламенте) — тоже «нет данных», а не «в норме».
+(String headline, String? hint) aggregateSummary(List<AggregateStatusItem> statuses) {
+  int count(AggregateStatus status) => statuses.where((s) => s.status == status).length;
+  final unknown = count(AggregateStatus.unknown);
+  if (unknown == statuses.length) {
+    return (
+      statuses.isEmpty ? 'Нет данных о замене' : 'Нет данных о замене: $unknown',
+      'Статусы появятся после ТО в сервисе',
+    );
+  }
+  final red = count(AggregateStatus.red);
+  final yellow = count(AggregateStatus.yellow);
+  final attention = [
+    if (red > 0) 'Требуется замена: $red',
+    if (yellow > 0) 'Скоро менять: $yellow',
+    if (unknown > 0) 'Нет данных: $unknown',
+  ];
+  // Счётчик не разрывается переносом (неразрывные пробелы): строка переносится только между счётчиками.
+  return (attention.isEmpty ? 'Все агрегаты в норме' : attention.map(_noBreak).join(' · '), null);
+}
+
+String _noBreak(String s) => s.replaceAll(' ', '\u00A0');
+
 class _Summary extends StatelessWidget {
   const _Summary({required this.vehicle, required this.statuses});
 
@@ -113,12 +126,7 @@ class _Summary extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = context.evColors;
     final text = Theme.of(context).textTheme;
-    final red = statuses.where((s) => s.status == AggregateStatus.red).length;
-    final yellow = statuses.where((s) => s.status == AggregateStatus.yellow).length;
-    final attention = [
-      if (red > 0) 'Требуется замена: $red',
-      if (yellow > 0) 'Скоро менять: $yellow',
-    ];
+    final (headline, hint) = aggregateSummary(statuses);
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(EvSpace.s4),
@@ -133,106 +141,11 @@ class _Summary extends StatelessWidget {
               style: text.bodyMedium?.copyWith(color: c.fgMuted),
             ),
             const SizedBox(height: EvSpace.s1),
-            Text(
-              attention.isEmpty ? 'Все агрегаты в норме' : attention.join(' · '),
-              style: text.titleMedium,
-            ),
+            Text(headline, key: const Key('summary'), style: text.titleMedium),
+            if (hint != null) Text(hint, style: text.bodyMedium?.copyWith(color: c.fgMuted)),
           ],
         ),
       ),
-    );
-  }
-}
-
-/// Переключатель авто в шапке: модель + VIN (маска) → список авто аккаунта и «Добавить авто».
-class VehicleSwitcher extends StatelessWidget {
-  const VehicleSwitcher({super.key, required this.vehicle});
-
-  final Vehicle vehicle;
-
-  @override
-  Widget build(BuildContext context) {
-    final c = context.evColors;
-    final text = Theme.of(context).textTheme;
-    final count = AppScope.of(context).vehicles.length;
-    return Semantics(
-      button: true,
-      label: 'Автомобиль ${vehicle.vehicleModel.title}, ${count > 1 ? 'всего $count, ' : ''}сменить или добавить',
-      excludeSemantics: true,
-      child: InkWell(
-        key: const Key('vehicle-switcher'),
-        borderRadius: const BorderRadius.all(Radius.circular(EvRadius.md)),
-        onTap: () => _open(context),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(minHeight: EvSize.tapTargetMin),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: EvSpace.s2),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Flexible(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(vehicle.vehicleModel.title, style: text.titleMedium, overflow: TextOverflow.ellipsis),
-                      Text(
-                        count > 1 ? '${vehicle.vinMasked} · авто: $count' : vehicle.vinMasked,
-                        style: text.bodySmall?.copyWith(color: c.fgMuted),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: EvSpace.s1),
-                const Icon(Icons.expand_more),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  void _open(BuildContext context) {
-    showModalBottomSheet<void>(
-      context: context,
-      builder: (sheetContext) {
-        final app = AppScope.of(sheetContext);
-        return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: EvSpace.s4),
-                child: Text('Мои автомобили', style: Theme.of(sheetContext).textTheme.titleLarge),
-              ),
-              const SizedBox(height: EvSpace.s2),
-              for (final v in app.vehicles)
-                ListTile(
-                  leading: const Icon(Icons.directions_car_outlined),
-                  title: Text([v.vehicleModel.title, if (v.vehicleModel.trim != null) v.vehicleModel.trim].join(' · ')),
-                  subtitle: Text('${v.vinMasked} · ${formatKm(v.mileage)}'),
-                  trailing: v.id == vehicle.id ? const Icon(Icons.check) : null,
-                  selected: v.id == vehicle.id,
-                  onTap: () {
-                    app.selectVehicle(v.id);
-                    Navigator.of(sheetContext).pop();
-                  },
-                ),
-              ListTile(
-                leading: const Icon(Icons.add),
-                title: const Text('Добавить авто'),
-                onTap: () {
-                  Navigator.of(sheetContext).pop();
-                  openAddVehicle(context);
-                },
-              ),
-              const SizedBox(height: EvSpace.s2),
-            ],
-          ),
-        );
-      },
     );
   }
 }
