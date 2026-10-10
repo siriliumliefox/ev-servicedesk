@@ -8,6 +8,9 @@
     ".": "./src/index.ts",
     "./theme.css": "./src/theme/theme.css"
   },
+  "scripts": {
+    "test": "vitest run"
+  },
   "peerDependencies": {
     "react": "^19.0.0"
   },

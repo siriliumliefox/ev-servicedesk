@@ -66,7 +66,7 @@ export function StatusIcon({ status, className = "size-4" }: { status: Aggregate
 export function StatusBadge({ status }: { status: AggregateStatusValue }) {
   return (
     <span
-      className={`inline-flex items-center gap-2 rounded-full py-1 pr-3 pl-2 text-label ${COLORS[status]}`}
+      className={`inline-flex items-center gap-2 whitespace-nowrap rounded-full py-1 pr-3 pl-2 text-label ${COLORS[status]}`}
     >
       <StatusIcon status={status} />
       {STATUS_LABELS[status]}

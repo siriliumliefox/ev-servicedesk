@@ -6,7 +6,7 @@
 |---|---|
 | Токены (DTCG) | `design/tokens.json` |
 | Генератор / тесты | `scripts/design_tokens.mts` (`npm run tokens`), `scripts/design_tokens.test.mts` (`npm run test:tokens`, CI `web-ci`) |
-| Веб | `web-shared/src/theme/` (`tokens.css` — генерируется, `theme.css`, `useTheme`), компоненты `StatusBadge`, `Button`, `TextField`, `Card` |
+| Веб | `web-shared/src/theme/` (`tokens.css` — генерируется, `theme.css`, `useTheme`), компоненты `StatusBadge`, `Button`, `TextField`, `Card`; глава 8 — `web-shared/src/ui/` (`Select`, `TextArea`, `Chip`, `Badge`, состояния, панель «Демо»); экраны — `docs/design/WEB_PROTOTYPE.md` |
 | Flutter | `mobile/lib/theme/` (`tokens.g.dart` — генерируется, `app_theme.dart`), `mobile/lib/ui/` (`StatusBadge`, `EvBottomNav`, состояния `states.dart`), тесты `mobile/test/design_system_test.dart`; экраны — `docs/design/MOBILE_PROTOTYPE.md` |
 | Figma | [EV-ServiceDesk Design System](https://www.figma.com/design/mgvOfQ9AizhhPMpBhxA3b5) — файл команды, тариф Starter, не опубликован (см. ниже) |
 
@@ -90,7 +90,10 @@ Sora с сайта ETS AUTO не используется: в нём нет ки
 | StatusBadge | Status: Green/Yellow/Red/Unknown | `StatusBadge`, `StatusIcon` | `StatusBadge` |
 | NavItem / BottomNav | State: Default/Selected; иконка — свойство Icon | — | `EvBottomNav` (`NavigationBar`) |
 | Tabs | — (глава 7) | — | `TabBar` (`TabBarThemeData`): текст `fg`/`fg-muted`, подчёркивание `primary-text` |
-| Chip (выбор/фильтр) | — (глава 7) | — | `ChoiceChip` (`ChipThemeData`): выбранный — заливка `primary`, текст `on-primary` |
+| Chip (выбор/фильтр) | — (глава 7) | `Chip` (глава 8): `aria-pressed`, галочка, счётчик | `ChoiceChip` (`ChipThemeData`): выбранный — заливка `primary`, текст `on-primary` |
+| Select, TextArea | — (глава 8) | `Select` (в т. ч. `inline` для строки фильтров), `TextArea` — как `TextField` | — |
+| Badge (метка) | — (глава 8) | `Badge`: neutral/success/warning/danger на парах `status-*-bg`/`-fg`; SLA — с иконкой формы светофора | — |
+| Состояния | — (глава 8) | `LoadingState`, `EmptyState`, `ErrorState` (+ «Повторить»), `InlineError`; текст ошибки — по коду `ApiError` | `states.dart` |
 
 ## Чек-лист консистентности
 - [x] Все цвета — семантические токены; палитра Tailwind по умолчанию отключена (`--color-*: initial`).

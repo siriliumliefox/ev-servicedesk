@@ -28,8 +28,17 @@ jobs:
         if: matrix.app == 'web-engineer'
         run: npm run test:tokens
 
+      # Слой данных и репозиторий прототипа (Глава 8, ADR 0012). Общий для приложений — один раз на матрицу.
+      - name: Test web-shared
+        if: matrix.app == 'web-engineer'
+        run: npm test --workspace web-shared
+
       - name: Lint
         run: npm run lint --workspace ${{ matrix.app }}
+
+      # Экраны прототипа и подсчёт кликов типовых операций (Vitest + Testing Library, jsdom).
+      - name: Test
+        run: npm test --workspace ${{ matrix.app }}
 
       - name: Build
         run: npm run build --workspace ${{ matrix.app }}
