@@ -44,6 +44,8 @@ jobs:
             backend:
               - "backend/**"
               - "docs/EV_ServiceDesk_Glava2_DDL.sql"   # test_ddl_export сверяет с миграциями
+              - "docs/ERD_EV_ServiceDesk_Glava2.mermaid"  # test_erd_export сверяет с ORM
+              - "docs/specs/**"                        # tests/domain: сценарии и таблицы спецификации
               - "docs/openapi.yaml"                    # tests/contract: OpenAPI ↔ ORM ↔ RBAC
               - "docs/requirements/RBAC_MATRIX.md"
               - ".github/workflows/backend-ci.yml"
