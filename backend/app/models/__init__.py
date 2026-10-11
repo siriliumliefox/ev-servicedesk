@@ -1,4 +1,4 @@
-"""ORM-модели EV-ServiceDesk. Импорт всех модулей регистрирует таблицы в Base.metadata."""
+"""ORM-модели EV-ServiceDesk. Импорт всех модулей регистрирует таблицы в Base.metadata."""
 
 from app.models.aggregates import (
     AggregateStatusThresholds,

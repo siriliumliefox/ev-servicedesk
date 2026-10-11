@@ -9,7 +9,7 @@
 4. `docs/openapi.yaml`, `docs/EV_ServiceDesk_Glava2_DDL.sql`, ORM, Alembic, `docs/adr/`.
 5. `docs/TZ.md`, `docs/MASTER_CHECKLIST.md` (28 глав).
 6. `docs/PROJECT_STATUS.md`, `docs/ROADMAP.md`.
-7. История Claude. Заявления прошлых AI без кода/теста/commit не считаются выполненной работой.
+7. История Claude. Заявления прошлых AI без кода/теста/commit не считаются выполненной работой.
 
 ## Структура
 | Путь | Назначение |
@@ -37,6 +37,7 @@ npm run build --workspaces --if-present
 docker compose config -q
 npm run lint:api && npm run test:mock   # контракт: Spectral + mock (Prism)
 scripts/check_api_breaking.sh           # ломающие изменения OpenAPI против origin/develop (Docker)
+python3 scripts/check_unicode_nfc.py    # текст только в Unicode NFC (--fix нормализует)
 
 # БД (Глава 2): схема только через Alembic; тесты схемы — на БД *_test (TEST_DATABASE_URL)
 (cd backend && poetry run alembic upgrade head)
@@ -48,7 +49,7 @@ scripts/check_api_breaking.sh           # ломающие изменения Op
 - Ветки: `feature/<issue>-<slug>`, `fix/<issue>-<slug>`, `chore/<slug>`, `hotfix/<issue>-<slug>`.
 - Начало: прочитать главу в `MASTER_CHECKLIST.md`, `PROJECT_STATUS.md`, ADR; проверить Git; показать план и DoD.
 - Итерации: изменение → тест → проверки → diff → дальше.
-- `DONE` только при выполненном оригинальном DoD, зелёном CI и смерженном PR. Иначе `PARTIAL`/`BLOCKED`.
+- `DONE` только при выполненном оригинальном DoD, зелёном CI и смерженном PR. Иначе `PARTIAL`/`BLOCKED`.
 - `main`/`develop` защищены (ADR 0008): только PR, обязательная проверка `ci-gate` (`ci.yml`), прямой push отклоняется — в том числе для админа.
 - Статусы проверок: `PASS`, `FAIL`, `NOT RUN`, `BLOCKED`.
 
@@ -72,7 +73,7 @@ scripts/check_api_breaking.sh           # ломающие изменения Op
 Скилл — это папка (`SKILL.md` + файлы, на которые он ссылается); загружать в «Мои» целиком (zip).
 
 ## Архитектура
-- Модульный монолит; доменная логика вне HTTP routes и UI.
+- Модульный монолит; доменная логика вне HTTP routes и UI.
 - Схема БД только через Alembic (upgrade + downgrade).
 - OpenAPI, DDL, ORM, Pydantic синхронны; изменение контракта = OpenAPI + тесты + клиенты. После изменения `docs/openapi.yaml`: `npm run gen:api`, Swagger sync, `backend/tests/contract` (ADR 0007).
 - RBAC `client`/`engineer`/`admin` + object-level authorization.

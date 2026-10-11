@@ -20,10 +20,10 @@ from app.models.enums import NotificationType, pg_enum
 
 
 class Notification(IdMixin, CreatedAtMixin, Base):
-    """target_vehicle_model_id — единственный источник таргетинга (NULL = все модели).
+    """target_vehicle_model_id — единственный источник таргетинга (NULL = все модели).
 
-    Для type = 'firmware' обязательны релиз и модель; составной FK гарантирует, что релиз
-    относится именно к этой модели.
+    Для type = 'firmware' обязательны релиз и модель; составной FK гарантирует, что релиз
+    относится именно к этой модели.
     """
 
     __tablename__ = "notification"
@@ -82,7 +82,7 @@ class PushToken(IdMixin, TimestampMixin, Base):
 
 
 class NotificationDelivery(IdMixin, CreatedAtMixin, Base):
-    """Технический журнал push-доставки для аналитики открываемости (Глава 16)."""
+    """Технический журнал push-доставки для аналитики открываемости (Глава 16)."""
 
     __tablename__ = "notification_delivery"
     __table_args__ = (UniqueConstraint("notification_id", "push_token_id"),)

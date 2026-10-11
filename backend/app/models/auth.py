@@ -45,10 +45,10 @@ class RefreshToken(IdMixin, CreatedAtMixin, Base):
 
 
 class PdConsent(IdMixin, TimestampMixin, Base):
-    """История согласий на обработку ПД (Закон РБ № 99-З, ст. 5 и 10; ADR 0006).
+    """История согласий на обработку ПД (Закон РБ № 99-З, ст. 5 и 10; ADR 0006).
 
-    Строка = факт согласия с конкретной редакцией политики и датой (доказательство для НЦЗПД).
-    Отзыв = withdrawn_at; в течение 15 дней после отзыва пользователь анонимизируется
+    Строка = факт согласия с конкретной редакцией политики и датой (доказательство для НЦЗПД).
+    Отзыв = withdrawn_at; в течение 15 дней после отзыва пользователь анонимизируется
     (app_user.anonymized_at), если нет иных правовых оснований. Триггер pd_consent_guard
     запрещает DELETE и любые UPDATE, кроме однократной установки withdrawn_at.
     """
@@ -59,7 +59,7 @@ class PdConsent(IdMixin, TimestampMixin, Base):
         CheckConstraint(
             "withdrawn_at IS NULL OR withdrawn_at >= given_at", name="withdrawn_after_given"
         ),
-        # Не более одного действующего согласия на пользователя.
+        # Не более одного действующего согласия на пользователя.
         Index(
             "uq_pd_consent_active",
             "user_id",

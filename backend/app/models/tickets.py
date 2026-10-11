@@ -24,7 +24,7 @@ class Ticket(IdMixin, TimestampMixin, Base):
     """Владелец тикета = vehicle.user_id (неизменяем, ADR 0003) — без дублирующего client_id (3НФ).
 
     firmware_release_id — снимок прошивки на момент создания (N-09): прошивка авто
-    меняется со временем, поэтому это не транзитивная зависимость. Модель берётся из vehicle.
+    меняется со временем, поэтому это не транзитивная зависимость. Модель берётся из vehicle.
     Claim атомарен: UPDATE ... WHERE assigned_engineer_id IS NULL RETURNING id.
     """
 
@@ -83,7 +83,7 @@ class TicketMessage(IdMixin, CreatedAtMixin, Base):
 
 
 class TicketAttachment(IdMixin, CreatedAtMixin, Base):
-    """Хранится ключ объекта S3, а не URL (ADR 0004); URL выдаётся presigned при чтении."""
+    """Хранится ключ объекта S3, а не URL (ADR 0004); URL выдаётся presigned при чтении."""
 
     __tablename__ = "ticket_attachment"
     __table_args__ = (

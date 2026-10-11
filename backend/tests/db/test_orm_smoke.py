@@ -1,4 +1,4 @@
-"""ORM-модели пишут и читают данные в схеме миграций (ENUM хранит value, дефолты БД)."""
+"""ORM-модели пишут и читают данные в схеме миграций (ENUM хранит value, дефолты БД)."""
 
 from datetime import UTC, date, datetime, timedelta
 

@@ -1957,7 +1957,7 @@ components:
           type: string
           description: >-
             Идентификатор загруженного объекта — передать в attachments. Не публичная ссылка:
-            backend хранит ключ объекта S3 (ticket_attachment.object_key) и выдаёт
+            backend хранит ключ объекта S3 (ticket_attachment.object_key) и выдаёт
             presigned URL при чтении (ADR 0004).
         expires_at: { type: string, format: date-time }
 
@@ -2072,7 +2072,7 @@ components:
         firmware_release_id:
           type: integer
           nullable: true
-          description: Статья под версию прошивки (C-06); требует vehicle_model_id той же модели.
+          description: Статья под версию прошивки (C-06); требует vehicle_model_id той же модели.
         article_type: { type: string, enum: [guide, troubleshooting] }
         title: { type: string, maxLength: 200 }
         content: { type: string }
@@ -2093,7 +2093,7 @@ components:
         firmware_release_id:
           type: integer
           nullable: true
-          description: Статья под версию прошивки (C-06); требует vehicle_model_id той же модели.
+          description: Статья под версию прошивки (C-06); требует vehicle_model_id той же модели.
         article_type: { type: string, enum: [guide, troubleshooting] }
         title: { type: string }
         content: { type: string }

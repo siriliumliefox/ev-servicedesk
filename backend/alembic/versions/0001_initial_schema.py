@@ -845,8 +845,8 @@ def upgrade() -> None:
     # ### end Alembic commands ###
 
     # --- Ручное дополнение: защита инвариантов vehicle на уровне БД (defense in depth). ---
-    # Сервисный слой делает условный UPDATE ... WHERE mileage <= :new и отдаёт 409;
-    # триггер не даёт нарушить инвариант в обход сервиса (SQLSTATE 23514).
+    # Сервисный слой делает условный UPDATE ... WHERE mileage <= :new и отдаёт 409;
+    # триггер не даёт нарушить инвариант в обход сервиса (SQLSTATE 23514).
     op.execute(
         """
         CREATE FUNCTION vehicle_guard() RETURNS trigger
@@ -952,7 +952,7 @@ def downgrade() -> None:
     op.drop_table("app_user")
     op.drop_table("aggregate_type")
     # ### end Alembic commands ###
-    # drop_table не удаляет ENUM-типы — иначе повторный upgrade упадёт.
+    # drop_table не удаляет ENUM-типы — иначе повторный upgrade упадёт.
     op.execute("DROP TYPE IF EXISTS ticket_status")
     op.execute("DROP TYPE IF EXISTS ticket_category")
     op.execute("DROP TYPE IF EXISTS attachment_type")

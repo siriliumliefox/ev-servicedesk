@@ -36,14 +36,14 @@ def test_concurrent_claim_has_single_winner(migrated_engine: Engine) -> None:
         worker = threading.Thread(target=claim_second)
         worker.start()
         worker.join(timeout=1.0)
-        assert worker.is_alive(), "второй claim должен ждать row lock первого"
+        assert worker.is_alive(), "второй claim должен ждать row lock первого"
         tx1.commit()
         c1.close()
         worker.join(timeout=10)
         assert not worker.is_alive()
 
         assert results["first"] == [(ticket,)]
-        assert results["second"] == []  # сервисный слой отдаст 409
+        assert results["second"] == []  # сервисный слой отдаст 409
         with migrated_engine.connect() as c:
             assert (
                 scalar(c, "SELECT assigned_engineer_id FROM ticket WHERE id = :t", t=ticket)
