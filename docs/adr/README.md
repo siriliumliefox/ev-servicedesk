@@ -17,3 +17,4 @@
 | [0011](0011-mobile-clickable-prototype-flutter.md) | Кликабельный прототип клиента — Flutter на фикстурах вместо Figma; навигация по ТЗ из 4 пунктов |
 | [0012](0012-web-prototypes-react-fixtures.md) | Прототипы веб-кабинета инженера и админ-панели — React на фикстурах; SLA из `sla_due_at`, быстрые ответы из базы знаний, контракт v1 без изменений |
 | [0013](0013-auth-service-implementation.md) | Auth Service: SMS через A1, JWT + ротация refresh, RBAC с deny by default, лимиты, «staging» = проверенный образ до главы 26 |
+| [0014](0014-vehicle-service-implementation.md) | Vehicle Service: мок VIN-декодера за `VinDecoder`, конфликт VIN (два кода 409, восстановление своего авто), лимит добавления, доступ инженера по тикетам, история работ |

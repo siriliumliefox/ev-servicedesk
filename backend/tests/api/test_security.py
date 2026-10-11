@@ -17,6 +17,10 @@ from tests.api.conftest import API, STAFF_PASSWORD, api_settings, assert_contrac
 BODIES = {
     "logout": {"refresh_token": "x"},
     "linkTelegram": {"telegram_id": "tg-1"},
+    "createVehicle": {"vin": "L6TZ0010000000001"},
+    "updateVehicleMileage": {"mileage": 1},
+    "correctVehicleMileage": {"expected_current_mileage": 1, "mileage": 0, "reason": "x"},
+    "createMaintenanceRecord": {"performed_at": "2026-01-01", "mileage_at_service": 1},
 }
 
 
@@ -33,7 +37,7 @@ def call(client, route: APIRoute, headers: dict | None = None):
     kwargs = {"headers": headers or {}}
     if route.operation_id in BODIES:
         kwargs["json"] = BODIES[route.operation_id]
-    return client.request(method, route.path, **kwargs)
+    return client.request(method, route.path.replace("{vehicleId}", "1"), **kwargs)
 
 
 def test_protected_routes_exist(app):
@@ -42,6 +46,16 @@ def test_protected_routes_exist(app):
         "withdrawPdConsent",
         "linkTelegram",
         "getCurrentUser",
+        # Vehicle Service (Глава 11)
+        "searchVehicleModels",
+        "listVehicles",
+        "createVehicle",
+        "getVehicle",
+        "deleteVehicle",
+        "updateVehicleMileage",
+        "correctVehicleMileage",
+        "listMaintenanceRecords",
+        "createMaintenanceRecord",
     }
 
 

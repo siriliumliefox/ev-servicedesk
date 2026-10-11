@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Smoke-тест образа backend (Глава 10, ADR 0013): запуск как в staging и проверка Auth Service.
+# Smoke-тест образа backend (Главы 10–11, ADR 0013, 0014): запуск как в staging, Auth и Vehicle.
 # Нужен Redis на localhost:6379 (в CI — service container, локально — docker compose up -d redis).
 # БД Redis 14 отведена smoke-тесту и очищается перед запуском. Секреты — одноразовые
 # случайные, нигде не печатаются.
@@ -55,6 +55,14 @@ need = {"requestPhoneCode", "verifyPhoneCode", "refreshToken", "logout", "withdr
         "staffLogin", "linkTelegram", "getCurrentUser"}
 ops = {o["operationId"] for p in json.load(sys.stdin)["paths"].values() for o in p.values()}
 print("ok" if need <= ops else sorted(need - ops))')" ok
+check "Swagger: все операции Vehicle Service" \
+  "$(curl -fsS "$BASE/openapi.json" | python3 -c '
+import json, sys
+need = {"searchVehicleModels", "listVehicles", "createVehicle", "getVehicle", "deleteVehicle",
+        "updateVehicleMileage", "correctVehicleMileage", "listMaintenanceRecords",
+        "createMaintenanceRecord"}
+ops = {o["operationId"] for p in json.load(sys.stdin)["paths"].values() for o in p.values()}
+print("ok" if need <= ops else sorted(need - ops))')" ok
 check "POST /v1/auth/phone/request-code → 200" \
   "$(status -X POST "$BASE/v1/auth/phone/request-code" -H 'Content-Type: application/json' \
       -d "{\"phone\":\"$PHONE\"}")" 200
@@ -64,6 +72,11 @@ check "повторный запрос кода → 429 (rate limit)" \
 check "GET /v1/me без токена → 401" "$(status "$BASE/v1/me")" 401
 check "GET /v1/me с подделанным токеном → 401" \
   "$(status -H 'Authorization: Bearer eyJhbGciOiJub25lIn0.eyJzdWIiOiIxIn0.' "$BASE/v1/me")" 401
+check "GET /v1/vehicles без токена → 401" "$(status "$BASE/v1/vehicles")" 401
+check "POST /v1/vehicles с подделанным токеном → 401" \
+  "$(status -X POST "$BASE/v1/vehicles" -H 'Content-Type: application/json' \
+      -H 'Authorization: Bearer eyJhbGciOiJub25lIn0.eyJzdWIiOiIxIn0.' \
+      -d '{"vin":"L6TZ0010000000001"}')" 401
 # 404 по HTTP ничего не доказывает — проверяем таблицу маршрутов приложения в контейнере.
 check "отладочный маршрут SMS-кода не подключён вне local" \
   "$(docker exec "$NAME" python -c \
