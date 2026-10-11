@@ -115,7 +115,7 @@ export interface paths {
         put?: never;
         /**
          * Логин по паролю для Инженера/Администратора
-         * @description Отдельный флоу от клиентского SMS-логина. Учётные записи engineer/admin создаются администратором вручную (Глава 22), клиент этим эндпоинтом не пользуется.
+         * @description Отдельный флоу от клиентского SMS-логина. Учётные записи engineer/admin создаются администратором вручную (Глава 22), клиент этим эндпоинтом не пользуется. 429 — превышен лимит неудачных попыток входа по номеру или адресу (N-06), заголовок Retry-After. Добавлено в 1.2.0.
          */
         post: operations["staffLogin"];
         delete?: never;
@@ -1701,6 +1701,7 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             422: components["responses"]["ValidationError"];
+            429: components["responses"]["RateLimited"];
             default: components["responses"]["ServerError"];
         };
     };

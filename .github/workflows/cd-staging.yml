@@ -38,6 +38,16 @@ jobs:
   build-backend-image:
     if: github.ref == 'refs/heads/develop' && (github.event_name == 'push' || inputs.git_sha == '')
     runs-on: ubuntu-latest
+    # Redis для smoke-теста образа (Auth Service, Глава 10).
+    services:
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
 
@@ -51,6 +61,17 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Сначала собрать локально и проверить: сломанный образ в backend:staging не попадает.
+      - uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          load: true
+          tags: backend:smoke
+          cache-from: type=gha
+
+      - name: Smoke-тест образа (ENVIRONMENT=staging, ADR 0013)
+        run: scripts/smoke_backend_image.sh backend:smoke
 
       - uses: docker/build-push-action@v6
         with:

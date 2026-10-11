@@ -1,0 +1,194 @@
+"""Безопасность: запросы без токена / с негодным / с чужим токеном → 401/403 (Глава 10)."""
+
+from datetime import UTC, datetime, timedelta
+
+import jwt
+import pytest
+from fastapi.routing import APIRoute
+from sqlalchemy.orm import Session
+
+from app.core.security import create_access_token
+from app.models import AppUser
+from app.models.enums import UserRole
+from tests.api.conftest import API, STAFF_PASSWORD, api_settings, assert_contract, bearer
+
+# Тела, проходящие валидацию, — чтобы 401/403 не маскировались 422.
+BODIES = {
+    "logout": {"refresh_token": "x"},
+    "linkTelegram": {"telegram_id": "tg-1"},
+}
+
+
+def protected_routes(app) -> list[APIRoute]:
+    return [
+        r
+        for r in app.routes
+        if isinstance(r, APIRoute) and (r.openapi_extra or {}).get("x-required-roles")
+    ]
+
+
+def call(client, route: APIRoute, headers: dict | None = None):
+    method = next(iter(route.methods)).lower()
+    kwargs = {"headers": headers or {}}
+    if route.operation_id in BODIES:
+        kwargs["json"] = BODIES[route.operation_id]
+    return client.request(method, route.path, **kwargs)
+
+
+def test_protected_routes_exist(app):
+    assert {r.operation_id for r in protected_routes(app)} == {
+        "logout",
+        "withdrawPdConsent",
+        "linkTelegram",
+        "getCurrentUser",
+    }
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {},
+        {"Authorization": "Bearer"},
+        {"Authorization": "Bearer not-a-jwt"},
+        {"Authorization": "Basic dXNlcjpwYXNz"},
+        {"Authorization": "Token abc"},
+    ],
+    ids=["none", "empty-bearer", "garbage", "basic", "other-scheme"],
+)
+def test_no_or_malformed_token_401(app, client, headers):
+    for route in protected_routes(app):
+        r = call(client, route, headers)
+        assert r.status_code == 401, (route.path, r.text)
+        assert_contract(r, route.operation_id)
+        assert r.json()["error"]["code"] == "UNAUTHORIZED"
+        assert r.headers["WWW-Authenticate"] == "Bearer"
+
+
+def test_expired_token_401(app, client, make_client_user, settings):
+    user = make_client_user("+375291000001")
+    past = datetime.now(UTC) - timedelta(hours=1)
+    token = create_access_token(user.id, "client", settings, now=past)
+    for route in protected_routes(app):
+        assert call(client, route, bearer(token)).status_code == 401
+
+
+def test_token_with_foreign_secret_401(app, client, make_client_user):
+    user = make_client_user("+375291000002")
+    foreign = api_settings(jwt_secret="attacker-secret-" + "a" * 32)
+    token = create_access_token(user.id, "admin", foreign)
+    for route in protected_routes(app):
+        assert call(client, route, bearer(token)).status_code == 401
+
+
+def test_forged_role_claim_ignored(client, make_client_user, settings):
+    """Роль берётся из БД: даже валидно подписанный токен с role=admin не даёт прав админа."""
+    user = make_client_user("+375291000003")
+    now = datetime.now(UTC)
+    token = jwt.encode(
+        {
+            "sub": str(user.id),
+            "role": "admin",
+            "typ": "access",
+            "iss": settings.jwt_issuer,
+            "aud": settings.jwt_audience,
+            "iat": int(now.timestamp()),
+            "exp": int((now + timedelta(minutes=5)).timestamp()),
+        },
+        settings.jwt_secret,
+        algorithm="HS256",
+    )
+    me = client.get(f"{API}/me", headers=bearer(token))
+    assert me.status_code == 200 and me.json()["role"] == "client"
+
+
+def test_refresh_token_is_not_access_token(client, login_client):
+    session = login_client("+375291000004")
+    r = client.get(f"{API}/me", headers=bearer(session["refresh_token"]))
+    assert r.status_code == 401
+
+
+def test_token_of_deleted_or_disabled_user_401(client, login_client, db: Session):
+    session = login_client("+375291000005")
+    user = db.get(AppUser, session["user"]["id"])
+    user.is_active = False
+    db.commit()
+    r = client.get(f"{API}/me", headers=bearer(session["access_token"]))
+    assert r.status_code == 401
+    # Неизвестный пользователь
+    ghost = create_access_token(10**9, "client", api_settings())
+    assert client.get(f"{API}/me", headers=bearer(ghost)).status_code == 401
+
+
+@pytest.mark.parametrize("role", [UserRole.ENGINEER, UserRole.ADMIN])
+def test_staff_forbidden_on_client_only_routes(client, make_staff, role):
+    phone = "+37529555000" + ("1" if role is UserRole.ENGINEER else "2")
+    make_staff(phone, role)
+    token = client.post(
+        f"{API}/auth/staff/login", json={"phone": phone, "password": STAFF_PASSWORD}
+    ).json()["access_token"]
+    r = client.delete(f"{API}/auth/pd-consent", headers=bearer(token))
+    assert_contract(r, "withdrawPdConsent")
+    assert r.status_code == 403 and r.json()["error"]["code"] == "FORBIDDEN"
+    r = client.post(
+        f"{API}/auth/telegram/link", json={"telegram_id": "tg-x"}, headers=bearer(token)
+    )
+    assert_contract(r, "linkTelegram")
+    assert r.status_code == 403
+    # Доступное всем ролям — доступно.
+    assert client.get(f"{API}/me", headers=bearer(token)).status_code == 200
+
+
+def test_logout_cannot_revoke_foreign_refresh(client, login_client):
+    """Object-level: чужой refresh-токен через logout не отзывается."""
+    victim = login_client("+375291000006")
+    attacker = login_client("+375291000007")
+    r = client.post(
+        f"{API}/auth/logout",
+        json={"refresh_token": victim["refresh_token"]},
+        headers=bearer(attacker["access_token"]),
+    )
+    assert r.status_code == 204
+    r = client.post(f"{API}/auth/refresh", json={"refresh_token": victim["refresh_token"]})
+    assert r.status_code == 200
+
+
+def test_debug_route_absent_outside_local(client):
+    """Отладочный эндпоинт SMS-кода есть только при ENVIRONMENT=local."""
+    r = client.get(f"{API}/_debug/sms/last-code", params={"phone": "+375291000008"})
+    assert r.status_code == 404
+
+
+def test_errors_do_not_leak_internals(client):
+    r = client.post(
+        f"{API}/auth/refresh", content=b"{not json", headers={"Content-Type": "application/json"}
+    )
+    assert r.status_code == 422
+    assert "Traceback" not in r.text
+
+
+def test_debug_route_local_only_returns_code(db, real_redis):
+    """ENVIRONMENT=local: код фейкового SMS доступен только через /_debug, вне OpenAPI."""
+    from fastapi.testclient import TestClient
+
+    from app.core.config import get_settings
+    from app.core.db import get_db
+    from app.core.redis import get_redis
+    from app.main import create_app
+
+    settings = api_settings(environment="local")
+    local = create_app(settings)
+    local.dependency_overrides[get_settings] = lambda: settings
+    local.dependency_overrides[get_db] = lambda: db
+    local.dependency_overrides[get_redis] = lambda: real_redis
+    c = TestClient(local)
+    phone = "+375291000099"
+    assert c.post(f"{API}/auth/phone/request-code", json={"phone": phone}).status_code == 200
+    r = c.get(f"{API}/_debug/sms/last-code", params={"phone": phone})
+    assert r.status_code == 200
+    code = r.json()["code"]
+    r = c.post(
+        f"{API}/auth/phone/verify-code",
+        json={"phone": phone, "code": code, "pd_policy_version": "2026-10"},
+    )
+    assert r.status_code == 200
+    assert not any("_debug" in p for p in local.openapi()["paths"])

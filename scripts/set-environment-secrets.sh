@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Генерирует и записывает JWT_SECRET в окружения staging и production
-# (Глава 4, ADR 0008). Значение нигде не печатается и не попадает в argv:
+# Генерирует и записывает JWT_SECRET и SMS_CODE_SECRET (HMAC SMS-кодов, Глава 10,
+# ADR 0013) в окружения staging и production (Глава 4, ADR 0008). Значение нигде не печатается и не попадает в argv:
 # openssl → переменная оболочки → stdin `gh secret set`.
 #
 # Для проверки изоляции (workflow secrets-isolation.yml) в переменные
@@ -26,4 +26,6 @@ for env_name in "$@"; do
   var="JWT_SECRET_FP_$(tr '[:lower:]' '[:upper:]' <<<"$env_name")"
   gh variable set "$var" --repo "$REPO" --body "$fp"
   echo "→ ${env_name}: JWT_SECRET записан, ${var}=${fp}"
+  openssl rand -hex 32 | tr -d '\n' | gh secret set SMS_CODE_SECRET --repo "$REPO" --env "$env_name"
+  echo "→ ${env_name}: SMS_CODE_SECRET записан"
 done
