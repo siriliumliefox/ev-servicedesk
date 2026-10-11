@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: EV-ServiceDesk API
-  version: "1.3.1"
+  version: "1.3.2"
   description: >
     API дипломного проекта «EV-ServiceDesk» (ООО «ЕТСавтоГомель»).
     Контракты сервисов: Auth, Vehicle, Aggregates & Maintenance, Tickets,
@@ -485,7 +485,9 @@ paths:
         (дата позже сегодняшней по Europe/Minsk), AGGREGATE_TYPE_NOT_FOUND,
         MAINTENANCE_SUBJECT_REQUIRED (нет ни агрегата, ни описания). Уточнено в 1.3.0.
         Удалённое авто не изменяется — 403 «Автомобиль удалён — изменения недоступны».
-        Уточнено в 1.3.1 (ADR 0014).
+        Уточнено в 1.3.1 (ADR 0014). Запись с aggregate_type_code — работа по агрегату
+        (осмотр, долив) и счётчик «светофора» НЕ сбрасывает; замена агрегата —
+        replaceAggregateStatus. Уточнено в 1.3.2 (ADR 0016).
       requestBody:
         required: true
         content:
@@ -530,7 +532,9 @@ paths:
       operationId: createAggregateType
       x-required-roles: [admin]
       x-rbac-action: ["Изменение справочника агрегатов"]
-      description: Расширение набора агрегатов на схеме без релиза кода (ТЗ, раздел 5).
+      description: >
+        Расширение набора агрегатов на схеме без релиза кода (ТЗ, раздел 5).
+        Код уже есть — 409 AGGREGATE_TYPE_EXISTS. Уточнено в 1.3.2 (ADR 0016).
       requestBody:
         required: true
         content:
@@ -590,6 +594,10 @@ paths:
         "удаление/изменение регламента не ломает историю" (Глава 2/12).
         Прямое редактирование интервала в старой записи не предусмотрено
         намеренно, чтобы не потерять исторические пороги для прошлых расчётов.
+        Новая версия создаётся всегда, даже с теми же интервалами; одновременные
+        пересмотры выполняются по очереди, побеждает последний. 422:
+        VEHICLE_MODEL_NOT_FOUND, AGGREGATE_TYPE_NOT_FOUND, нет ни одного интервала,
+        interval_months > 1200. Уточнено в 1.3.2 (ADR 0016).
       requestBody:
         required: true
         content:
@@ -615,7 +623,10 @@ paths:
       operationId: archiveMaintenanceRegulation
       x-required-roles: [admin]
       x-rbac-action: ["CRUD регламентов ТО"]
-      description: Прекращает отслеживание пары модель+агрегат; история расчётов по прошлым авто не затрагивается.
+      description: >
+        Прекращает отслеживание пары модель+агрегат; история расчётов по прошлым авто
+        не затрагивается. Архивный или несуществующий регламент — 404
+        REGULATION_NOT_FOUND. Уточнено в 1.3.2 (ADR 0016).
       responses:
         default: { $ref: '#/components/responses/ServerError' }
         '204': { description: Архивирован }
@@ -679,6 +690,13 @@ paths:
         updateVehicleMileage). Счётчик сбрасывается, только если дата замены не раньше
         текущей последней замены; замена задним числом попадает лишь в историю ТО,
         а ответ содержит прежний статус.
+        Уточнено в 1.3.2 (ADR 0016): 422 REPLACED_AT_IN_FUTURE (дата позже сегодняшней
+        по Europe/Minsk); 409 MILEAGE_AHEAD_OF_VEHICLE (details.current_mileage), пробег
+        авто не поднимается; 404 AGGREGATE_TYPE_NOT_FOUND — неизвестный код агрегата.
+        Без активного регламента замена всё равно фиксируется: 200 со status=unknown
+        (percentage и остатки null, last_replaced_* заполнены). Доступ — как у изменения
+        авто: engineer — по своему тикету не в resolved, удалённое авто — 403/404.
+        Повтор того же запроса создаёт ещё одну запись в истории ТО.
       requestBody:
         required: true
         content:
@@ -1888,7 +1906,8 @@ components:
           description: >
             По точному проценту выработки p и порогам (по умолчанию 70/100):
             green p < 70, yellow 70 ≤ p ≤ 100, red p > 100;
-            unknown — нет истории замены (не ошибка, Глава 5).
+            unknown — нет истории замены (не ошибка, Глава 5) или, только в ответе
+            replaceAggregateStatus, нет активного регламента (1.3.2, ADR 0016).
             Правила — docs/specs/AGGREGATE_STATUS_ALGORITHM.md.
         percentage:
           type: number

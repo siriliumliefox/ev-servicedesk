@@ -19,3 +19,4 @@
 | [0013](0013-auth-service-implementation.md) | Auth Service: SMS через A1, JWT + ротация refresh, RBAC с deny by default, лимиты, «staging» = проверенный образ до главы 26 |
 | [0014](0014-vehicle-service-implementation.md) | Vehicle Service: мок VIN-декодера за `VinDecoder`, конфликт VIN (два кода 409, восстановление своего авто), лимит добавления, доступ инженера по тикетам, история работ |
 | [0015](0015-orm-relationships-explicit-loading.md) | ORM-связи только с явной загрузкой: `relationship(lazy="raise")` + `selectinload`, ответы API через `from_attributes`, производные поля — `column_property` |
+| [0016](0016-aggregates-maintenance-service.md) | Aggregates & Maintenance Service: счётчик сбрасывает только замена агрегата, замена без регламента фиксируется, 409 при пробеге выше текущего, версии регламентов, сценарии главы 5 через сервис |

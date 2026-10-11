@@ -6,6 +6,7 @@ SAVEPOINT (join_transaction_mode="create_savepoint").
 
 import re
 from collections.abc import Callable, Iterator
+from datetime import UTC, datetime, timedelta
 from functools import cache
 from pathlib import Path
 from typing import Any
@@ -27,8 +28,8 @@ from app.core.redis import get_redis
 from app.core.security import hash_password
 from app.domain.auth.sms import FakeSmsProvider
 from app.main import create_app
-from app.models import AppUser, PdConsent
-from app.models.enums import UserRole
+from app.models import AppUser, PdConsent, Ticket
+from app.models.enums import TicketCategory, TicketStatus, UserRole
 
 DOCS = Path(__file__).resolve().parents[3] / "docs"
 API = "/v1"
@@ -179,3 +180,71 @@ def assert_contract(response: httpx.Response, operation_id: str) -> None:
         assert not response.content, f"{operation_id} {status}: тело не ожидается"
         return
     OAS30Validator(schema).validate(response.json())
+
+
+# ---------- Авто, персонал и тикеты (Главы 11–12) ----------
+
+ZEEKR_VIN = "L6TZ0010000000001"  # распознаёт мок-декодер
+UNKNOWN_VIN = "LSVAU2183R2100001"  # мок не знает — модель вручную
+
+Headers = dict[str, str]
+
+
+@pytest.fixture
+def as_client(login_client: Callable[[str], dict]) -> Callable[[str], Headers]:
+    def _as(phone: str) -> Headers:
+        return bearer(login_client(phone)["access_token"])
+
+    return _as
+
+
+@pytest.fixture
+def as_staff(client: TestClient, make_staff) -> Callable[..., tuple[Headers, AppUser]]:
+    def _as(phone: str, role: UserRole = UserRole.ENGINEER) -> tuple[Headers, AppUser]:
+        user = make_staff(phone, role)
+        r = client.post(
+            f"{API}/auth/staff/login", json={"phone": phone, "password": STAFF_PASSWORD}
+        )
+        assert r.status_code == 200, r.text
+        return bearer(r.json()["access_token"]), user
+
+    return _as
+
+
+@pytest.fixture
+def make_ticket(db: Session) -> Callable[..., Ticket]:
+    def _make(
+        vehicle_id: int,
+        engineer: AppUser | None = None,
+        status: TicketStatus = TicketStatus.IN_PROGRESS,
+    ) -> Ticket:
+        if engineer is None and status is TicketStatus.IN_PROGRESS:
+            status = TicketStatus.NEW
+        now = datetime.now(UTC)
+        ticket = Ticket(
+            vehicle_id=vehicle_id,
+            category=TicketCategory.MAINTENANCE,
+            status=status,
+            description="Плановое ТО",
+            assigned_engineer_id=engineer.id if engineer else None,
+            sla_due_at=now + timedelta(hours=4),
+            resolved_at=now if status is TicketStatus.RESOLVED else None,
+        )
+        db.add(ticket)
+        db.commit()
+        return ticket
+
+    return _make
+
+
+def model_id(client: TestClient, headers: Headers, search: str) -> int:
+    r = client.get(f"{API}/vehicle-models", params={"search": search}, headers=headers)
+    assert_contract(r, "searchVehicleModels")
+    return r.json()["items"][0]["id"]
+
+
+def add_vehicle(client: TestClient, headers: Headers, vin: str = ZEEKR_VIN, **extra) -> dict:
+    r = client.post(f"{API}/vehicles", json={"vin": vin, **extra}, headers=headers)
+    assert r.status_code == 201, r.text
+    assert_contract(r, "createVehicle")
+    return r.json()

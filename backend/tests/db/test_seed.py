@@ -1,5 +1,7 @@
 """Seed справочника агрегатов — утверждённые коды baseline v1 (ADR 0002)."""
 
+import unicodedata
+
 from sqlalchemy import Connection, text
 
 APPROVED_CODES = {
@@ -16,6 +18,9 @@ def test_seed_contains_exactly_approved_codes(conn: Connection) -> None:
     rows = conn.execute(text("SELECT code, name FROM aggregate_type")).all()
     assert {r.code for r in rows} == APPROVED_CODES
     assert all(r.name.strip() for r in rows)
+    # Миграция 0007: seed 0002 содержал NFD («и» + U+0306 вместо «й»).
+    assert all(r.name == unicodedata.normalize("NFC", r.name) for r in rows)
+    assert ("cabin_filter", "Салонный фильтр") in {(r.code, r.name) for r in rows}
 
 
 def test_seed_contains_serviced_vehicle_models(conn: Connection) -> None:

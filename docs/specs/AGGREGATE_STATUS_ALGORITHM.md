@@ -91,6 +91,10 @@ remaining_days = due_date − today               # < 0 — просрочено
    - `mileage_at_replacement > vehicle.mileage` → `409` (сначала обновить пробег, `updateVehicleMileage`);
    - всегда создаёт `maintenance_record`; `vehicle_aggregate_status` обновляет по правилу E5/E6
      в одной транзакции с блокировкой строки статуса.
+   - уточнено в главе 12 (ADR 0016): `409 MILEAGE_AHEAD_OF_VEHICLE` — пробег авто не поднимается;
+     неизвестный код агрегата → `404`; без активного регламента замена фиксируется, ответ —
+     `unknown` (§2.1 не меняется: в `listAggregateStatuses` такой агрегат не входит);
+     запись истории ТО с кодом агрегата (`createMaintenanceRecord`) счётчик не сбрасывает.
 3. Пороги — `GET/PUT /aggregate-status-thresholds` (ADR 0009), валидация
    `1 ≤ yellow_from_percent < red_above_percent ≤ 200`.
 4. Модульные тесты — все сценарии §5 (DoD главы 12: ≥ 90% сценариев главы 5).

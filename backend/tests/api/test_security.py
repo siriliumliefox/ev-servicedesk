@@ -22,6 +22,14 @@ BODIES = {
     "updateVehicleMileage": {"mileage": 1},
     "correctVehicleMileage": {"expected_current_mileage": 1, "mileage": 0, "reason": "x"},
     "createMaintenanceRecord": {"performed_at": "2026-01-01", "mileage_at_service": 1},
+    "createAggregateType": {"code": "brake_fluid", "name": "Тормозная жидкость"},
+    "reviseMaintenanceRegulation": {
+        "vehicle_model_id": 1,
+        "aggregate_type_code": "engine_oil",
+        "interval_km": 10000,
+    },
+    "replaceAggregateStatus": {"replaced_at": "2026-01-01", "mileage_at_replacement": 0},
+    "updateAggregateStatusThresholds": {"yellow_from_percent": 70, "red_above_percent": 100},
 }
 
 
@@ -57,6 +65,16 @@ def test_protected_routes_exist(app):
         "correctVehicleMileage",
         "listMaintenanceRecords",
         "createMaintenanceRecord",
+        # Aggregates & Maintenance Service (Глава 12)
+        "listAggregateTypes",
+        "createAggregateType",
+        "listMaintenanceRegulations",
+        "reviseMaintenanceRegulation",
+        "archiveMaintenanceRegulation",
+        "listAggregateStatuses",
+        "replaceAggregateStatus",
+        "getAggregateStatusThresholds",
+        "updateAggregateStatusThresholds",
     }
 
 

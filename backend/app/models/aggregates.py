@@ -67,6 +67,13 @@ class MaintenanceRegulation(IdMixin, TimestampMixin, Base):
     interval_months: Mapped[int | None] = mapped_column(Integer)
     is_archived: Mapped[bool] = mapped_column(server_default=text("false"), nullable=False)
 
+    # Связи только явной загрузкой (selectinload), ленивая подгрузка — ошибка (ADR 0015).
+    aggregate_type: Mapped[AggregateType] = relationship(lazy="raise")
+
+    @property
+    def aggregate_type_code(self) -> str:
+        return self.aggregate_type.code
+
 
 class AggregateStatusThresholds(TimestampMixin, Base):
     """Пороги «светофора» (ADR 0009): ровно одна строка (id = 1), seed — миграция 0005."""

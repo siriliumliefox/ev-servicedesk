@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 
-from app.api.routes import auth, debug, users, vehicles
+from app.api.routes import aggregates, auth, debug, users, vehicles
 from app.core.config import Settings, get_settings
 from app.core.errors import install_error_handlers
 
@@ -24,6 +24,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(auth.router, prefix=API_PREFIX)
     application.include_router(users.router, prefix=API_PREFIX)
     application.include_router(vehicles.router, prefix=API_PREFIX)
+    application.include_router(aggregates.router, prefix=API_PREFIX)
     # Отладочный маршрут SMS-кода — только local с фейковым провайдером (Issue #46).
     if settings.environment == "local" and settings.sms_provider == "fake":
         application.include_router(debug.router, prefix=API_PREFIX)

@@ -9,6 +9,8 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import get_settings
 
+BIGINT_MAX = 2**63 - 1  # id таблиц (ADR 0003): больше — ошибка драйвера и 500, а не 404/422
+
 
 @lru_cache
 def get_engine() -> Engine:

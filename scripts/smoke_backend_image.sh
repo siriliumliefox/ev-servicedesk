@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Smoke-тест образа backend (Главы 10–11, ADR 0013, 0014): запуск как в staging, Auth и Vehicle.
+# Smoke-тест образа backend (Главы 10–12, ADR 0013, 0014, 0016): запуск как в staging,
+# Auth, Vehicle и Aggregates.
 # Нужен Redis на localhost:6379 (в CI — service container, локально — docker compose up -d redis).
 # БД Redis 14 отведена smoke-тесту и очищается перед запуском. Секреты — одноразовые
 # случайные, нигде не печатаются.
@@ -48,14 +49,18 @@ done
 
 check "/health отвечает, окружение staging" \
   "$(curl -fsS "$BASE/health" | python3 -c 'import json,sys; print(json.load(sys.stdin)["environment"])')" staging
-check "Swagger: все операции Auth Service, /me и Vehicle Service" \
+check "Swagger: все операции Auth Service, /me, Vehicle и Aggregates Service" \
   "$(curl -fsS "$BASE/openapi.json" | python3 -c '
 import json, sys
 need = {"requestPhoneCode", "verifyPhoneCode", "refreshToken", "logout", "withdrawPdConsent",
         "staffLogin", "linkTelegram", "getCurrentUser",
         "searchVehicleModels", "listVehicles", "createVehicle", "getVehicle", "deleteVehicle",
         "updateVehicleMileage", "correctVehicleMileage", "listMaintenanceRecords",
-        "createMaintenanceRecord"}
+        "createMaintenanceRecord",
+        "listAggregateTypes", "createAggregateType", "listMaintenanceRegulations",
+        "reviseMaintenanceRegulation", "archiveMaintenanceRegulation", "listAggregateStatuses",
+        "replaceAggregateStatus", "getAggregateStatusThresholds",
+        "updateAggregateStatusThresholds"}
 ops = {o["operationId"] for p in json.load(sys.stdin)["paths"].values() for o in p.values()}
 print("ok" if need <= ops else sorted(need - ops))')" ok
 check "POST /v1/auth/phone/request-code → 200" \
@@ -72,6 +77,7 @@ check "POST /v1/vehicles с подделанным токеном → 401" \
   "$(status -X POST "$BASE/v1/vehicles" -H 'Content-Type: application/json' \
       -H 'Authorization: Bearer eyJhbGciOiJub25lIn0.eyJzdWIiOiIxIn0.' \
       -d '{"vin":"L6TZ0010000000001"}')" 401
+check "GET /v1/aggregate-types без токена → 401" "$(status "$BASE/v1/aggregate-types")" 401
 # 404 по HTTP ничего не доказывает — проверяем таблицу маршрутов приложения в контейнере.
 check "отладочный маршрут SMS-кода не подключён вне local" \
   "$(docker exec "$NAME" python -c \

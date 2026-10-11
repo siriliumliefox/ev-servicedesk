@@ -29,24 +29,18 @@ def implemented() -> list[tuple[str, str, dict]]:
 IDS = [op["operationId"] for _, _, op in implemented()]
 
 
-def test_vehicle_service_fully_implemented():
-    vehicle_ops = {
+@pytest.mark.parametrize("tag", ["Auth", "Vehicle", "Aggregates"])
+def test_service_fully_implemented(tag):
+    tagged = {
         op["operationId"]
         for item in contract()["paths"].values()
         for op in item.values()
-        if isinstance(op, dict) and "Vehicle" in op.get("tags", [])
+        if isinstance(op, dict) and tag in op.get("tags", [])
     }
-    assert vehicle_ops <= set(IDS), f"Не реализованы: {sorted(vehicle_ops - set(IDS))}"
+    assert tagged <= set(IDS), f"Не реализованы: {sorted(tagged - set(IDS))}"
 
 
-def test_auth_service_fully_implemented():
-    auth_ops = {
-        op["operationId"]
-        for item in contract()["paths"].values()
-        for op in item.values()
-        if isinstance(op, dict) and "Auth" in op.get("tags", [])
-    }
-    assert auth_ops <= set(IDS), f"Не реализованы: {sorted(auth_ops - set(IDS))}"
+def test_current_user_implemented():
     assert "getCurrentUser" in IDS
 
 
