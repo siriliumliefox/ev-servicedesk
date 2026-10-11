@@ -8,8 +8,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from app.api.pagination import PaginationMeta
 from app.api.schemas.common import no_control_chars
+from app.core.db import BIGINT_MAX
 from app.domain.aggregates import TrafficLight
-from app.domain.vehicles.access import BIGINT_MAX
 
 INT_MAX = 2_147_483_647  # INTEGER в БД
 # Больше — add_months выходит за год 9999 (ValueError → 500); 100 лет хватает любому регламенту.

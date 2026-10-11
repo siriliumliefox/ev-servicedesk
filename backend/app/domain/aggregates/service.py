@@ -6,7 +6,7 @@
 главы 5 передают дату из YAML.
 """
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import date, datetime
 from decimal import Decimal
 
@@ -14,10 +14,11 @@ from sqlalchemy import Select, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
-from app.core.db import constraint_name
+from app.core.db import BIGINT_MAX, constraint_name
 from app.core.errors import ApiError
 from app.core.time import BUSINESS_TZ
 from app.domain.aggregates.status import (
+    AggregateStatusResult,
     Regulation,
     Replacement,
     Thresholds,
@@ -91,8 +92,16 @@ def list_regulations_stmt(vehicle_model_id: int | None, include_archived: bool) 
     return stmt
 
 
-def _aggregate_type_id(db: Session, code: str) -> int | None:
-    return db.scalar(select(AggregateType.id).where(AggregateType.code == code))
+def _aggregate_type(db: Session, code: str) -> AggregateType | None:
+    return db.scalars(select(AggregateType).where(AggregateType.code == code)).one_or_none()
+
+
+def _active_regulations(vehicle_model_id: int) -> Select:
+    """Активные регламенты модели: по одному на агрегат (uq_maintenance_regulation_active)."""
+    return select(MaintenanceRegulation).where(
+        MaintenanceRegulation.vehicle_model_id == vehicle_model_id,
+        MaintenanceRegulation.is_archived.is_(False),
+    )
 
 
 def revise_regulation(
@@ -115,17 +124,15 @@ def revise_regulation(
     )
     if model_id is None:
         raise _field_error("vehicle_model_id", "VEHICLE_MODEL_NOT_FOUND", "Модель не найдена")
-    aggregate_type_id = _aggregate_type_id(db, aggregate_type_code)
-    if aggregate_type_id is None:
+    aggregate_type = _aggregate_type(db, aggregate_type_code)
+    if aggregate_type is None:
         raise _field_error(
             "aggregate_type_code", "AGGREGATE_TYPE_NOT_FOUND", "Неизвестный код агрегата"
         )
 
     active = db.scalars(
-        select(MaintenanceRegulation).where(
-            MaintenanceRegulation.vehicle_model_id == model_id,
-            MaintenanceRegulation.aggregate_type_id == aggregate_type_id,
-            MaintenanceRegulation.is_archived.is_(False),
+        _active_regulations(model_id).where(
+            MaintenanceRegulation.aggregate_type_id == aggregate_type.id
         )
     ).one_or_none()
     if active is not None:
@@ -133,7 +140,7 @@ def revise_regulation(
         db.flush()  # архив раньше вставки: частичный UNIQUE проверяется построчно
     regulation = MaintenanceRegulation(
         vehicle_model_id=model_id,
-        aggregate_type_id=aggregate_type_id,
+        aggregate_type_id=aggregate_type.id,
         interval_km=interval_km,
         interval_months=interval_months,
     )
@@ -146,18 +153,19 @@ def revise_regulation(
 
 def archive_regulation(db: Session, regulation_id: int) -> None:
     """DELETE /maintenance-regulations/{id} (admin): архивная или несуществующая — 404."""
-    regulation = None
-    if 1 <= regulation_id <= access.BIGINT_MAX:
-        regulation = db.scalars(
-            select(MaintenanceRegulation)
-            .where(
-                MaintenanceRegulation.id == regulation_id,
-                MaintenanceRegulation.is_archived.is_(False),
-            )
-            .with_for_update()
-        ).one_or_none()
+    not_found = ApiError(404, "REGULATION_NOT_FOUND", "Активный регламент не найден")
+    if not 1 <= regulation_id <= BIGINT_MAX:
+        raise not_found
+    regulation = db.scalars(
+        select(MaintenanceRegulation)
+        .where(
+            MaintenanceRegulation.id == regulation_id,
+            MaintenanceRegulation.is_archived.is_(False),
+        )
+        .with_for_update()
+    ).one_or_none()
     if regulation is None:
-        raise ApiError(404, "REGULATION_NOT_FOUND", "Активный регламент не найден")
+        raise not_found
     regulation.is_archived = True
     db.commit()
 
@@ -192,48 +200,41 @@ def _thresholds(db: Session) -> Thresholds:
 
 @dataclass(frozen=True)
 class AggregateStatusView:
-    """Ответ `AggregateStatus` контракта."""
+    """Ответ `AggregateStatus` контракта: агрегат, последняя замена и расчёт «светофора»."""
 
     aggregate_type_code: str
     aggregate_type_name: str
-    status: TrafficLight
-    percentage: Decimal | None
     last_replaced_at: date | None
     last_replaced_mileage: int | None
+    status: TrafficLight
+    percentage: Decimal | None
     remaining_km: int | None
     remaining_days: int | None
+
+
+def _replacement(row: VehicleAggregateStatus | None) -> Replacement | None:
+    return None if row is None else Replacement(row.last_replaced_at, row.last_replaced_mileage)
 
 
 def _view(
     aggregate_type: AggregateType,
     regulation: MaintenanceRegulation | None,
-    last: VehicleAggregateStatus | None,
-    vehicle: Vehicle,
+    last: Replacement | None,
+    mileage: int,
     today: date,
     thresholds: Thresholds,
 ) -> AggregateStatusView:
-    replacement = (
-        None if last is None else Replacement(last.last_replaced_at, last.last_replaced_mileage)
-    )
-    result = None
+    rule = None
     if regulation is not None:
-        result = compute_status(
-            Regulation(regulation.interval_km, regulation.interval_months),
-            replacement,
-            vehicle.mileage,
-            today,
-            thresholds,
-        )
+        rule = Regulation(regulation.interval_km, regulation.interval_months)
+    # None от compute_status — агрегат не отслеживается: в списке его нет, а в ответе на
+    # замену без регламента это «Неизвестно» (ADR 0016 п. 2).
+    result = compute_status(rule, last, mileage, today, thresholds) or AggregateStatusResult(
+        TrafficLight.UNKNOWN
+    )
+    last = last or Replacement()
     return AggregateStatusView(
-        aggregate_type_code=aggregate_type.code,
-        aggregate_type_name=aggregate_type.name,
-        # Без регламента выработку не рассчитать — только в ответе на замену (ADR 0016 п. 2).
-        status=result.status if result else TrafficLight.UNKNOWN,
-        percentage=result.percentage if result else None,
-        last_replaced_at=replacement.replaced_at if replacement else None,
-        last_replaced_mileage=replacement.mileage if replacement else None,
-        remaining_km=result.remaining_km if result else None,
-        remaining_days=result.remaining_days if result else None,
+        aggregate_type.code, aggregate_type.name, last.replaced_at, last.mileage, **asdict(result)
     )
 
 
@@ -241,11 +242,7 @@ def statuses_stmt(db: Session, user: AppUser, vehicle_id: int) -> tuple[Vehicle,
     """Авто (видимое `user`, иначе 404) и запрос его активных регламентов по порядку схемы."""
     vehicle = access.get_vehicle(db, user, vehicle_id)
     stmt = (
-        select(MaintenanceRegulation)
-        .where(
-            MaintenanceRegulation.vehicle_model_id == vehicle.vehicle_model_id,
-            MaintenanceRegulation.is_archived.is_(False),
-        )
+        _active_regulations(vehicle.vehicle_model_id)
         .order_by(MaintenanceRegulation.aggregate_type_id)
         .options(*REGULATION_OUT)
     )
@@ -263,7 +260,7 @@ def statuses_for(
     thresholds = _thresholds(db)
     type_ids = [r.aggregate_type_id for r in regulations]
     last = {
-        s.aggregate_type_id: s
+        s.aggregate_type_id: _replacement(s)
         for s in db.scalars(
             select(VehicleAggregateStatus).where(
                 VehicleAggregateStatus.vehicle_id == vehicle.id,
@@ -272,7 +269,9 @@ def statuses_for(
         )
     }
     return [
-        _view(r.aggregate_type, r, last.get(r.aggregate_type_id), vehicle, today, thresholds)
+        _view(
+            r.aggregate_type, r, last.get(r.aggregate_type_id), vehicle.mileage, today, thresholds
+        )
         for r in regulations
     ]
 
@@ -291,13 +290,12 @@ def replace_aggregate(
     """POST /vehicles/{id}/aggregate-statuses/{code}/replace (engineer/admin), ADR 0016 п. 2.
 
     Всегда пишет историю ТО; текущую замену меняет по правилу E5/E6 (`becomes_current`).
-    Строка авто заблокирована `access.for_change` — замены одного авто идут по очереди.
+    Строка авто заблокирована `access.for_change` — замены одного авто идут по очереди;
+    ответ считается в той же транзакции, что и запись.
     """
     today = today or today_in_business_tz()
     vehicle, ticket_id = access.for_change(db, user, vehicle_id)
-    aggregate_type = db.scalars(
-        select(AggregateType).where(AggregateType.code == aggregate_type_code)
-    ).one_or_none()
+    aggregate_type = _aggregate_type(db, aggregate_type_code)
     if aggregate_type is None:
         raise ApiError(404, "AGGREGATE_TYPE_NOT_FOUND", "Неизвестный код агрегата")
     if replaced_at > today:
@@ -321,7 +319,7 @@ def replace_aggregate(
             description=description,
         )
     )
-    last = db.scalars(
+    row = db.scalars(
         select(VehicleAggregateStatus)
         .where(
             VehicleAggregateStatus.vehicle_id == vehicle.id,
@@ -329,20 +327,20 @@ def replace_aggregate(
         )
         .with_for_update()
     ).one_or_none()
-    if last is None:
-        last = VehicleAggregateStatus(vehicle_id=vehicle.id, aggregate_type_id=aggregate_type.id)
-        db.add(last)
-    current = Replacement(last.last_replaced_at, last.last_replaced_mileage)
-    if becomes_current(current, replaced_at):
-        last.last_replaced_at = replaced_at
-        last.last_replaced_mileage = mileage_at_replacement
-    db.commit()
+    if row is None:
+        row = VehicleAggregateStatus(vehicle_id=vehicle.id, aggregate_type_id=aggregate_type.id)
+        db.add(row)
+    if becomes_current(_replacement(row), replaced_at):
+        row.last_replaced_at = replaced_at
+        row.last_replaced_mileage = mileage_at_replacement
 
     regulation = db.scalars(
-        select(MaintenanceRegulation).where(
-            MaintenanceRegulation.vehicle_model_id == vehicle.vehicle_model_id,
-            MaintenanceRegulation.aggregate_type_id == aggregate_type.id,
-            MaintenanceRegulation.is_archived.is_(False),
+        _active_regulations(vehicle.vehicle_model_id).where(
+            MaintenanceRegulation.aggregate_type_id == aggregate_type.id
         )
     ).one_or_none()
-    return _view(aggregate_type, regulation, last, vehicle, today, _thresholds(db))
+    view = _view(
+        aggregate_type, regulation, _replacement(row), vehicle.mileage, today, _thresholds(db)
+    )
+    db.commit()
+    return view

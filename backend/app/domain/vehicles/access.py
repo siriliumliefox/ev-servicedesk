@@ -26,11 +26,10 @@ from sqlalchemy import (
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.base import ExecutableOption
 
+from app.core.db import BIGINT_MAX
 from app.core.errors import ApiError, forbidden
 from app.models import AppUser, Ticket, Vehicle
 from app.models.enums import TicketStatus, UserRole
-
-BIGINT_MAX = 2**63 - 1
 
 
 class Change(NamedTuple):

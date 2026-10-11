@@ -22,8 +22,8 @@ from app.api.schemas.aggregates import (
     MaintenanceRegulationList,
     MaintenanceRegulationOut,
 )
+from app.core.db import BIGINT_MAX
 from app.domain.aggregates import service
-from app.domain.vehicles.access import BIGINT_MAX
 from app.models.enums import UserRole
 
 router = APIRouter(tags=["Aggregates"])
