@@ -1,7 +1,8 @@
 """Общие фикстуры: реальный PostgreSQL 16 (Глава 2), Redis (Глава 10) и S3/MinIO (Глава 13).
 
-URL: TEST_DATABASE_URL или DATABASE_URL с суффиксом `_test` у имени БД. Тесты делают
-`alembic downgrade base`, поэтому работают ТОЛЬКО с БД, чьё имя оканчивается на `_test`.
+URL: TEST_DATABASE_URL или DATABASE_URL с именем БД TEST_DATABASE_NAME (по умолчанию —
+с суффиксом `_test`). Тесты делают `alembic downgrade base`, поэтому работают ТОЛЬКО с БД,
+чьё имя оканчивается на `_test`.
 Без доступной БД тесты пропускаются; в CI REQUIRE_DB=1 превращает пропуск в ошибку.
 То же для Redis (REQUIRE_REDIS=1) и S3 (REQUIRE_S3=1).
 """
@@ -35,7 +36,8 @@ def _test_url() -> URL:
     if raw:
         return make_url(raw)
     base = make_url(settings.database_url)
-    return base.set(database=f"{base.database}_test")
+    # Параллельные прогоны на одном сервере — каждый в своей БД (имя тоже оканчивается на _test).
+    return base.set(database=os.environ.get("TEST_DATABASE_NAME") or f"{base.database}_test")
 
 
 def alembic_config(url: URL) -> Config:
