@@ -4,6 +4,7 @@ C-03, C-04, C-05, E-05, A-01, A-06, A-07; пороги «светофора» �
 """
 
 from datetime import date
+from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     BigInteger,
@@ -17,9 +18,12 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, CreatedAtMixin, IdMixin, TimestampMixin
+
+if TYPE_CHECKING:
+    from app.models.auth import AppUser
 
 
 class AggregateType(IdMixin, TimestampMixin, Base):
@@ -143,3 +147,11 @@ class MaintenanceRecord(IdMixin, CreatedAtMixin, Base):
     performed_at: Mapped[date] = mapped_column(Date, nullable=False)
     mileage_at_service: Mapped[int] = mapped_column(Integer, nullable=False)
     description: Mapped[str | None] = mapped_column(String(255))
+
+    # Связи только явной загрузкой (selectinload), ленивая подгрузка — ошибка (ADR 0015).
+    aggregate_type: Mapped[AggregateType | None] = relationship(lazy="raise")
+    performed_by: Mapped["AppUser | None"] = relationship(lazy="raise")
+
+    @property
+    def aggregate_type_code(self) -> str | None:
+        return self.aggregate_type.code if self.aggregate_type is not None else None

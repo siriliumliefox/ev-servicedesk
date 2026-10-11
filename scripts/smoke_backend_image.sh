@@ -48,17 +48,12 @@ done
 
 check "/health отвечает, окружение staging" \
   "$(curl -fsS "$BASE/health" | python3 -c 'import json,sys; print(json.load(sys.stdin)["environment"])')" staging
-check "Swagger: все операции Auth Service и /me" \
+check "Swagger: все операции Auth Service, /me и Vehicle Service" \
   "$(curl -fsS "$BASE/openapi.json" | python3 -c '
 import json, sys
 need = {"requestPhoneCode", "verifyPhoneCode", "refreshToken", "logout", "withdrawPdConsent",
-        "staffLogin", "linkTelegram", "getCurrentUser"}
-ops = {o["operationId"] for p in json.load(sys.stdin)["paths"].values() for o in p.values()}
-print("ok" if need <= ops else sorted(need - ops))')" ok
-check "Swagger: все операции Vehicle Service" \
-  "$(curl -fsS "$BASE/openapi.json" | python3 -c '
-import json, sys
-need = {"searchVehicleModels", "listVehicles", "createVehicle", "getVehicle", "deleteVehicle",
+        "staffLogin", "linkTelegram", "getCurrentUser",
+        "searchVehicleModels", "listVehicles", "createVehicle", "getVehicle", "deleteVehicle",
         "updateVehicleMileage", "correctVehicleMileage", "listMaintenanceRecords",
         "createMaintenanceRecord"}
 ops = {o["operationId"] for p in json.load(sys.stdin)["paths"].values() for o in p.values()}

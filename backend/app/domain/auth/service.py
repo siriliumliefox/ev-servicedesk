@@ -8,10 +8,11 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core import rate_limit
 from app.core.config import Settings
 from app.core.errors import ApiError, rate_limited, unauthorized
 from app.core.security import verify_password
-from app.domain.auth import codes, rate_limit, tokens
+from app.domain.auth import codes, tokens
 from app.models import AppUser, PdConsent
 from app.models.enums import UserRole
 
@@ -106,6 +107,7 @@ def staff_login(
     # Успешный вход возвращает попытку — счётчики считают только неудачи.
     window = 15 * 60
     phone_key, ip_key = f"staff-fail:{phone}", f"staff-fail-ip:{client_ip}"
+    # Оба счётчика растут до проверки любого из них, поэтому не `rate_limit.enforce`.
     by_phone = rate_limit.hit(redis, phone_key, window)
     by_ip = rate_limit.hit(redis, ip_key, window)
     if by_phone.exceeded(settings.staff_login_failures_per_phone_15min):

@@ -3,33 +3,38 @@
 Ограничения БД (vehicle_guard, триггеры журнала пробега, uq_vehicle_vin_active) остаются
 последней линией защиты; здесь те же правила проверяются заранее, а нарушение ограничения
 в гонке переводится в объявленный контрактом ответ, а не в 500.
+
+Сценарии возвращают объекты со связями, загруженными для ответа (`VEHICLE_OUT`,
+`RECORD_OUT`): ленивая подгрузка в моделях запрещена (ADR 0015).
 """
 
 from datetime import UTC, date, datetime
-from zoneinfo import ZoneInfo
 
 from redis import Redis
 from sqlalchemy import Select, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
+from app.core import rate_limit
 from app.core.config import Settings
-from app.core.errors import ApiError, rate_limited
-from app.domain.auth import rate_limit
+from app.core.db import constraint_name
+from app.core.errors import ApiError
+from app.core.time import BUSINESS_TZ
 from app.domain.vehicles import access
-from app.domain.vehicles.access import Intent
 from app.domain.vehicles.vin import VinDecoder
 from app.models import AggregateType, AppUser, MaintenanceRecord, Vehicle, VehicleModel
-from app.models.enums import UserRole
 from app.models.vehicles import VehicleMileageCorrection
 
-# Дата работ — по времени сервиса (Гомель), иначе после полуночи по Минску «сегодня» по UTC
-# ещё вчера, а запись сегодняшней работы отклонялась бы как будущая.
-BUSINESS_TZ = ZoneInfo("Europe/Minsk")
+VEHICLE_OUT = (selectinload(Vehicle.vehicle_model),)
+RECORD_OUT = (
+    selectinload(MaintenanceRecord.aggregate_type),
+    selectinload(MaintenanceRecord.performed_by),
+)
 
 
-def _constraint(exc: IntegrityError) -> str | None:
-    return getattr(getattr(exc.orig, "diag", None), "constraint_name", None)
+def _reload_vehicle(db: Session, vehicle_id: int) -> Vehicle:
+    """Состояние после commit (пробег и updated_at меняют триггеры) вместе с моделью."""
+    return db.get_one(Vehicle, vehicle_id, options=VEHICLE_OUT, populate_existing=True)
 
 
 # ---------- Модели ----------
@@ -43,11 +48,9 @@ def search_models_stmt(search: str | None) -> Select:
     stmt = select(VehicleModel).order_by(VehicleModel.brand, VehicleModel.model, VehicleModel.trim)
     if search and search.strip():
         pattern = f"%{_escape_like(search.strip())}%"
-        stmt = stmt.where(
-            VehicleModel.brand.ilike(pattern, escape="\\")
-            | VehicleModel.model.ilike(pattern, escape="\\")
-            | (VehicleModel.brand + " " + VehicleModel.model).ilike(pattern, escape="\\")
-        )
+        # Подстрока марки или модели — тоже подстрока «марка модель».
+        brand_model = VehicleModel.brand + " " + VehicleModel.model
+        stmt = stmt.where(brand_model.ilike(pattern, escape="\\"))
     return stmt
 
 
@@ -59,6 +62,7 @@ def list_vehicles_stmt(user: AppUser) -> Select:
         select(Vehicle)
         .where(Vehicle.user_id == user.id, Vehicle.deleted_at.is_(None))
         .order_by(Vehicle.created_at, Vehicle.id)
+        .options(*VEHICLE_OUT)
     )
 
 
@@ -120,9 +124,13 @@ def create_vehicle(
     vehicle_model_id: int | None,
 ) -> Vehicle:
     """POST /vehicles. Своё удалённое авто с тем же VIN восстанавливается с историей."""
-    attempt = rate_limit.hit(redis, f"vehicle-create:{user.id}", 3600)
-    if attempt.exceeded(settings.vehicle_create_per_user_hour):
-        raise rate_limited(attempt.retry_after, "Слишком много попыток добавить автомобиль")
+    rate_limit.enforce(
+        redis,
+        f"vehicle-create:{user.id}",
+        3600,
+        settings.vehicle_create_per_user_hour,
+        "Слишком много попыток добавить автомобиль",
+    )
 
     if (conflict := _vin_conflict(db, user, vin)) is not None:
         raise conflict
@@ -146,7 +154,7 @@ def create_vehicle(
         db.flush()
     except IntegrityError as exc:
         db.rollback()
-        if _constraint(exc) != "uq_vehicle_vin_active":
+        if constraint_name(exc) != "uq_vehicle_vin_active":
             raise
         # Параллельное добавление того же VIN: проигравший получает тот же 409.
         conflict = _vin_conflict(db, user, vin)
@@ -154,15 +162,17 @@ def create_vehicle(
             raise
         raise conflict from exc
     db.commit()
-    db.refresh(vehicle)
-    return vehicle
+    return _reload_vehicle(db, vehicle.id)
+
+
+def get_vehicle(db: Session, user: AppUser, vehicle_id: int) -> Vehicle:
+    """GET /vehicles/{id}."""
+    return access.get_vehicle(db, user, vehicle_id, *VEHICLE_OUT)
 
 
 def delete_vehicle(db: Session, user: AppUser, vehicle_id: int) -> None:
     """DELETE /vehicles/{id}: soft-delete; тикеты и история работ остаются (ADR 0003)."""
-    vehicle = access.get_vehicle(db, user, vehicle_id, Intent.CHANGE, lock=True)
-    if vehicle.deleted_at is not None:
-        raise access.not_found()
+    vehicle = access.for_change(db, user, vehicle_id).vehicle
     vehicle.deleted_at = datetime.now(UTC)
     db.commit()
 
@@ -172,7 +182,7 @@ def delete_vehicle(db: Session, user: AppUser, vehicle_id: int) -> None:
 
 def update_mileage(db: Session, user: AppUser, vehicle_id: int, mileage: int) -> Vehicle:
     """PATCH /vehicles/{id}/mileage: только вверх; равное значение — без изменений."""
-    vehicle = access.get_vehicle(db, user, vehicle_id, Intent.CHANGE, lock=True)
+    vehicle = access.for_change(db, user, vehicle_id).vehicle
     if mileage < vehicle.mileage:
         raise ApiError(
             409,
@@ -182,8 +192,7 @@ def update_mileage(db: Session, user: AppUser, vehicle_id: int, mileage: int) ->
         )
     vehicle.mileage = mileage
     db.commit()
-    db.refresh(vehicle)
-    return vehicle
+    return _reload_vehicle(db, vehicle.id)
 
 
 def correct_mileage(
@@ -195,7 +204,7 @@ def correct_mileage(
     reason: str,
 ) -> Vehicle:
     """POST /vehicles/{id}/mileage-corrections: уменьшение пробега через журнал (ADR 0006)."""
-    vehicle = access.get_vehicle(db, user, vehicle_id, Intent.CHANGE, lock=True)
+    vehicle = access.for_change(db, user, vehicle_id).vehicle
     if expected_current_mileage != vehicle.mileage:
         raise ApiError(
             409,
@@ -223,23 +232,23 @@ def correct_mileage(
         db.flush()
     except IntegrityError as exc:
         db.rollback()
-        if _constraint(exc) == "mileage_correction_stale":
+        if constraint_name(exc) == "mileage_correction_stale":
             raise ApiError(409, "MILEAGE_CORRECTION_STALE", "Пробег изменился") from exc
         raise
     db.commit()
-    db.refresh(vehicle)  # пробег поменял триггер AFTER INSERT
-    return vehicle
+    return _reload_vehicle(db, vehicle.id)  # пробег поменял триггер AFTER INSERT
 
 
 # ---------- История работ ----------
 
 
 def list_maintenance_stmt(db: Session, user: AppUser, vehicle_id: int) -> Select:
-    access.get_vehicle(db, user, vehicle_id, Intent.VIEW)
+    access.get_vehicle(db, user, vehicle_id)
     return (
         select(MaintenanceRecord)
         .where(MaintenanceRecord.vehicle_id == vehicle_id)
         .order_by(MaintenanceRecord.performed_at.desc(), MaintenanceRecord.id.desc())
+        .options(*RECORD_OUT)
     )
 
 
@@ -260,9 +269,10 @@ def create_maintenance_record(
     """POST /vehicles/{id}/maintenance-records (engineer/admin).
 
     Пробег на момент работы выше текущего поднимает пробег авто; записи задним числом
-    (ниже текущего) допустимы. Сброс счётчика агрегата — Глава 12.
+    (ниже текущего) допустимы. Тикет-основание даёт `access` (у админа — нет).
+    Сброс счётчика агрегата — Глава 12.
     """
-    vehicle = access.get_vehicle(db, user, vehicle_id, Intent.CHANGE, lock=True)
+    vehicle, ticket_id = access.for_change(db, user, vehicle_id)
     if performed_at > datetime.now(BUSINESS_TZ).date():
         raise _field_error("performed_at", "PERFORMED_AT_IN_FUTURE", "Дата работы в будущем")
 
@@ -280,10 +290,6 @@ def create_maintenance_record(
             "description", "MAINTENANCE_SUBJECT_REQUIRED", "Укажите агрегат или описание работы"
         )
 
-    ticket_id = None
-    if user.role is UserRole.ENGINEER:
-        ticket_id = access.engineer_active_ticket_id(db, user.id, vehicle.id)
-
     if mileage_at_service > vehicle.mileage:
         vehicle.mileage = mileage_at_service
     record = MaintenanceRecord(
@@ -297,5 +303,4 @@ def create_maintenance_record(
     )
     db.add(record)
     db.commit()
-    db.refresh(record)
-    return record
+    return db.get_one(MaintenanceRecord, record.id, options=RECORD_OUT, populate_existing=True)

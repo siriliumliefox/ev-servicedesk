@@ -1,5 +1,6 @@
 """Безопасность: запросы без токена / с негодным / с чужим токеном → 401/403 (Глава 10)."""
 
+import re
 from datetime import UTC, datetime, timedelta
 
 import jwt
@@ -37,7 +38,7 @@ def call(client, route: APIRoute, headers: dict | None = None):
     kwargs = {"headers": headers or {}}
     if route.operation_id in BODIES:
         kwargs["json"] = BODIES[route.operation_id]
-    return client.request(method, route.path.replace("{vehicleId}", "1"), **kwargs)
+    return client.request(method, re.sub(r"\{\w+\}", "1", route.path), **kwargs)
 
 
 def test_protected_routes_exist(app):

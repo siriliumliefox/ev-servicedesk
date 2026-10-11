@@ -3,7 +3,7 @@
 from fastapi import APIRouter
 
 from app.api.deps import ALL_ROLES, CurrentUser, rbac
-from app.api.schemas import UserPublic
+from app.api.schemas.auth import UserPublic
 
 router = APIRouter(tags=["Users"])
 
