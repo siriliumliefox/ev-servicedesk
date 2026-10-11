@@ -387,6 +387,8 @@ def test_deleted_vehicle_is_read_only(client, as_client, as_staff, make_ticket):
         r = client.request(method, path, json=body, headers=headers)
         assert r.status_code == status, (operation_id, r.text)
         assert_contract(r, operation_id)
+        if status == 403:
+            assert r.json()["error"]["message"] == "Автомобиль удалён — изменения недоступны"
 
 
 def test_change_check_is_one_query(as_client, client, as_staff, make_ticket, db):

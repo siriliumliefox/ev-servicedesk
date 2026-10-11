@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: EV-ServiceDesk API
-  version: "1.3.0"
+  version: "1.3.1"
   description: >
     API дипломного проекта «EV-ServiceDesk» (ООО «ЕТСавтоГомель»).
     Контракты сервисов: Auth, Vehicle, Aggregates & Maintenance, Tickets,
@@ -364,6 +364,8 @@ paths:
       description: >
         Помечает автомобиль неактивным, не удаляя связанные записи (тикеты, история работ).
         client — только своё авто; уже удалённое — 404. Уточнено в 1.3.0.
+        Повторное удаление: client — 404 (удалённое ему не видно), admin — 403 «Автомобиль
+        удалён — изменения недоступны». Уточнено в 1.3.1 (ADR 0014).
       x-required-roles: [client, admin]
       x-rbac-action: ["Удаление авто (soft-delete)"]
       responses:
@@ -390,6 +392,8 @@ paths:
         Object-level (RBAC-01): client — только свой автомобиль; engineer — только
         автомобиль из назначенного ему тикета не в статусе resolved; admin — любой. Иначе 403
         (авто видно, менять нельзя) или 404 (авто не видно).
+        Удалённое авто не изменяется: client — 404 (удалённое ему не видно), engineer/admin — 403
+        «Автомобиль удалён — изменения недоступны». Уточнено в 1.3.1 (ADR 0014).
         409 MILEAGE_DECREASE — новый пробег меньше текущего (details.current_mileage).
       requestBody:
         required: true
@@ -424,7 +428,8 @@ paths:
         журнале VehicleMileageCorrection с причиной и автором; пробег меняется атомарно
         триггером БД. 409 MILEAGE_CORRECTION_STALE — expected_current_mileage не совпал с
         текущим; 409 MILEAGE_NOT_DECREASED — mileage не меньше текущего (для увеличения —
-        updateVehicleMileage).
+        updateVehicleMileage). Удалённое авто не изменяется — 403 «Автомобиль удалён —
+        изменения недоступны». Уточнено в 1.3.1 (ADR 0014).
       requestBody:
         required: true
         content:
@@ -479,6 +484,8 @@ paths:
         поднимает пробег авто; записи задним числом допустимы. 422: PERFORMED_AT_IN_FUTURE
         (дата позже сегодняшней по Europe/Minsk), AGGREGATE_TYPE_NOT_FOUND,
         MAINTENANCE_SUBJECT_REQUIRED (нет ни агрегата, ни описания). Уточнено в 1.3.0.
+        Удалённое авто не изменяется — 403 «Автомобиль удалён — изменения недоступны».
+        Уточнено в 1.3.1 (ADR 0014).
       requestBody:
         required: true
         content:

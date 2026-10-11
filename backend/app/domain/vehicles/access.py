@@ -78,6 +78,14 @@ def _active_ticket_id(engineer_id: int) -> ScalarSelect[int]:
     )
 
 
+def _change_basis(user: AppUser) -> tuple[ColumnElement[bool], ColumnElement[int | None]]:
+    """(право изменить видимое авто, тикет-основание): у инженера — свой тикет в работе."""
+    if user.role is UserRole.ENGINEER:
+        ticket = _active_ticket_id(user.id)
+        return ticket.is_not(None), ticket
+    return true(), null()
+
+
 def get_vehicle(db: Session, user: AppUser, vehicle_id: int, *options: ExecutableOption) -> Vehicle:
     """Авто, видимое `user`, иначе 404. `options` — загрузка связей для ответа."""
     _check_id(vehicle_id)
@@ -95,14 +103,13 @@ def for_change(db: Session, user: AppUser, vehicle_id: int) -> Change:
     Успешный путь — один запрос; 404 и 403 различаются только при отказе.
     """
     _check_id(vehicle_id)
-    is_engineer = user.role is UserRole.ENGINEER
-    ticket_id = _active_ticket_id(user.id) if is_engineer else null()
+    allowed, ticket_id = _change_basis(user)
     row = db.execute(
         select(Vehicle, ticket_id)
-        .where(Vehicle.id == vehicle_id, Vehicle.deleted_at.is_(None), _visible(user))
+        .where(Vehicle.id == vehicle_id, Vehicle.deleted_at.is_(None), _visible(user), allowed)
         .with_for_update(of=Vehicle)
     ).one_or_none()
-    if row is None or (is_engineer and row[1] is None):
+    if row is None:
         raise _change_denied(db, user, vehicle_id)
     return Change(row[0], row[1])
 
