@@ -40,6 +40,9 @@ function publishedNotice(article: KnowledgeArticle, models: VehicleModel[]): str
   return `Статья опубликована в базе знаний — ${who} увидят её в приложении: ${where}.`
 }
 
+/** Итог публикации или снятия с публикации и состояние статьи, о котором он сообщает. */
+type Notice = { text: string; published: boolean }
+
 type Tab = 'text' | 'tree'
 const TABS: Tab[] = ['text', 'tree']
 
@@ -58,8 +61,10 @@ export function ArticleEditor({
   /**
    * Итог публикации — здесь, а не в форме: после публикации форма монтируется заново (key). Относится только к
    * этой статье: при смене articleId редактор монтируется заново (key в App), и сообщение пропадает.
+   * Показывается только вместе с перечитанной статьёй: пока ответ не пришёл, на экране прежняя форма
+   * («Черновик», «Опубликовать») — итог рядом с ней противоречил бы бейджу и пропал бы с её перемонтированием.
    */
-  const [notice, setNotice] = useState<string | null>(null)
+  const [notice, setNotice] = useState<Notice | null>(null)
   const article = useAsync(
     () => (articleId === null ? Promise.resolve(null) : repo.getKnowledgeArticle(articleId)),
     [repo, articleId, version],
@@ -80,7 +85,7 @@ export function ArticleEditor({
         <ArticleForm
           key={`${articleId}-${article.data?.version}-${article.data?.is_published}`}
           article={article.data}
-          notice={notice}
+          notice={notice && notice.published === article.data?.is_published ? notice.text : null}
           onSaved={(id, next) => {
             setNotice(next ?? null)
             if (id === articleId) setVersion((v) => v + 1)
@@ -99,8 +104,8 @@ function ArticleForm({
 }: {
   article: KnowledgeArticle | null
   notice: string | null
-  /** next — сообщение об итоге действия (публикация, снятие с публикации). */
-  onSaved: (id: number, next?: string) => void
+  /** next — итог действия (публикация, снятие с публикации). */
+  onSaved: (id: number, next?: Notice) => void
 }) {
   const { repo, models } = useAdmin()
   const isNew = article === null
@@ -126,7 +131,7 @@ function ArticleForm({
   )
   const tabsId = useId()
 
-  const run = async (action: () => Promise<number>, next?: string) => {
+  const run = async (action: () => Promise<number>, next?: Notice) => {
     setBusy(true)
     setError(null)
     try {
@@ -164,7 +169,9 @@ function ArticleForm({
         }
         return article!.id
       },
-      article!.is_published ? 'Статья снята с публикации — клиенты её больше не видят.' : publishedNotice(article!, models),
+      article!.is_published
+        ? { text: 'Статья снята с публикации — клиенты её больше не видят.', published: false }
+        : { text: publishedNotice(article!, models), published: true },
     )
 
   /** Вкладки — по шаблону WAI-ARIA Tabs: стрелки, Home/End. */

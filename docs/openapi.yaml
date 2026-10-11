@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: EV-ServiceDesk API
-  version: "1.1.0"
+  version: "1.2.0"
   description: >
     API дипломного проекта «EV-ServiceDesk» (ООО «ЕТСавтоГомель»).
     Контракты сервисов: Auth, Vehicle, Aggregates & Maintenance, Tickets,
@@ -52,7 +52,11 @@ paths:
       tags: [Auth]
       summary: Запросить SMS-код для входа/регистрации по телефону
       operationId: requestPhoneCode
-      description: Отправляет SMS с одноразовым кодом на указанный номер.
+      description: >
+        Отправляет SMS с одноразовым кодом на указанный номер (код 4–8 цифр, по умолчанию 4;
+        TTL — ttl_seconds). 429 RATE_LIMITED — пауза между запросами и лимиты на номер и
+        адрес (заголовок Retry-After); 422 PHONE_NOT_SUPPORTED — SMS на номер не доставляется;
+        503 SMS_UNAVAILABLE (через default) — провайдер недоступен. Коды ошибок уточнены в 1.2.0.
       security: []
       requestBody:
         required: true
@@ -81,6 +85,13 @@ paths:
       description: >
         Проверяет код; создаёт пользователя при первом обращении.
         422 PD_CONSENT_REQUIRED — нет действующего согласия на обработку ПД и не передан pd_policy_version (99-З, ст. 5); либо иная ошибка валидации.
+        Код не расходуется при 422 — запрос можно повторить с согласием.
+        Сервер принимает code только из 4–8 цифр; pd_policy_version обрезается по краям,
+        пустое значение равно отсутствию согласия, управляющие символы — 422.
+        400: CODE_INVALID (details.attempts_left), CODE_EXPIRED (истёк, не запрашивался или
+        уже использован), STAFF_PASSWORD_LOGIN (сотрудник — вход по паролю), ACCOUNT_DISABLED.
+        429 RATE_LIMITED — исчерпаны попытки ввода кода или суточный лимит, заголовок Retry-After.
+        Коды ошибок уточнены в 1.2.0.
       security: []
       requestBody:
         required: true
@@ -109,7 +120,11 @@ paths:
       tags: [Auth]
       summary: Обновить access-токен по refresh-токену
       operationId: refreshToken
-      description: Выдаёт новую пару токенов взамен истекающего access-токена.
+      description: >
+        Выдаёт новую пару токенов взамен истекающего access-токена; предъявленный
+        refresh-токен отзывается (ротация). Повторное предъявление уже использованного
+        токена отзывает все сессии пользователя (401). Сервер принимает refresh_token
+        длиной до 512 символов. Уточнено в 1.2.0.
       security: []
       requestBody:
         required: true
@@ -174,6 +189,8 @@ paths:
         Отдельный флоу от клиентского SMS-логина. Учётные записи engineer/admin
         создаются администратором вручную (Глава 22), клиент этим эндпоинтом
         не пользуется.
+        429 — превышен лимит неудачных попыток входа по номеру или адресу (N-06),
+        заголовок Retry-After. Добавлено в 1.2.0.
       security: []
       requestBody:
         required: true
@@ -194,13 +211,17 @@ paths:
                       user: { $ref: '#/components/schemas/UserPublic' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '422': { $ref: '#/components/responses/ValidationError' }
+        '429': { $ref: '#/components/responses/RateLimited' }
 
   /auth/telegram/link:
     post:
       tags: [Auth]
       summary: Привязать Telegram к текущему аккаунту
       operationId: linkTelegram
-      description: Сохраняет telegram_id для уже авторизованного пользователя.
+      description: >
+        Сохраняет telegram_id для уже авторизованного пользователя. Сервер принимает
+        telegram_id длиной до 50 символов без управляющих символов (иначе 422);
+        409 TELEGRAM_ALREADY_LINKED — привязан к другому аккаунту. Уточнено в 1.2.0.
       x-required-roles: [client]
       x-rbac-action: ["Регистрация/авторизация (свой аккаунт)"]
       requestBody:
@@ -2362,6 +2383,10 @@ components:
           schema: { $ref: '#/components/schemas/Error' }
     RateLimited:
       description: Превышен лимит запросов (напр. попытки SMS-кода)
+      headers:
+        Retry-After:
+          description: Секунд до повторной попытки (добавлено в 1.2.0)
+          schema: { type: integer, minimum: 1 }
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
