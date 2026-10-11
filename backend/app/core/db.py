@@ -1,6 +1,7 @@
 """Сессия SQLAlchemy для запросов API. Схема — только через Alembic (Глава 2)."""
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager
 from functools import lru_cache
 
 from sqlalchemy import Engine, create_engine
@@ -27,6 +28,18 @@ def get_db() -> Iterator[Session]:
     """Зависимость FastAPI: сессия на запрос; в тестах подменяется."""
     with _session_factory()() as session:
         yield session
+
+
+# Фабрика коротких сессий: `with scope() as db: ...`.
+SessionScope = Callable[[], AbstractContextManager[Session]]
+
+
+def get_session_scope() -> SessionScope:
+    """Зависимость долгоживущих подключений (WebSocket, ADR 0017 п. 9): сессия — на каждое
+    обращение к БД, а не на всё подключение, чтобы оно не держало соединение пула.
+    В тестах подменяется.
+    """
+    return _session_factory()
 
 
 def constraint_name(exc: IntegrityError) -> str | None:

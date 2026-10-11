@@ -30,6 +30,11 @@ BODIES = {
     },
     "replaceAggregateStatus": {"replaced_at": "2026-01-01", "mileage_at_replacement": 0},
     "updateAggregateStatusThresholds": {"yellow_from_percent": 70, "red_above_percent": 100},
+    "createPresignedUpload": {"file_name": "photo.jpg", "file_type": "photo"},
+    "createTicket": {"vehicle_id": 1, "category": "sim", "description": "x"},
+    "updateTicketStatus": {"status": "resolved"},
+    "assignTicket": {"assigned_engineer_id": None},
+    "createTicketMessage": {"body": "x"},
 }
 
 
@@ -75,6 +80,16 @@ def test_protected_routes_exist(app):
         "replaceAggregateStatus",
         "getAggregateStatusThresholds",
         "updateAggregateStatusThresholds",
+        # Tickets Service и Uploads (Глава 13)
+        "createPresignedUpload",
+        "listTickets",
+        "createTicket",
+        "getTicket",
+        "updateTicketStatus",
+        "claimTicket",
+        "assignTicket",
+        "listTicketMessages",
+        "createTicketMessage",
     }
 
 
@@ -193,11 +208,21 @@ STRONG = "s" * 40
     "overrides",
     [
         {"environment": "test"},
-        {"environment": "staging", "jwt_secret": STRONG, "sms_code_secret": STRONG},
+        # S3-ключи обязательны вне local/test (ADR 0017 п. 11); бакет create_app не проверяет —
+        # проверка в lifespan при старте.
+        {
+            "environment": "staging",
+            "jwt_secret": STRONG,
+            "sms_code_secret": STRONG,
+            "s3_access_key": "k" * 20,
+            "s3_secret_key": STRONG,
+        },
         {
             "environment": "production",
             "jwt_secret": STRONG,
             "sms_code_secret": STRONG,
+            "s3_access_key": "k" * 20,
+            "s3_secret_key": STRONG,
             "sms_provider": "a1",
             "sms_provider_user": "375290000000",
             "sms_provider_api_key": "k",

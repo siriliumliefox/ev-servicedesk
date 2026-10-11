@@ -24,6 +24,7 @@ import type {
   Notification,
   NotificationCreateRequest,
   ProblemModelStats,
+  Ticket,
   TicketCategory,
   TicketDetail,
   TicketList,
@@ -32,6 +33,7 @@ import type {
   TicketResolutionStats,
   TicketStatus,
   UserPublic,
+  Vehicle,
   VehicleModel,
 } from "../data/models.ts";
 import { TICKET_CATEGORIES } from "../data/models.ts";
@@ -84,6 +86,9 @@ const TRANSITIONS: Record<TicketStatus, readonly TicketStatus[]> = {
 export function allowedTransitions(status: TicketStatus): readonly TicketStatus[] {
   return TRANSITIONS[status];
 }
+
+/** `Ticket.summary` — первые 140 символов описания (OpenAPI 1.4.0, ADR 0017). */
+const SUMMARY_LENGTH = 140;
 
 const clone = <T>(value: T): T => structuredClone(value);
 
@@ -564,11 +569,13 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
     return t;
   }
 
-  private toTicket(t: TicketRecord) {
+  private toTicket(t: TicketRecord): Ticket {
     const overdue = t.status !== "resolved" && this.clock().getTime() > Date.parse(t.sla_due_at);
     return {
       id: t.seed.id,
       vehicle_id: t.seed.vehicle_id,
+      vehicle_model: this.vehicle(t).vehicle_model,
+      summary: t.seed.description.slice(0, SUMMARY_LENGTH),
       category: t.seed.category,
       status: t.status,
       assigned_engineer_id: t.assigned_engineer_id,
@@ -580,13 +587,19 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
   }
 
   private toDetail(t: TicketRecord): TicketDetail {
-    const v = VEHICLES.find((x) => x.vehicle.id === t.seed.vehicle_id)!;
+    const vehicle = this.vehicle(t);
     return {
       ...this.toTicket(t),
       description: t.seed.description,
+      // Снимок прошивки при создании (N-09); в прототипе прошивка авто не меняется — совпадает с текущей.
+      firmware_version_at_creation: vehicle.current_firmware_version ?? null,
       attachments: [],
-      vehicle_context: { vehicle: v.vehicle, aggregate_statuses: AGGREGATE_STATUSES[v.vehicle.id] ?? [] },
+      vehicle_context: { vehicle, aggregate_statuses: AGGREGATE_STATUSES[vehicle.id] ?? [] },
     };
+  }
+
+  private vehicle(t: TicketRecord): Vehicle {
+    return VEHICLES.find((x) => x.vehicle.id === t.seed.vehicle_id)!.vehicle;
   }
 
   private article(articleId: number): KnowledgeArticle {

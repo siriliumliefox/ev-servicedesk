@@ -7,6 +7,8 @@ const at = (ms: number) => new Date(NOW.getTime() + ms).toISOString();
 
 const ticket = (patch: Partial<Ticket>): Ticket => ({
   id: 1,
+  vehicle_model: { brand: "Zeekr", model: "001", trim: "You" },
+  summary: "Нет мобильного интернета",
   category: "sim",
   status: "new",
   sla_due_at: at(2 * 3600_000),

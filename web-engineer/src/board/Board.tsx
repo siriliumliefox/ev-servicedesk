@@ -1,5 +1,5 @@
 // Канбан-доска тикетов (ТЗ 4.3, E-01): колонки по статусу, фильтры SLA / категория / исполнитель,
-// в колонке — сначала самый ранний срок SLA. Фильтрация — на клиенте по полной выборке `listTickets`
+// в колонке — сначала самый ранний срок SLA. Карточка — модель авто и начало описания (OpenAPI 1.4.0). Фильтрация — на клиенте по полной выборке `listTickets`
 // (в прототипе — одна страница; при пагинации в главе 21 status/category/overdue уйдут в запрос).
 import { useMemo, useState } from 'react'
 import {
@@ -168,6 +168,12 @@ function TicketCard({
       <span className="flex flex-wrap items-baseline gap-x-2">
         <span className="text-label tabular-nums">#{ticket.id}</span>
         <span className="text-body text-fg">{TICKET_CATEGORY_LABELS[ticket.category]}</span>
+      </span>
+      <span className="grid gap-0.5">
+        <span className="text-caption text-fg-muted">
+          {ticket.vehicle_model.brand} {ticket.vehicle_model.model}
+        </span>
+        <span className="line-clamp-2 text-body-sm text-fg">{ticket.summary}</span>
       </span>
       <span>
         <SlaBadge ticket={ticket} now={now} />

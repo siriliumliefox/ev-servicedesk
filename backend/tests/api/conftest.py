@@ -5,7 +5,9 @@ SAVEPOINT (join_transaction_mode="create_savepoint").
 """
 
 import re
-from collections.abc import Callable, Iterator
+import threading
+from collections.abc import AsyncIterator, Callable, Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from functools import cache
 from pathlib import Path
@@ -18,18 +20,21 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from openapi_schema_validator import OAS30Validator
 from redis import Redis
+from redis.asyncio import Redis as AsyncRedis
 from sqlalchemy import Engine
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_sms_provider
 from app.core.config import Settings, get_settings
-from app.core.db import get_db
-from app.core.redis import get_redis
+from app.core.db import get_db, get_session_scope
+from app.core.redis import get_pubsub_redis, get_redis
 from app.core.security import hash_password
+from app.core.storage import FakeObjectStorage, ObjectStorage, get_storage
 from app.domain.auth.sms import FakeSmsProvider
 from app.main import create_app
 from app.models import AppUser, PdConsent, Ticket
 from app.models.enums import TicketCategory, TicketStatus, UserRole
+from tests.conftest import _test_redis_url
 
 DOCS = Path(__file__).resolve().parents[3] / "docs"
 API = "/v1"
@@ -71,12 +76,50 @@ def sms() -> FakeSmsProvider:
 
 
 @pytest.fixture
-def app(settings: Settings, db: Session, real_redis: Redis, sms: FakeSmsProvider) -> FastAPI:
+def storage(fake_storage: FakeObjectStorage) -> ObjectStorage:
+    """Хранилище вложений API-тестов: в памяти; тест с MinIO подменяет фикстуру на s3_storage."""
+    return fake_storage
+
+
+async def _pubsub_redis() -> AsyncIterator[AsyncRedis]:
+    """Подписки WebSocket — на тестовом Redis (каналы pub/sub не зависят от номера БД)."""
+    client = AsyncRedis.from_url(_test_redis_url(), decode_responses=True)
+    try:
+        yield client
+    finally:
+        await client.aclose()
+
+
+@pytest.fixture
+def app(
+    settings: Settings,
+    db: Session,
+    real_redis: Redis,
+    sms: FakeSmsProvider,
+    storage: ObjectStorage,
+) -> FastAPI:
     application = create_app(settings)
+    # Одна сессия теста на одном соединении: запросы REST и обработчики WebSocket (у каждого
+    # подключения — свой поток) обращаются к ней по очереди. В приложении у каждого запроса
+    # и каждого обращения WebSocket — своя сессия.
+    lock = threading.Lock()
+
+    def shared_db() -> Iterator[Session]:
+        with lock:
+            yield db
+
+    @contextmanager
+    def session_scope() -> Iterator[Session]:
+        with lock:
+            yield db
+
     application.dependency_overrides[get_settings] = lambda: settings
-    application.dependency_overrides[get_db] = lambda: db
+    application.dependency_overrides[get_db] = shared_db
+    application.dependency_overrides[get_session_scope] = lambda: session_scope
     application.dependency_overrides[get_redis] = lambda: real_redis
+    application.dependency_overrides[get_pubsub_redis] = _pubsub_redis
     application.dependency_overrides[get_sms_provider] = lambda: sms
+    application.dependency_overrides[get_storage] = lambda: storage
     return application
 
 

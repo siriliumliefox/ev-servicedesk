@@ -8,6 +8,7 @@
   ],
   "scripts": {
     "lint:api": "spectral lint docs/openapi.yaml --fail-severity=warn",
+    "lint:asyncapi": "spectral lint docs/asyncapi.yaml --ruleset .spectral-asyncapi.yaml --fail-severity=warn",
     "gen:api": "openapi-typescript docs/openapi.yaml -o web-shared/src/api/schema.ts",
     "mock": "prism mock docs/openapi.yaml --port 4010 --host 127.0.0.1 --errors",
     "test:mock": "node scripts/mock_smoke.mts",

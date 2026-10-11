@@ -1,4 +1,4 @@
-"""Tickets: тикеты, чат, вложения (C-08, C-09, E-01, E-02, E-04, A-05, N-09)."""
+"""Tickets: тикеты, чат, вложения, нормативы SLA (C-08, C-09, E-01, E-02, E-04, A-05, N-09)."""
 
 from datetime import datetime
 
@@ -9,15 +9,23 @@ from sqlalchemy import (
     ForeignKey,
     ForeignKeyConstraint,
     Index,
+    Integer,
     String,
     Text,
     UniqueConstraint,
+    and_,
+    func,
+    select,
     text,
 )
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, column_property, mapped_column, relationship
 
+from app.models.auth import AppUser
 from app.models.base import Base, CreatedAtMixin, IdMixin, TimestampMixin
 from app.models.enums import AttachmentType, TicketCategory, TicketStatus, pg_enum
+from app.models.vehicles import FirmwareRelease, Vehicle, VehicleModel
+
+SUMMARY_LENGTH = 140  # Ticket.summary контракта (1.4.0, ADR 0017 п. 13)
 
 
 class Ticket(IdMixin, TimestampMixin, Base):
@@ -63,6 +71,38 @@ class Ticket(IdMixin, TimestampMixin, Base):
     first_response_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
+    # Связи только явной загрузкой (selectinload), ленивая подгрузка — ошибка (ADR 0015).
+    vehicle: Mapped[Vehicle] = relationship(lazy="raise")
+    # Вложения самого тикета; вложения сообщений — TicketMessage.attachments.
+    attachments: Mapped[list["TicketAttachment"]] = relationship(
+        primaryjoin="and_(Ticket.id == TicketAttachment.ticket_id, "
+        "TicketAttachment.ticket_message_id.is_(None))",
+        order_by="TicketAttachment.id",
+        viewonly=True,
+        lazy="raise",
+    )
+    # Просрочка вычисляется при чтении (ADR 0017 п. 3): поле ответа и фильтр `overdue` —
+    # одно выражение SQL. now() — время начала транзакции, как у created_at.
+    is_overdue: Mapped[bool] = column_property(
+        and_(func.now() > sla_due_at, status != TicketStatus.RESOLVED)
+    )
+    # Снимок прошивки на момент создания (N-09) — версия подзапросом, как у Vehicle.
+    firmware_version_at_creation: Mapped[str | None] = column_property(
+        select(FirmwareRelease.version)
+        .where(FirmwareRelease.id == firmware_release_id)
+        .correlate_except(FirmwareRelease)
+        .scalar_subquery()
+    )
+
+    @property
+    def vehicle_model(self) -> VehicleModel:
+        return self.vehicle.vehicle_model
+
+    @property
+    def summary(self) -> str:
+        """Начало описания для карточки канбана и списка клиента — без многоточия."""
+        return self.description[:SUMMARY_LENGTH]
+
 
 class TicketMessage(IdMixin, CreatedAtMixin, Base):
     __tablename__ = "ticket_message"
@@ -80,6 +120,14 @@ class TicketMessage(IdMixin, CreatedAtMixin, Base):
         BigInteger, ForeignKey("app_user.id", ondelete="RESTRICT"), nullable=False, index=True
     )
     body: Mapped[str] = mapped_column(Text, nullable=False)
+
+    author: Mapped[AppUser] = relationship(lazy="raise")
+    attachments: Mapped[list["TicketAttachment"]] = relationship(
+        primaryjoin="TicketMessage.id == foreign(TicketAttachment.ticket_message_id)",
+        order_by="TicketAttachment.id",
+        viewonly=True,
+        lazy="raise",
+    )
 
 
 class TicketAttachment(IdMixin, CreatedAtMixin, Base):
@@ -115,3 +163,21 @@ class TicketAttachment(IdMixin, CreatedAtMixin, Base):
     uploaded_by_user_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("app_user.id", ondelete="RESTRICT"), nullable=False, index=True
     )
+
+
+class TicketSlaPolicy(TimestampMixin, Base):
+    """Норматив SLA — срок решения тикета по категории (ADR 0017 п. 1–2); seed — миграция 0008.
+
+    sla_due_at = created_at + resolution_minutes, вычисляется один раз при создании тикета:
+    изменение норматива на созданные тикеты не влияет. API нет — нормативы меняет миграция.
+    """
+
+    __tablename__ = "ticket_sla_policy"
+    __table_args__ = (
+        CheckConstraint("resolution_minutes > 0", name="resolution_minutes_positive"),
+    )
+
+    category: Mapped[TicketCategory] = mapped_column(
+        pg_enum(TicketCategory, "ticket_category"), primary_key=True, sort_order=-100
+    )
+    resolution_minutes: Mapped[int] = mapped_column(Integer, nullable=False)

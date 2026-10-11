@@ -47,6 +47,7 @@ jobs:
               - "docs/ERD_EV_ServiceDesk_Glava2.mermaid"  # test_erd_export сверяет с ORM
               - "docs/specs/**"                        # tests/domain: сценарии и таблицы спецификации
               - "docs/openapi.yaml"                    # tests/contract: OpenAPI ↔ ORM ↔ RBAC
+              - "docs/asyncapi.yaml"                   # tests/contract: примеры событий WebSocket ↔ OpenAPI
               - "docs/requirements/RBAC_MATRIX.md"
               - ".github/workflows/backend-ci.yml"
               - ".github/workflows/ci.yml"
@@ -69,11 +70,12 @@ jobs:
               - ".github/workflows/mobile-ci.yml"
               - ".github/workflows/ci.yml"
             docs:
-              - "docs/**"
+              - "docs/**"                              # в т. ч. openapi.yaml и asyncapi.yaml
               - "scripts/sync_swagger_html.py"
               - "scripts/mock_smoke.mts"
               - "scripts/check_api_breaking.sh"
               - ".spectral.yaml"
+              - ".spectral-asyncapi.yaml"
               - "web-shared/src/api/**"
               - "package.json"
               - "package-lock.json"

@@ -1,0 +1,238 @@
+asyncapi: 3.0.0
+info:
+  title: EV-ServiceDesk Ticket Events
+  version: "1.0.0"
+  description: |
+    Реал-тайм события тикета по WebSocket (Глава 13, ADR 0017 п. 9). Дополняет REST-контракт
+    `docs/openapi.yaml` (с версии 1.4.0): схемы `TicketMessage` и `Ticket` берутся оттуда.
+
+    Канал — только доставка сервер → клиент. Сообщения в чат отправляются только
+    `POST /tickets/{ticketId}/messages` (`createTicketMessage`): один путь записи — проверки,
+    вложения, первичный ответ. Персистентная история и догрузка пропущенного —
+    `GET /tickets/{ticketId}/messages?after_id=…` (`listTicketMessages`).
+
+    Документ описывает backend: `receive` — сервер принимает от клиента, `send` — сервер
+    отправляет клиенту.
+  contact:
+    name: Sirilium / EV-ServiceDesk
+    url: https://github.com/siriliumliefox/ev-servicedesk
+    email: dev@ev-servicedesk.example.com
+  externalDocs:
+    description: REST-контракт EV-ServiceDesk API (OpenAPI 3.0)
+    url: https://github.com/siriliumliefox/ev-servicedesk/blob/develop/docs/openapi.yaml
+  tags:
+    - name: Tickets
+      description: События тикета — как тег Tickets в docs/openapi.yaml.
+
+defaultContentType: application/json
+
+servers:
+  production:
+    host: api.ev-servicedesk.example.com
+    pathname: /v1
+    protocol: wss
+    description: Production
+  staging:
+    host: staging-api.ev-servicedesk.example.com
+    pathname: /v1
+    protocol: wss
+    description: Staging
+  local:
+    host: localhost:8000
+    pathname: /v1
+    protocol: ws
+    description: Local backend (uvicorn)
+
+channels:
+  ticketEvents:
+    address: /tickets/{ticketId}/ws
+    title: События тикета
+    summary: Новые сообщения чата и изменения тикета (статус, исполнитель).
+    description: |
+      **Подключение и авторизация**
+
+      1. Клиент открывает `wss://…/v1/tickets/{ticketId}/ws`. Токен в URL не передаётся:
+         URL попадают в логи прокси.
+      2. В течение 5 секунд клиент отправляет первое сообщение `auth` с access-токеном
+         (`AuthTokens.access_token`, тот же, что Bearer в REST). Иначе сервер закрывает
+         подключение с кодом `4401`.
+      3. Сервер проверяет токен и доступ к тикету — как `getTicket` (RBAC-04): client — тикет
+         своего авто, engineer — тикет из очереди (`new` без исполнителя) или назначенный ему,
+         admin — любой. Нет доступа — `4403`.
+      4. Далее сервер присылает события `message.created` и `ticket.updated`. Другие сообщения
+         клиента сервер не обрабатывает.
+
+      **Коды закрытия**
+
+      | Код | Когда | Что делать клиенту |
+      |---|---|---|
+      | `4401` | Нет `auth` за 5 с; первое сообщение не `auth` или некорректно; токен недействителен; истёк access-токен во время подключения | Обновить токен (`POST /auth/refresh`), переподключиться, догрузить пропущенное через `after_id` |
+      | `4403` | Тикета нет или он не виден пользователю (как `404` в REST); доступ потерян при смене исполнителя (`assignTicket`) | Не переподключаться |
+
+      Прочие закрытия (перезапуск сервера, обрыв сети) — переподключиться с нарастающей
+      задержкой и догрузить пропущенное.
+
+      **Переподключение и догрузка.** Доставка не гарантирована (at-most-once): события,
+      пришедшие без подключения, не повторяются. После переподключения клиент запрашивает
+      `GET /tickets/{ticketId}/messages?after_id={последний полученный id}` и
+      `GET /tickets/{ticketId}`. Сообщения упорядочиваются и дедуплицируются по `id`:
+      `message.created` приходит и автору сообщения — повтор ответа `POST`.
+
+      **Права на данные.** Payload события формируется для каждого получателя по тем же
+      правилам, что REST: клиенту автор-сотрудник отдаётся с `phone` и `telegram_id` = null
+      (ADR 0017 п. 12); `file_url` вложений — presigned GET на 15 минут.
+
+      **Масштабирование (справочно).** События публикуются в Redis pub/sub, канал
+      `ticket:{id}`; каждый экземпляр backend доставляет их своим подключениям. При смене
+      исполнителя доступ открытых подключений проверяется заново, лишние закрываются `4403`.
+    parameters:
+      ticketId:
+        description: Идентификатор тикета — `Ticket.id` из docs/openapi.yaml.
+    messages:
+      auth:
+        $ref: '#/components/messages/Auth'
+      messageCreated:
+        $ref: '#/components/messages/MessageCreated'
+      ticketUpdated:
+        $ref: '#/components/messages/TicketUpdated'
+    bindings:
+      ws:
+        method: GET
+        bindingVersion: 0.1.0
+
+operations:
+  receiveAuth:
+    action: receive
+    channel:
+      $ref: '#/channels/ticketEvents'
+    title: Авторизация подключения
+    summary: Первое сообщение клиента — access-токен, в течение 5 секунд.
+    description: >-
+      Без auth за 5 секунд, с некорректным сообщением или недействительным токеном сервер
+      закрывает подключение с кодом 4401; без доступа к тикету — 4403.
+    tags:
+      - name: Tickets
+    messages:
+      - $ref: '#/channels/ticketEvents/messages/auth'
+  sendMessageCreated:
+    action: send
+    channel:
+      $ref: '#/channels/ticketEvents'
+    title: Новое сообщение в чате
+    summary: Сообщение создано через createTicketMessage.
+    description: >-
+      Отправляется всем подписчикам тикета, в т. ч. автору. data — TicketMessage, как в ответе
+      createTicketMessage и в listTicketMessages.
+    tags:
+      - name: Tickets
+    messages:
+      - $ref: '#/channels/ticketEvents/messages/messageCreated'
+  sendTicketUpdated:
+    action: send
+    channel:
+      $ref: '#/channels/ticketEvents'
+    title: Тикет изменён
+    summary: Изменились статус или исполнитель тикета.
+    description: >-
+      После updateTicketStatus, claimTicket и assignTicket. data — Ticket (элемент списка) в
+      состоянии после изменения.
+    tags:
+      - name: Tickets
+    messages:
+      - $ref: '#/channels/ticketEvents/messages/ticketUpdated'
+
+components:
+  messages:
+    Auth:
+      name: auth
+      title: Авторизация
+      summary: Клиент → сервер, первое и единственное сообщение клиента.
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/AuthMessage'
+      examples:
+        - name: auth
+          summary: Авторизация access-токеном
+          payload:
+            type: auth
+            access_token: "<AuthTokens.access_token>"
+    MessageCreated:
+      name: message.created
+      title: Новое сообщение в чате
+      summary: Сервер → клиент; data — TicketMessage.
+      contentType: application/json
+      payload:
+        schemaFormat: application/vnd.oai.openapi;version=3.0.0
+        schema:
+          type: object
+          required: [type, data]
+          properties:
+            type:
+              type: string
+              enum: [message.created]
+            data:
+              $ref: './openapi.yaml#/components/schemas/TicketMessage'
+      examples:
+        - name: engineer-reply
+          summary: Ответ инженера глазами клиента (телефон сотрудника скрыт)
+          payload:
+            type: message.created
+            data:
+              id: 4815
+              author:
+                id: 7
+                phone: null
+                role: engineer
+                is_active: true
+                telegram_id: null
+                created_at: "2026-01-15T09:00:00Z"
+              body: "Проверьте, пожалуйста, версию навигатора: «Настройки» → «О программе»."
+              attachments: []
+              created_at: "2026-10-11T09:12:00Z"
+    TicketUpdated:
+      name: ticket.updated
+      title: Тикет изменён
+      summary: Сервер → клиент; data — Ticket.
+      contentType: application/json
+      payload:
+        schemaFormat: application/vnd.oai.openapi;version=3.0.0
+        schema:
+          type: object
+          required: [type, data]
+          properties:
+            type:
+              type: string
+              enum: [ticket.updated]
+            data:
+              $ref: './openapi.yaml#/components/schemas/Ticket'
+      examples:
+        - name: claimed
+          summary: Инженер взял тикет из очереди (claimTicket)
+          payload:
+            type: ticket.updated
+            data:
+              id: 1042
+              vehicle_id: 101
+              vehicle_model: { brand: Li Auto, model: L7, trim: Max }
+              summary: Яндекс Навигатор не показывает пробки
+              category: navigation
+              status: in_progress
+              assigned_engineer_id: 7
+              sla_due_at: "2026-10-11T17:00:00Z"
+              is_overdue: false
+              created_at: "2026-10-11T09:00:00Z"
+              resolved_at: null
+
+  schemas:
+    AuthMessage:
+      type: object
+      required: [type, access_token]
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: auth
+        access_token:
+          type: string
+          minLength: 1
+          description: Access-токен (AuthTokens.access_token), как Bearer в REST.

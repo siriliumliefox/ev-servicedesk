@@ -7,6 +7,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # Значения-заглушки из .env.example: в staging/production с ними приложение не стартует.
 DEFAULT_JWT_SECRET = "change-me-in-every-real-environment"
 DEFAULT_SMS_CODE_SECRET = "change-me-sms-code-secret"
+# Учётные данные MinIO из docker-compose.yml (только local): известны всем, кто видит репозиторий.
+DEFAULT_S3_ACCESS_KEY = "ev_local"
+DEFAULT_S3_SECRET_KEY = "ev_local_only"
 SAFE_ENVIRONMENTS = {"local", "test"}
 
 
@@ -56,9 +59,46 @@ class Settings(BaseSettings):
     sms_provider_url: str = "https://smart-sender.a1.by/api"
     sms_provider_rps: float = Field(10.0, gt=0, le=10)  # лимит A1 — 10 запросов/с
 
+    # --- Объектное хранилище S3 (Глава 13, ADR 0004, ADR 0017 п. 10–11) ---
+    # Локально и в CI — MinIO; провайдер staging/production — глава 26.
+    s3_endpoint: str = "http://localhost:9000"  # адрес, по которому S3 видит backend
+    # Адрес для клиентов: подпись presigned URL включает хост, поэтому URL подписываются для
+    # публичного адреса (backend в docker compose ходит в http://minio:9000, а телефон и браузер —
+    # нет). Пусто — совпадает с s3_endpoint.
+    s3_public_endpoint: str = ""
+    s3_region: str = "us-east-1"
+    s3_bucket: str = "ev-servicedesk-local"
+    s3_access_key: str = DEFAULT_S3_ACCESS_KEY
+    s3_secret_key: str = DEFAULT_S3_SECRET_KEY
+
+    # --- Tickets и вложения (Глава 13, ADR 0017 п. 7–10) ---
+    ticket_create_per_user_hour: int = Field(10, ge=1)
+    ticket_message_per_user_minute: int = Field(30, ge=1)
+    upload_presign_per_user_hour: int = Field(60, ge=1)
+    # Срок presigned URL: PUT — загрузка клиентом, GET — file_url вложения при чтении.
+    # Подпись SigV4 действует не дольше 7 суток.
+    presign_put_ttl_seconds: int = Field(15 * 60, ge=60, le=7 * 24 * 3600)
+    presign_get_ttl_seconds: int = Field(15 * 60, ge=60, le=7 * 24 * 3600)
+    max_attachments: int = Field(10, ge=1)  # на тикет или сообщение
+    attachment_photo_max_bytes: int = Field(20 * 1024 * 1024, ge=1)
+    attachment_video_max_bytes: int = Field(200 * 1024 * 1024, ge=1)
+    # MIME сверяется с ответом HEAD из S3, а не со словами клиента (ADR 0004).
+    attachment_photo_mime_types: tuple[str, ...] = (
+        "image/jpeg",
+        "image/png",
+        "image/heic",
+        "image/webp",
+    )
+    attachment_video_mime_types: tuple[str, ...] = ("video/mp4", "video/quicktime")
+    # WebSocket чата: первое сообщение {"type": "auth"} — не позже, иначе закрытие 4401.
+    ws_auth_timeout_seconds: float = Field(5, gt=0, le=60)
+
     @model_validator(mode="after")
     def _check_real_environment(self) -> "Settings":
-        """Вне local/test заглушки секретов и фейковый SMS-провайдер запрещены."""
+        """Вне local/test заглушки секретов, фейковый SMS-провайдер и S3 без ключей запрещены.
+
+        Доступность бакета проверяется при старте приложения (app.main, ADR 0017 п. 11).
+        """
         if self.environment in SAFE_ENVIRONMENTS:
             return self
         problems = []
@@ -70,6 +110,13 @@ class Settings(BaseSettings):
             problems.append("SMS_PROVIDER_USER/SMS_PROVIDER_API_KEY")
         if self.environment == "production" and self.sms_provider == "fake":
             problems.append("SMS_PROVIDER=fake")
+        if not (self.s3_endpoint and self.s3_bucket):
+            problems.append("S3_ENDPOINT/S3_BUCKET")
+        if self.s3_access_key in ("", DEFAULT_S3_ACCESS_KEY) or self.s3_secret_key in (
+            "",
+            DEFAULT_S3_SECRET_KEY,
+        ):
+            problems.append("S3_ACCESS_KEY/S3_SECRET_KEY")
         if problems:
             raise ValueError(
                 f"Недопустимые настройки для ENVIRONMENT={self.environment}: {', '.join(problems)}"

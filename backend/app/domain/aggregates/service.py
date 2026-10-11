@@ -276,6 +276,23 @@ def statuses_for(
     ]
 
 
+def current_statuses(
+    db: Session, vehicle: Vehicle, today: date | None = None
+) -> list[AggregateStatusView]:
+    """Все статусы авто без пагинации — контекст карточки тикета (Глава 13, ADR 0017).
+
+    Доступ к авто проверяет вызывающий (видимость тикета).
+    """
+    regulations = list(
+        db.scalars(
+            _active_regulations(vehicle.vehicle_model_id)
+            .order_by(MaintenanceRegulation.aggregate_type_id)
+            .options(*REGULATION_OUT)
+        )
+    )
+    return statuses_for(db, vehicle, regulations, today)
+
+
 def replace_aggregate(
     db: Session,
     user: AppUser,
