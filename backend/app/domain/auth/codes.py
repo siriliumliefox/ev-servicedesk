@@ -11,10 +11,10 @@ from enum import Enum
 
 from redis import Redis
 
+from app.core import rate_limit
 from app.core.config import Settings
 from app.core.errors import ApiError, rate_limited
 from app.core.security import generate_sms_code, hash_sms_code, sms_code_matches
-from app.domain.auth import rate_limit
 from app.domain.auth.sms import SmsError, SmsProvider
 
 CODE_PREFIX = "auth:code:"
@@ -82,9 +82,13 @@ def request_code(
     redis: Redis, sms: SmsProvider, settings: Settings, phone: str, client_ip: str
 ) -> int:
     """Выпускает и отправляет код; возвращает TTL в секундах. Лимиты — 429."""
-    ip_hit = rate_limit.hit(redis, f"sms-ip:{client_ip}", 3600)
-    if ip_hit.exceeded(settings.sms_requests_per_ip_hour):
-        raise rate_limited(ip_hit.retry_after, "Слишком много запросов кода с этого адреса")
+    rate_limit.enforce(
+        redis,
+        f"sms-ip:{client_ip}",
+        3600,
+        settings.sms_requests_per_ip_hour,
+        "Слишком много запросов кода с этого адреса",
+    )
 
     cooldown_key = f"sms-cooldown:{phone}"
     wait = rate_limit.acquire_cooldown(redis, cooldown_key, settings.sms_resend_cooldown_seconds)
@@ -92,9 +96,13 @@ def request_code(
         raise rate_limited(wait, "Повторный запрос кода возможен позже")
 
     phone_key = f"sms-phone:{phone}"
-    phone_hit = rate_limit.hit(redis, phone_key, 3600)
-    if phone_hit.exceeded(settings.sms_requests_per_phone_hour):
-        raise rate_limited(phone_hit.retry_after, "Превышен лимит SMS на этот номер")
+    rate_limit.enforce(
+        redis,
+        phone_key,
+        3600,
+        settings.sms_requests_per_phone_hour,
+        "Превышен лимит SMS на этот номер",
+    )
 
     code = generate_sms_code(settings.sms_code_length)
     key = code_key(phone)

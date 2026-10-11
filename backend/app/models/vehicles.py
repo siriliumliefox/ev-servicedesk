@@ -14,9 +14,10 @@ from sqlalchemy import (
     Integer,
     String,
     UniqueConstraint,
+    select,
     text,
 )
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, column_property, mapped_column, relationship
 
 from app.models.base import Base, CreatedAtMixin, IdMixin, TimestampMixin
 
@@ -82,6 +83,20 @@ class Vehicle(IdMixin, TimestampMixin, Base):
     mileage: Mapped[int] = mapped_column(Integer, server_default=text("0"), nullable=False)
     current_firmware_release_id: Mapped[int | None] = mapped_column(BigInteger, index=True)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    # Связи только явной загрузкой (selectinload), ленивая подгрузка — ошибка (ADR 0015).
+    vehicle_model: Mapped[VehicleModel] = relationship(lazy="raise")
+    # FK на прошивку составной (прошивка той же модели) — версия читается подзапросом.
+    current_firmware_version: Mapped[str | None] = column_property(
+        select(FirmwareRelease.version)
+        .where(FirmwareRelease.id == current_firmware_release_id)
+        .correlate_except(FirmwareRelease)
+        .scalar_subquery()
+    )
+
+    @property
+    def is_active(self) -> bool:
+        return self.deleted_at is None
 
 
 class VehicleMileageCorrection(IdMixin, CreatedAtMixin, Base):

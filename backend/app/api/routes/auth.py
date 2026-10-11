@@ -18,7 +18,7 @@ from app.api.deps import (
     client_ip,
     rbac,
 )
-from app.api.schemas import (
+from app.api.schemas.auth import (
     AuthTokens,
     PhoneRequestCode,
     RefreshRequest,

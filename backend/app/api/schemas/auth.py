@@ -1,16 +1,16 @@
-"""Pydantic-схемы запросов/ответов — по components/schemas docs/openapi.yaml (ADR 0007).
+"""Схемы Auth Service и пользователя — по components/schemas docs/openapi.yaml (ADR 0007).
 
 Серверные границы строже контракта там, где их диктует БД или формат (код 4–8 цифр,
 telegram_id ≤ 50 = VARCHAR(50), без управляющих символов) — нарушение даёт объявленный
 422; перечислены в описаниях операций контракта и в ADR 0013.
 """
 
-import re
 from datetime import datetime
 from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.api.schemas.common import no_control_chars
 from app.models.enums import UserRole
 
 # PhoneE164 контракта; совпадает с CHECK phone_e164 в app_user.
@@ -25,16 +25,6 @@ class RequestCodeResponse(BaseModel):
     ttl_seconds: int
 
 
-_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
-
-
-def _no_control_chars(value: str) -> str:
-    # PostgreSQL не хранит NUL в text: без проверки — 500 вместо 422.
-    if _CONTROL.search(value):
-        raise ValueError("управляющие символы недопустимы")
-    return value
-
-
 class VerifyCodeRequest(BaseModel):
     phone: PhoneE164
     code: Annotated[str, Field(pattern=r"^[0-9]{4,8}$", examples=["1234"])]
@@ -46,7 +36,7 @@ class VerifyCodeRequest(BaseModel):
         """Пробелы по краям отбрасываются; пустая строка = согласие не передано."""
         if value is None:
             return None
-        value = _no_control_chars(value.strip())
+        value = no_control_chars(value.strip())
         return value or None
 
 
@@ -62,7 +52,7 @@ class StaffLoginRequest(BaseModel):
 class TelegramLinkRequest(BaseModel):
     telegram_id: Annotated[str, Field(min_length=1, max_length=50)]
 
-    _check_telegram_id = field_validator("telegram_id")(_no_control_chars)
+    _check_telegram_id = field_validator("telegram_id")(no_control_chars)
 
 
 class UserPublic(BaseModel):

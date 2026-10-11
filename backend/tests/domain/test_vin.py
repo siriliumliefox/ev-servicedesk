@@ -5,7 +5,7 @@ import re
 import pytest
 from pydantic import ValidationError
 
-from app.api.vehicle_schemas import VehicleCreateRequest
+from app.api.schemas.vehicles import VehicleCreateRequest
 from app.domain.vehicles.vin import (
     VIN_PATTERN,
     DecodedVehicle,

@@ -10,12 +10,13 @@ from datetime import UTC, date, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import func, select
+from sqlalchemy import event, func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
-from app.domain.vehicles.service import BUSINESS_TZ
-from app.models import AppUser, MaintenanceRecord, Ticket, Vehicle
+from app.core.time import BUSINESS_TZ
+from app.domain.vehicles import access
+from app.models import AggregateType, AppUser, MaintenanceRecord, Ticket, Vehicle
 from app.models.enums import TicketCategory, TicketStatus, UserRole
 from app.models.vehicles import VehicleMileageCorrection
 from tests.api.conftest import API, STAFF_PASSWORD, assert_contract, bearer
@@ -348,6 +349,65 @@ def test_admin_deletes_any_vehicle(client, as_client, as_staff):
     assert client.get(f"{API}/vehicles", headers=owner).json()["items"] == []
 
 
+def test_deleted_vehicle_is_read_only(client, as_client, as_staff, make_ticket):
+    """Удалённое авто видно персоналу по тикету, но не изменяется никем (ADR 0014)."""
+    owner = as_client("+375291100121")
+    vid = add_vehicle(client, owner)["id"]
+    eng_headers, engineer = as_staff("+375291100122")
+    admin_headers, _ = as_staff("+375291100123", UserRole.ADMIN)
+    make_ticket(vid, engineer)  # тикет в работе: до удаления инженер мог бы менять
+    assert client.delete(f"{API}/vehicles/{vid}", headers=owner).status_code == 204
+
+    url = f"{API}/vehicles/{vid}"
+    mileage = ("patch", f"{url}/mileage", {"mileage": 10}, "updateVehicleMileage")
+    record = (
+        "post",
+        f"{url}/maintenance-records",
+        {"performed_at": "2026-01-10", "mileage_at_service": 1, "description": "x"},
+        "createMaintenanceRecord",
+    )
+    correction = (
+        "post",
+        f"{url}/mileage-corrections",
+        {"expected_current_mileage": 0, "mileage": 0, "reason": "x"},
+        "correctVehicleMileage",
+    )
+    delete = ("delete", url, None, "deleteVehicle")
+    expected = [
+        (eng_headers, mileage, 403),
+        (eng_headers, record, 403),
+        (admin_headers, mileage, 403),
+        (admin_headers, record, 403),
+        (admin_headers, correction, 403),
+        (admin_headers, delete, 403),
+        (owner, mileage, 404),  # клиенту удалённое авто не видно
+        (owner, delete, 404),
+    ]
+    for headers, (method, path, body, operation_id), status in expected:
+        r = client.request(method, path, json=body, headers=headers)
+        assert r.status_code == status, (operation_id, r.text)
+        assert_contract(r, operation_id)
+
+
+def test_change_check_is_one_query(as_client, client, as_staff, make_ticket, db):
+    """Успешная проверка изменения — один запрос: авто под блокировкой + тикет-основание."""
+    owner = as_client("+375291100131")
+    vid = add_vehicle(client, owner)["id"]
+    _, engineer = as_staff("+375291100132")
+    ticket = make_ticket(vid, engineer)
+
+    statements: list[str] = []
+    connection = db.connection()
+    listener = lambda *args: statements.append(args[2])  # noqa: E731
+    event.listen(connection, "before_cursor_execute", listener)
+    try:
+        vehicle, ticket_id = access.for_change(db, engineer, vid)
+    finally:
+        event.remove(connection, "before_cursor_execute", listener)
+    assert (vehicle.id, ticket_id) == (vid, ticket.id)
+    assert len(statements) == 1 and "FOR UPDATE OF vehicle" in statements[0]
+
+
 # ---------- RBAC и аутентификация (контракт с Auth Service) ----------
 
 VEHICLE_CALLS = [
@@ -525,20 +585,34 @@ def test_maintenance_record_rules(client, as_client, as_staff, make_ticket, db):
 
 
 def test_record_without_author_omits_performed_by(client, as_client, db):
+    """performed_by не nullable в контракте: без автора поле опускается, а не равно null;
+    nullable aggregate_type_code и description при этом выводятся как null."""
     owner = as_client("+375291100151")
     vid = add_vehicle(client, owner)["id"]
-    db.add(
-        MaintenanceRecord(
-            vehicle_id=vid,
-            performed_at=date(2026, 1, 1),
-            mileage_at_service=0,
-            description="Импорт",
-        )
+    oil = db.scalars(select(AggregateType).where(AggregateType.code == "engine_oil")).one()
+    db.add_all(
+        [
+            MaintenanceRecord(
+                vehicle_id=vid,
+                performed_at=date(2026, 1, 2),
+                mileage_at_service=0,
+                description="Импорт",
+            ),
+            MaintenanceRecord(
+                vehicle_id=vid,
+                aggregate_type_id=oil.id,
+                performed_at=date(2026, 1, 1),
+                mileage_at_service=0,
+            ),
+        ]
     )
     db.commit()
     r = client.get(f"{API}/vehicles/{vid}/maintenance-records", headers=owner)
     assert_contract(r, "listMaintenanceRecords")
-    assert "performed_by" not in r.json()["items"][0]
+    imported, oil_change = r.json()["items"]
+    assert "performed_by" not in imported and "performed_by" not in oil_change
+    assert imported["aggregate_type_code"] is None and imported["description"] == "Импорт"
+    assert oil_change["aggregate_type_code"] == "engine_oil" and oil_change["description"] is None
 
 
 # ---------- Лимит добавления (ADR 0014, Q11) ----------

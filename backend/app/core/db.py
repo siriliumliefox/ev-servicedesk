@@ -4,6 +4,7 @@ from collections.abc import Iterator
 from functools import lru_cache
 
 from sqlalchemy import Engine, create_engine
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import get_settings
@@ -24,3 +25,8 @@ def get_db() -> Iterator[Session]:
     """Зависимость FastAPI: сессия на запрос; в тестах подменяется."""
     with _session_factory()() as session:
         yield session
+
+
+def constraint_name(exc: IntegrityError) -> str | None:
+    """Имя нарушенного ограничения PostgreSQL — чтобы перевести гонку в ответ контракта."""
+    return getattr(getattr(exc.orig, "diag", None), "constraint_name", None)

@@ -20,6 +20,7 @@ from app.core.errors import forbidden, unauthorized
 from app.core.redis import get_redis
 from app.core.security import InvalidTokenError, decode_access_token
 from app.domain.auth.sms import SmsProvider, get_sms_provider_for
+from app.domain.vehicles.vin import MockVinDecoder, VinDecoder
 from app.models import AppUser
 from app.models.enums import UserRole
 
@@ -35,6 +36,14 @@ def get_sms_provider(settings: SettingsDep) -> SmsProvider:
 
 
 SmsDep = Annotated[SmsProvider, Depends(get_sms_provider)]
+
+
+def get_vin_decoder() -> VinDecoder:
+    """Seam декодера: внешний API (X-05) подключается здесь, тесты подменяют зависимость."""
+    return MockVinDecoder()
+
+
+VinDecoderDep = Annotated[VinDecoder, Depends(get_vin_decoder)]
 
 
 def client_ip(request: Request) -> str:

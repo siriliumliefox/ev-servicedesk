@@ -4,6 +4,9 @@ from dataclasses import dataclass
 
 from redis import Redis
 
+from app.core.errors import rate_limited
+
+# Префикс исторический (Глава 10): смена сбросила бы действующие счётчики при выкладке.
 PREFIX = "auth:rl:"
 
 
@@ -25,6 +28,13 @@ def hit(redis: Redis, key: str, window_seconds: int) -> Hit:
         pipe.ttl(full_key)
         _, count, ttl = pipe.execute()
     return Hit(count=int(count), retry_after=int(ttl) if ttl and ttl > 0 else window_seconds)
+
+
+def enforce(redis: Redis, key: str, window_seconds: int, limit: int, message: str) -> None:
+    """Учитывает попытку; сверх `limit` за окно — 429 с Retry-After до сброса окна."""
+    attempt = hit(redis, key, window_seconds)
+    if attempt.exceeded(limit):
+        raise rate_limited(attempt.retry_after, message)
 
 
 def acquire_cooldown(redis: Redis, key: str, seconds: int) -> int:
