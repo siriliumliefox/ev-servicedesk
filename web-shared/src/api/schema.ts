@@ -173,13 +173,13 @@ export interface paths {
         };
         /**
          * Список авто текущего клиента (поддержка нескольких авто на аккаунт)
-         * @description Возвращает все автомобили, привязанные к текущему клиенту.
+         * @description Возвращает активные (не удалённые) автомобили текущего клиента.
          */
         get: operations["listVehicles"];
         put?: never;
         /**
          * Добавить автомобиль по VIN
-         * @description Марка/модель/комплектация определяются через VIN-декодер (или мок). Если декодер не смог распознать VIN — 422 с кодом VIN_DECODE_FAILED, и клиент должен передать vehicle_model_id вручную повторным запросом (Vehicle без VehicleModel создать нельзя — FK NOT NULL, Глава 2). 409 — VIN уже привязан к другому аккаунту.
+         * @description Марка/модель/комплектация определяются через VIN-декодер (или мок). Если декодер не смог распознать VIN — 422 с кодом VIN_DECODE_FAILED, и клиент должен передать vehicle_model_id вручную повторным запросом (Vehicle без VehicleModel создать нельзя — FK NOT NULL, Глава 2); несуществующий vehicle_model_id — 422 VEHICLE_MODEL_NOT_FOUND. Контрольная цифра VIN не проверяется (VIN из ЕС), строчные буквы — 422 (ADR 0014). 409 VIN_REGISTERED_TO_ANOTHER_ACCOUNT — VIN привязан к другому аккаунту (владелец не раскрывается); 409 VIN_ALREADY_ADDED — уже в этом аккаунте. Своё удалённое авто с тем же VIN восстанавливается вместе с историей работ (201, тот же id). 429 RATE_LIMITED — лимит попыток добавления на пользователя (защита от перебора VIN), заголовок Retry-After. Уточнено и добавлено в 1.3.0.
          */
         post: operations["createVehicle"];
         delete?: never;
@@ -199,14 +199,14 @@ export interface paths {
         };
         /**
          * Карточка автомобиля (марка/модель/пробег)
-         * @description Не включает статусы агрегатов — зона ответственности Aggregates Service (шаг 4). RBAC-роль сама по себе не даёт доступа к ЛЮБОМУ авто: client видит только свои (owner-check), engineer — только авто, связанное с тикетом в его работе (object-level check поверх роли, не только middleware RBAC) — иначе IDOR (см. Глава 25). admin — без ограничений.
+         * @description Не включает статусы агрегатов — зона ответственности Aggregates Service (шаг 4). RBAC-роль сама по себе не даёт доступа к ЛЮБОМУ авто: client видит только свои (owner-check), engineer — только авто, связанное с тикетом в его работе (object-level check поверх роли, не только middleware RBAC) — иначе IDOR (см. Глава 25). admin — без ограничений. Уточнено в 1.3.0 (ADR 0014): engineer видит авто из тикетов, назначенных на него (любой статус), и из неназначенных тикетов в статусе new (очередь), в т. ч. удалённое (is_active=false); клиенту удалённое авто не видно. Невидимое авто — 404.
          */
         get: operations["getVehicle"];
         put?: never;
         post?: never;
         /**
          * Удалить авто из аккаунта (soft-delete, история сохраняется)
-         * @description Помечает автомобиль неактивным, не удаляя связанные записи.
+         * @description Помечает автомобиль неактивным, не удаляя связанные записи (тикеты, история работ). client — только своё авто; уже удалённое — 404. Уточнено в 1.3.0.
          */
         delete: operations["deleteVehicle"];
         options?: never;
@@ -231,7 +231,7 @@ export interface paths {
         head?: never;
         /**
          * Обновить пробег
-         * @description Отдельный узкий эндпоинт вместо общего PATCH /vehicles/{id} — VIN и модель после создания не редактируются, менять можно только пробег. Уменьшение пробега запрещено (Глава 2) → 409, а не 422: это конфликт с текущим состоянием ресурса, не ошибка формата входных данных. Object-level (RBAC-01): client — только свой автомобиль; engineer — только автомобиль из назначенного ему тикета; admin — любой. Иначе 403. 409 — Новый пробег меньше текущего.
+         * @description Отдельный узкий эндпоинт вместо общего PATCH /vehicles/{id} — VIN и модель после создания не редактируются, менять можно только пробег. Уменьшение пробега запрещено (Глава 2) → 409, а не 422: это конфликт с текущим состоянием ресурса, не ошибка формата входных данных. Object-level (RBAC-01): client — только свой автомобиль; engineer — только автомобиль из назначенного ему тикета не в статусе resolved; admin — любой. Иначе 403 (авто видно, менять нельзя) или 404 (авто не видно). 409 MILEAGE_DECREASE — новый пробег меньше текущего (details.current_mileage).
          */
         patch: operations["updateVehicleMileage"];
         trace?: never;
@@ -249,7 +249,7 @@ export interface paths {
         put?: never;
         /**
          * Исправить ошибочно введённый пробег (вниз)
-         * @description Единственный способ уменьшить пробег (ADR 0006). Создаёт запись в append-only журнале VehicleMileageCorrection с причиной и автором; пробег меняется атомарно триггером БД. 409 — expected_current_mileage не совпал с текущим или mileage не меньше текущего (для увеличения — updateVehicleMileage).
+         * @description Единственный способ уменьшить пробег (ADR 0006). Создаёт запись в append-only журнале VehicleMileageCorrection с причиной и автором; пробег меняется атомарно триггером БД. 409 MILEAGE_CORRECTION_STALE — expected_current_mileage не совпал с текущим; 409 MILEAGE_NOT_DECREASED — mileage не меньше текущего (для увеличения — updateVehicleMileage).
          */
         post: operations["correctVehicleMileage"];
         delete?: never;
@@ -275,7 +275,7 @@ export interface paths {
         put?: never;
         /**
          * Зафиксировать выполненную работу
-         * @description Клиент этим эндпоинтом не пользуется — история заполняется инженером/админом.
+         * @description Клиент этим эндпоинтом не пользуется — история заполняется инженером/админом. engineer — только по своему тикету не в статусе resolved (иначе 403); запись связывается с последним таким тикетом. mileage_at_service выше текущего пробега поднимает пробег авто; записи задним числом допустимы. 422: PERFORMED_AT_IN_FUTURE (дата позже сегодняшней по Europe/Minsk), AGGREGATE_TYPE_NOT_FOUND, MAINTENANCE_SUBJECT_REQUIRED (нет ни агрегата, ни описания). Уточнено в 1.3.0.
          */
         post: operations["createMaintenanceRecord"];
         delete?: never;
@@ -1817,6 +1817,7 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             409: components["responses"]["Conflict"];
             422: components["responses"]["ValidationError"];
+            429: components["responses"]["RateLimited"];
             default: components["responses"]["ServerError"];
         };
     };

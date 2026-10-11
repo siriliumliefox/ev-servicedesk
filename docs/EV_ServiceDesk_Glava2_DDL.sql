@@ -614,5 +614,15 @@ CREATE TRIGGER trg_singleton_row_guard BEFORE DELETE ON aggregate_status_thresho
 
 UPDATE alembic_version SET version_num='0005' WHERE alembic_version.version_num = '0004';
 
+-- Running upgrade 0005 -> 0006
+
+INSERT INTO vehicle_model (brand, model, trim) VALUES ('Zeekr', '001', '');
+
+INSERT INTO vehicle_model (brand, model, trim) VALUES ('Voyah', 'Free', '');
+
+INSERT INTO vehicle_model (brand, model, trim) VALUES ('Li Auto', 'L7', '');
+
+UPDATE alembic_version SET version_num='0006' WHERE alembic_version.version_num = '0005';
+
 COMMIT;
 

@@ -29,6 +29,16 @@ def implemented() -> list[tuple[str, str, dict]]:
 IDS = [op["operationId"] for _, _, op in implemented()]
 
 
+def test_vehicle_service_fully_implemented():
+    vehicle_ops = {
+        op["operationId"]
+        for item in contract()["paths"].values()
+        for op in item.values()
+        if isinstance(op, dict) and "Vehicle" in op.get("tags", [])
+    }
+    assert vehicle_ops <= set(IDS), f"Не реализованы: {sorted(vehicle_ops - set(IDS))}"
+
+
 def test_auth_service_fully_implemented():
     auth_ops = {
         op["operationId"]

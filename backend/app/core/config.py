@@ -44,6 +44,9 @@ class Settings(BaseSettings):
     verify_failures_per_phone_day: int = Field(20, ge=1)
     staff_login_failures_per_phone_15min: int = Field(5, ge=1)
     staff_login_failures_per_ip_15min: int = Field(20, ge=1)
+    # Попытки POST /vehicles: 409 отвечает «VIN уже зарегистрирован» — защита от перебора VIN
+    # (ПД, ADR 0005, ADR 0014).
+    vehicle_create_per_user_hour: int = Field(10, ge=1)
 
     # --- SMS-провайдер: fake (local/test) | a1 (A1 Smart-рассылка) ---
     sms_provider: Literal["fake", "a1"] = "fake"
