@@ -70,7 +70,7 @@ def test_owner_change_keeps_maintenance_history(conn: Connection) -> None:
     assert new != old
     history = "SELECT count(*) FROM maintenance_record WHERE vehicle_id = :v"
     assert scalar(conn, history, v=old) == 1
-    assert scalar(conn, history, v=new) == 0  # новый владелец не видит чужую историю
+    assert scalar(conn, history, v=new) == 0  # новый владелец не видит чужую историю
 
 
 @pytest.mark.parametrize(
@@ -211,7 +211,7 @@ def test_regulation_interval_rules(conn: Connection) -> None:
     assert_violation(conn, "uq_maintenance_regulation_active", insert, km=20_000, mon=None, **base)
 
 
-# --- База знаний -----------------------------------------------------------------------
+# --- База знаний -----------------------------------------------------------------------
 
 
 def test_decision_tree_single_root_and_array_options(conn: Connection) -> None:

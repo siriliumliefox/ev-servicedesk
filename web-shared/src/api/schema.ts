@@ -1180,7 +1180,7 @@ export interface components {
         PresignResponse: {
             /** @description PUT сюда бинарные данные напрямую в S3 */
             upload_url: string;
-            /** @description Идентификатор загруженного объекта — передать в attachments. Не публичная ссылка: backend хранит ключ объекта S3 (ticket_attachment.object_key) и выдаёт presigned URL при чтении (ADR 0004). */
+            /** @description Идентификатор загруженного объекта — передать в attachments. Не публичная ссылка: backend хранит ключ объекта S3 (ticket_attachment.object_key) и выдаёт presigned URL при чтении (ADR 0004). */
             file_url: string;
             /** Format: date-time */
             expires_at: string;
@@ -1252,7 +1252,7 @@ export interface components {
         };
         KnowledgeArticleCreateRequest: {
             vehicle_model_id?: number | null;
-            /** @description Статья под версию прошивки (C-06); требует vehicle_model_id той же модели. */
+            /** @description Статья под версию прошивки (C-06); требует vehicle_model_id той же модели. */
             firmware_release_id?: number | null;
             /** @enum {string} */
             article_type: "guide" | "troubleshooting";
@@ -1267,7 +1267,7 @@ export interface components {
         KnowledgeArticle: {
             id: number;
             vehicle_model_id?: number | null;
-            /** @description Статья под версию прошивки (C-06); требует vehicle_model_id той же модели. */
+            /** @description Статья под версию прошивки (C-06); требует vehicle_model_id той же модели. */
             firmware_release_id?: number | null;
             /** @enum {string} */
             article_type: "guide" | "troubleshooting";

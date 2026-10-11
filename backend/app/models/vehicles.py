@@ -28,7 +28,7 @@ class VehicleModel(IdMixin, TimestampMixin, Base):
 
     brand: Mapped[str] = mapped_column(String(100), nullable=False)
     model: Mapped[str] = mapped_column(String(100), nullable=False)
-    # '' = без комплектации: NULL сломал бы UNIQUE (NULL ≠ NULL). API отдаёт '' как null.
+    # '' = без комплектации: NULL сломал бы UNIQUE (NULL ≠ NULL). API отдаёт '' как null.
     trim: Mapped[str] = mapped_column(String(100), server_default=text("''"), nullable=False)
 
 
@@ -36,7 +36,7 @@ class FirmwareRelease(IdMixin, CreatedAtMixin, Base):
     __tablename__ = "firmware_release"
     __table_args__ = (
         UniqueConstraint("vehicle_model_id", "version"),
-        # Цель составных FK "прошивка той же модели" (vehicle, knowledge_article, notification).
+        # Цель составных FK "прошивка той же модели" (vehicle, knowledge_article, notification).
         UniqueConstraint("id", "vehicle_model_id"),
     )
 
@@ -50,7 +50,7 @@ class FirmwareRelease(IdMixin, CreatedAtMixin, Base):
 class Vehicle(IdMixin, TimestampMixin, Base):
     """VIN, владелец и модель неизменяемы (триггер vehicle_guard); пробег не уменьшается.
 
-    Смена владельца = soft-delete старой записи и новая запись с тем же VIN (ADR 0003):
+    Смена владельца = soft-delete старой записи и новая запись с тем же VIN (ADR 0003):
     история ТО и тикеты привязаны к vehicle.id и не видны новому владельцу.
     """
 
@@ -58,7 +58,7 @@ class Vehicle(IdMixin, TimestampMixin, Base):
     __table_args__ = (
         CheckConstraint("vin ~ '^[A-HJ-NPR-Z0-9]{17}$'", name="vin_format"),
         CheckConstraint("mileage >= 0", name="mileage_non_negative"),
-        # Один активный автомобиль на VIN; soft-delete не блокирует повторное добавление.
+        # Один активный автомобиль на VIN; soft-delete не блокирует повторное добавление.
         Index(
             "uq_vehicle_vin_active",
             "vin",
@@ -102,7 +102,7 @@ class Vehicle(IdMixin, TimestampMixin, Base):
 class VehicleMileageCorrection(IdMixin, CreatedAtMixin, Base):
     """Append-only журнал корректировки пробега вниз (ADR 0006).
 
-    Единственный способ уменьшить vehicle.mileage: INSERT строки. Триггеры БД проверяют,
+    Единственный способ уменьшить vehicle.mileage: INSERT строки. Триггеры БД проверяют,
     что автор — admin, old_mileage равен текущему пробегу, и атомарно применяют new_mileage.
     UPDATE/DELETE запрещены.
     """

@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 
 
 class AggregateType(IdMixin, TimestampMixin, Base):
-    """Расширяемый справочник (A-07); seed — миграция 0002."""
+    """Расширяемый справочник (A-07); seed — миграция 0002."""
 
     __tablename__ = "aggregate_type"
     __table_args__ = (CheckConstraint("code ~ '^[a-z][a-z0-9_]{1,49}$'", name="code_format"),)
@@ -37,7 +37,7 @@ class AggregateType(IdMixin, TimestampMixin, Base):
 
 
 class MaintenanceRegulation(IdMixin, TimestampMixin, Base):
-    """Регламент не редактируется: старая версия архивируется, создаётся новая."""
+    """Регламент не редактируется: старая версия архивируется, создаётся новая."""
 
     __tablename__ = "maintenance_regulation"
     __table_args__ = (
@@ -107,7 +107,7 @@ class AggregateStatusThresholds(TimestampMixin, Base):
 
 
 class VehicleAggregateStatus(IdMixin, TimestampMixin, Base):
-    """Кэш последней замены для «светофора»: ровно одна запись на (авто, агрегат)."""
+    """Кэш последней замены для «светофора»: ровно одна запись на (авто, агрегат)."""
 
     __tablename__ = "vehicle_aggregate_status"
     __table_args__ = (

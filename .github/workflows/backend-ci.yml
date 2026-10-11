@@ -8,7 +8,7 @@ on:
 jobs:
   backend-ci:
     runs-on: ubuntu-latest
-    # Реальный PostgreSQL 16 для тестов схемы и миграций (Глава 2). Эфемерный контейнер
+    # Реальный PostgreSQL 16 для тестов схемы и миграций (Глава 2). Эфемерный контейнер
     # без пароля (trust) — секреты в workflow не нужны.
     services:
       postgres:

@@ -1,4 +1,4 @@
-"""Стабильные наборы значений — нативные PostgreSQL ENUM (ADR 0003).
+"""Стабильные наборы значений — нативные PostgreSQL ENUM (ADR 0003).
 
 Значения совпадают с enum в docs/openapi.yaml; расширяемые справочники
 (aggregate_type) — отдельные таблицы, а не ENUM.
@@ -48,7 +48,7 @@ class NotificationType(enum.StrEnum):
 
 
 def pg_enum(enum_cls: type[enum.StrEnum], name: str) -> Enum:
-    """ENUM, хранящий value ("in_progress"), а не имя члена ("IN_PROGRESS")."""
+    """ENUM, хранящий value ("in_progress"), а не имя члена ("IN_PROGRESS")."""
     return Enum(
         enum_cls,
         name=name,

@@ -1,4 +1,4 @@
-"""Миграции: полный цикл up/down/up, соответствие ORM ↔ БД, объекты вне autogenerate."""
+"""Миграции: полный цикл up/down/up, соответствие ORM ↔ БД, объекты вне autogenerate."""
 
 from sqlalchemy import CheckConstraint, Engine, create_engine, inspect, text
 from sqlalchemy.engine import URL
@@ -118,7 +118,7 @@ def test_check_constraints_match_orm(migrated_engine: Engine) -> None:
 
 
 def test_foreign_keys_have_explicit_on_delete(migrated_engine: Engine) -> None:
-    """ADR 0003: ни один FK не остаётся с неявным NO ACTION."""
+    """ADR 0003: ни один FK не остаётся с неявным NO ACTION."""
     with migrated_engine.connect() as c:
         implicit = list(
             c.execute(

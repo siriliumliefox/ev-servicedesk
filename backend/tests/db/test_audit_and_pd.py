@@ -18,7 +18,7 @@ CORRECT = (
 def test_admin_correction_lowers_mileage_with_audit(conn: Connection) -> None:
     admin, vehicle = make_user(conn, "admin"), make_vehicle(conn, mileage=150_000)
     correction = scalar(
-        conn, CORRECT, v=vehicle, u=admin, old=150_000, new=15_000, reason="Опечатка: лишний ноль"
+        conn, CORRECT, v=vehicle, u=admin, old=150_000, new=15_000, reason="Опечатка: лишний ноль"
     )
     assert scalar(conn, "SELECT mileage FROM vehicle WHERE id = :v", v=vehicle) == 15_000
     row = conn.execute(

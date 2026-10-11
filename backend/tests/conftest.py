@@ -1,8 +1,8 @@
 """Общие фикстуры: реальный PostgreSQL 16 (Глава 2) и Redis (Глава 10).
 
 URL: TEST_DATABASE_URL или DATABASE_URL с суффиксом `_test` у имени БД. Тесты делают
-`alembic downgrade base`, поэтому работают ТОЛЬКО с БД, чьё имя оканчивается на `_test`.
-Без доступной БД тесты пропускаются; в CI REQUIRE_DB=1 превращает пропуск в ошибку.
+`alembic downgrade base`, поэтому работают ТОЛЬКО с БД, чьё имя оканчивается на `_test`.
+Без доступной БД тесты пропускаются; в CI REQUIRE_DB=1 превращает пропуск в ошибку.
 """
 
 import os
@@ -43,7 +43,7 @@ def alembic_config(url: URL) -> Config:
 def db_url() -> URL:
     url = _test_url()
     if not (url.database or "").endswith("_test"):
-        pytest.fail("Имя тестовой БД должно оканчиваться на _test (защита от downgrade dev-БД)")
+        pytest.fail("Имя тестовой БД должно оканчиваться на _test (защита от downgrade dev-БД)")
     engine = create_engine(url, poolclass=NullPool)
     try:
         with engine.connect():

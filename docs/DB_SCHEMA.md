@@ -1,4 +1,4 @@
-# Схема БД — покрытие требований (Глава 2)
+# Схема БД — покрытие требований (Глава 2)
 
 Источник истины: `backend/app/models` + `backend/alembic/versions` (ADR 0003).
 Артефакты (генерируются, руками не правятся): [`EV_ServiceDesk_Glava2_DDL.sql`](EV_ServiceDesk_Glava2_DDL.sql),
@@ -26,7 +26,7 @@
 | ID | Данные в схеме |
 |---|---|
 | C-01, X-02, N-06 | `app_user.phone` (E.164, UNIQUE); SMS-коды — Redis (ADR 0005) |
-| C-02, X-05 | `vehicle.vin` (CHECK, частичный UNIQUE), `vehicle_model` |
+| C-02, X-05 | `vehicle.vin` (CHECK, частичный UNIQUE), `vehicle_model` |
 | C-03 | `vehicle.mileage`, `maintenance_record`, `vehicle_mileage_correction` (ADR 0006) |
 | C-04, C-05 | `vehicle_aggregate_status`, `maintenance_regulation`, `aggregate_status_thresholds` (расчёт — `docs/specs/AGGREGATE_STATUS_ALGORITHM.md`) |
 | C-06 | `knowledge_article.vehicle_model_id`, `.firmware_release_id`, `vehicle.current_firmware_release_id` |
@@ -59,12 +59,12 @@
 | Роль / экран | Поля OpenAPI | Источник в БД |
 |---|---|---|
 | client: список/карточка авто | `Vehicle.vin, mileage, is_active, vehicle_model, current_firmware_version, created_at` | `vehicle`, `vehicle_model`, `firmware_release.version`; `is_active = deleted_at IS NULL` |
-| client: схема агрегатов | `AggregateStatus.*` | `vehicle_aggregate_status`, `aggregate_type`, `maintenance_regulation` (статус/процент — расчёт) |
+| client: схема агрегатов | `AggregateStatus.*` | `vehicle_aggregate_status`, `aggregate_type`, `maintenance_regulation` (статус/процент — расчёт) |
 | client: история ТО | `MaintenanceRecord.*` | `maintenance_record`, `aggregate_type.code`, `app_user` |
 | client: обучение / дерево | `KnowledgeArticle.*`, `DecisionTreeNode.*` | `knowledge_article`, `decision_tree_node` |
 | client: тикет + чат | `TicketCreateRequest.*`, `TicketDetail.*`, `TicketMessage.*` | `ticket` (`description`), `ticket_message`, `ticket_attachment` |
-| client: центр уведомлений | `NotificationListItem.read_at` | `notification`, `notification_recipient` |
-| engineer: канбан | `Ticket.status, category, sla_due_at, is_overdue, assigned_engineer_id` | `ticket` (`is_overdue` — расчёт) |
+| client: центр уведомлений | `NotificationListItem.read_at` | `notification`, `notification_recipient` |
+| engineer: канбан | `Ticket.status, category, sla_due_at, is_overdue, assigned_engineer_id` | `ticket` (`is_overdue` — расчёт) |
 | engineer: карточка авто из тикета | `TicketDetail.vehicle_context` | `ticket.vehicle_id` → `vehicle`, `vehicle_aggregate_status` |
 | engineer: замена агрегата | `AggregateReplaceRequest.*` | `vehicle_aggregate_status` + `maintenance_record` |
 | admin: регламенты / агрегаты | `MaintenanceRegulation.*`, `AggregateType.*` | `maintenance_regulation`, `aggregate_type` |
@@ -85,7 +85,7 @@
 | ticket | client — тикеты своих авто; engineer — все/назначенные | `ticket.vehicle_id → vehicle.user_id`, `assigned_engineer_id` |
 | attachment | как у тикета; публичных ссылок нет | `ticket_attachment.ticket_id`, `object_key` (ADR 0004) |
 
-Реализация проверок — сервисный слой глав 11–13; здесь доказано только наличие данных
+Реализация проверок — сервисный слой глав 11–13; здесь доказано только наличие данных
 (`test_rbac01_engineer_vehicle_access_via_assigned_ticket`).
 
 ## Инварианты → тесты
@@ -93,7 +93,7 @@
 | Инвариант | Ограничение | Тест (`backend/tests/db/`) |
 |---|---|---|
 | VIN — 17 символов ISO 3779 | `ck_vehicle_vin_format` | `test_vin_format_rejected` |
-| Один активный авто на VIN | `uq_vehicle_vin_active` | `test_vin_unique_among_active_vehicles` |
+| Один активный авто на VIN | `uq_vehicle_vin_active` | `test_vin_unique_among_active_vehicles` |
 | Смена владельца не ломает историю ТО | soft-delete + новая запись | `test_owner_change_keeps_maintenance_history` |
 | VIN/владелец/модель неизменяемы | `trg_vehicle_guard` | `test_vehicle_identity_is_immutable` |
 | Пробег ≥ 0 и не уменьшается (409) | CHECK + `trg_vehicle_guard` | `test_mileage_cannot_*`, `test_conditional_mileage_update_reports_conflict` |
@@ -103,9 +103,9 @@
 | Одно действующее согласие ПД; доказательство неизменно, отзыв однократен | `uq_pd_consent_active`, `pd_consent_withdraw_only` | `test_single_active_consent_and_history`, `test_consent_evidence_is_immutable`, `test_consent_withdrawal_is_final` |
 | Телефон E.164, уникален | `ck_app_user_phone_e164`, `uq_app_user_phone` | `test_phone_must_be_e164`, `test_phone_unique` |
 | Одна запись статуса на (авто, агрегат) | `uq_vehicle_aggregate_status_*` | `test_one_status_per_vehicle_and_aggregate` |
-| Один активный регламент на (модель, агрегат) | `uq_maintenance_regulation_active` | `test_regulation_interval_rules` |
+| Один активный регламент на (модель, агрегат) | `uq_maintenance_regulation_active` | `test_regulation_interval_rules` |
 | Пороги «светофора»: одна строка 70/100, `1 ≤ yellow < red ≤ 200`, не удаляется | `ck_aggregate_status_thresholds_*`, `trg_singleton_row_guard` | `test_thresholds.py` |
-| Атомарный claim тикета | условный UPDATE + row lock | `test_concurrent_claim_has_single_winner` |
+| Атомарный claim тикета | условный UPDATE + row lock | `test_concurrent_claim_has_single_winner` |
 | Только хэши секретов | `ck_refresh_token_token_hash_sha256`, `ck_app_user_staff_password` | `test_refresh_token_stores_only_sha256`, `test_staff_requires_password_hash` |
 | Вложение и сообщение — одного тикета | `fk_ticket_attachment_message_same_ticket` | `test_attachment_message_must_belong_to_same_ticket` |
 | ORM ≡ миграции; DDL/ERD синхронны | autogenerate, export-скрипты | `test_orm_matches_migrations`, `test_ddl_file_in_sync_with_migrations`, `test_erd_file_in_sync_with_models` |
