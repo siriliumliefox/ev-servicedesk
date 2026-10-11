@@ -77,8 +77,11 @@ jobs:
       - name: DDL in sync with migrations
         run: poetry run python scripts/export_ddl.py --check
 
+      # Покрытие строк алгоритма «светофор» и сервиса агрегатов ≥ 90% (DoD главы 12, ADR 0016).
       - name: Test (pytest)
-        run: poetry run pytest -v
+        run: >-
+          poetry run pytest -v
+          --cov=app/domain/aggregates --cov-report=term-missing --cov-fail-under=90
 
   # Образ проверяется уже на PR (как в cd-staging, но без публикации): fail closed без
   # ENVIRONMENT, Auth Service в режиме staging (ADR 0013).

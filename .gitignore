@@ -36,3 +36,8 @@ mobile/.packages
 
 # Logs
 *.log
+
+# pytest-cov (Глава 12)
+.coverage
+.coverage.*
+htmlcov/

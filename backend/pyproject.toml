@@ -26,6 +26,7 @@ openapi-spec-validator = "^0.7"
 pyyaml = "^6.0"
 fakeredis = {version = ">=2.26,<3", extras = ["lua"]}
 openapi-schema-validator = ">=0.6,<0.7"
+pytest-cov = "^6.0"
 
 [build-system]
 requires = ["poetry-core>=2.0.0"]

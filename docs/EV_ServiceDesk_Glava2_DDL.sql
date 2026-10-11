@@ -624,5 +624,11 @@ INSERT INTO vehicle_model (brand, model, trim) VALUES ('Li Auto', 'L7', '');
 
 UPDATE alembic_version SET version_num='0006' WHERE alembic_version.version_num = '0005';
 
+-- Running upgrade 0006 -> 0007
+
+UPDATE aggregate_type SET name = normalize(name, NFC) WHERE name IS NOT NFC NORMALIZED;
+
+UPDATE alembic_version SET version_num='0007' WHERE alembic_version.version_num = '0006';
+
 COMMIT;
 
