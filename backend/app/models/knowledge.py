@@ -1,4 +1,4 @@
-"""Knowledge Base: статьи и деревья решений (C-06, C-07, E-03, A-02)."""
+"""Knowledge Base: статьи и деревья решений (C-06, C-07, E-03, A-02)."""
 
 from typing import Any
 

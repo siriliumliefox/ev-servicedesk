@@ -100,6 +100,15 @@ jobs:
     if: needs.changes.outputs.docs == 'true'
     uses: ./.github/workflows/docs-ci.yml
 
+  # Unicode NFC во всех текстовых файлах — на каждом PR, независимо от изменённых путей.
+  unicode-nfc:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Text files are Unicode NFC
+        run: python3 scripts/check_unicode_nfc.py
+
   # Поиск секретов — на каждом PR, независимо от изменённых путей.
   secret-scan:
     runs-on: ubuntu-latest
@@ -113,11 +122,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # Единственная обязательная проверка. Зелёная, только если `changes` и
-  # `secret-scan` успешны, а каждая проверка сервиса — успешна или не нужна
+  # Единственная обязательная проверка. Зелёная, только если `changes`,
+  # `unicode-nfc` и `secret-scan` успешны, а каждая проверка сервиса — успешна или не нужна
   # (skipped). Падение, отмена или пропуск из-за упавшей зависимости — красный.
   ci-gate:
-    needs: [changes, backend, web, mobile, docs, secret-scan]
+    needs: [changes, backend, web, mobile, docs, unicode-nfc, secret-scan]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -129,7 +138,7 @@ jobs:
           import json, os, sys
 
           needs = json.loads(os.environ["NEEDS"])
-          must_run = {"changes", "secret-scan"}
+          must_run = {"changes", "unicode-nfc", "secret-scan"}
           failed = False
           for name, job in sorted(needs.items()):
               result = job["result"]

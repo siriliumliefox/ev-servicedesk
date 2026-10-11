@@ -1,4 +1,4 @@
-"""docs/EV_ServiceDesk_Glava2_DDL.sql должен совпадать с offline-рендером миграций (без БД)."""
+"""docs/EV_ServiceDesk_Glava2_DDL.sql должен совпадать с offline-рендером миграций (без БД)."""
 
 from scripts.export_ddl import DDL_PATH, render
 

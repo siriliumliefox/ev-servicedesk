@@ -1,6 +1,6 @@
-"""Глава 2 (follow-up #13): полный индекс FK maintenance_regulation.vehicle_model_id.
+"""Глава 2 (follow-up #13): полный индекс FK maintenance_regulation.vehicle_model_id.
 
-Частичный uq_maintenance_regulation_active не покрывает архивные регламенты, поэтому
+Частичный uq_maintenance_regulation_active не покрывает архивные регламенты, поэтому
 RESTRICT-проверка при удалении vehicle_model и JOIN по модели читали бы всю таблицу.
 
 Revision ID: 0003

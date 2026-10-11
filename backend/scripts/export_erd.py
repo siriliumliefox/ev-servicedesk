@@ -14,7 +14,7 @@ ERD_PATH = BACKEND.parent / "docs" / "ERD_EV_ServiceDesk_Glava2.mermaid"
 HEADER = """\
 %% EV-ServiceDesk — ER-диаграмма (Глава 2)
 %% СГЕНЕРИРОВАНО из backend/app/models: cd backend && poetry run python scripts/export_erd.py
-%% Не редактировать вручную. ||--o{ — обязательный FK, |o--o{ — необязательный.
+%% Не редактировать вручную. ||--o{ — обязательный FK, |o--o{ — необязательный.
 """
 
 

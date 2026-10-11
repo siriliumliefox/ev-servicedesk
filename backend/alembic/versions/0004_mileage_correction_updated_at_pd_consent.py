@@ -1,9 +1,9 @@
-"""Техдолг главы 2 (#15): корректировка пробега, триггер updated_at, история согласий ПД.
+"""Техдолг главы 2 (#15): корректировка пробега, триггер updated_at, история согласий ПД.
 
 - vehicle_mileage_correction: append-only журнал; уменьшение пробега только через него,
-  только admin, с причиной и проверкой актуального пробега (ADR 0006);
+  только admin, с причиной и проверкой актуального пробега (ADR 0006);
 - set_updated_at: updated_at обновляется при любом UPDATE, не только через ORM;
-- pd_consent: история согласий и отзыв (99-З, ст. 5, 10) вместо колонок
+- pd_consent: история согласий и отзыв (99-З, ст. 5, 10) вместо колонок
   app_user.pd_consent_at / pd_policy_version; существующие согласия переносятся.
   Строку согласия нельзя удалить или переписать — допустим только отзыв (withdrawn_at).
 
@@ -57,7 +57,7 @@ END;
 $$
 """
 
-# Уменьшение разрешено, только если в ТОЙ ЖЕ транзакции записана корректировка
+# Уменьшение разрешено, только если в ТОЙ ЖЕ транзакции записана корректировка
 # с теми же old/new (created_at принудительно = now() — время начала транзакции).
 VEHICLE_GUARD_V2 = """
 CREATE OR REPLACE FUNCTION vehicle_guard() RETURNS trigger
@@ -137,7 +137,7 @@ def upgrade() -> None:
         unique=False,
         postgresql_where=sa.text("withdrawn_at IS NOT NULL"),
     )
-    # Перенос существующих согласий до удаления колонок.
+    # Перенос существующих согласий до удаления колонок.
     op.execute(
         "INSERT INTO pd_consent (user_id, policy_version, given_at) "
         "SELECT id, pd_policy_version, pd_consent_at FROM app_user WHERE pd_consent_at IS NOT NULL"
@@ -335,7 +335,7 @@ def downgrade() -> None:
 
     op.add_column("app_user", sa.Column("pd_consent_at", sa.DateTime(timezone=True)))
     op.add_column("app_user", sa.Column("pd_policy_version", sa.String(length=20)))
-    # В старую схему возвращается только действующее согласие (история теряется).
+    # В старую схему возвращается только действующее согласие (история теряется).
     op.execute(
         "UPDATE app_user u SET pd_consent_at = c.given_at, pd_policy_version = c.policy_version "
         "FROM pd_consent c WHERE c.user_id = u.id AND c.withdrawn_at IS NULL"

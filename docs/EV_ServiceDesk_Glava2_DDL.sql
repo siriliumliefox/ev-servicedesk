@@ -1,5 +1,5 @@
 -- EV-ServiceDesk — DDL (PostgreSQL 16)
--- СГЕНЕРИРОВАНО из миграций Alembic: cd backend && poetry run python scripts/export_ddl.py
+-- СГЕНЕРИРОВАНО из миграций Alembic: cd backend && poetry run python scripts/export_ddl.py
 -- Не редактировать вручную: источник истины — backend/alembic/versions (ADR 0003).
 -- Синхронность проверяет backend/tests/db/test_ddl_export.py.
 

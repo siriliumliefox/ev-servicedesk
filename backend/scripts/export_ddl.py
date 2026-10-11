@@ -1,4 +1,4 @@
-"""Генерация docs/EV_ServiceDesk_Glava2_DDL.sql из миграций Alembic (offline, без БД).
+"""Генерация docs/EV_ServiceDesk_Glava2_DDL.sql из миграций Alembic (offline, без БД).
 
 Источник истины схемы — backend/alembic/versions (ADR 0003); DDL — артефакт для диплома
 и ревью. Запуск: cd backend && poetry run python scripts/export_ddl.py [--check]
@@ -14,7 +14,7 @@ DDL_PATH = BACKEND.parent / "docs" / "EV_ServiceDesk_Glava2_DDL.sql"
 
 HEADER = """\
 -- EV-ServiceDesk — DDL (PostgreSQL 16)
--- СГЕНЕРИРОВАНО из миграций Alembic: cd backend && poetry run python scripts/export_ddl.py
+-- СГЕНЕРИРОВАНО из миграций Alembic: cd backend && poetry run python scripts/export_ddl.py
 -- Не редактировать вручную: источник истины — backend/alembic/versions (ADR 0003).
 -- Синхронность проверяет backend/tests/db/test_ddl_export.py.
 """
