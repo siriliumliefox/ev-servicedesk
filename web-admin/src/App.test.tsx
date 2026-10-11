@@ -9,9 +9,9 @@ import App from './App.tsx'
 const NOW = new Date('2026-10-10T12:00:00Z')
 const now = () => NOW
 
-function setup(path = '/', configure?: (repo: PrototypeRepository) => void) {
+function setup(path = '/', configure?: (repo: PrototypeRepository) => void, latencyMs = 0) {
   window.location.hash = path
-  const repo = new PrototypeRepository({ role: 'admin', now })
+  const repo = new PrototypeRepository({ role: 'admin', now, latencyMs })
   configure?.(repo)
   const user = userEvent.setup()
   let clicks = 0
@@ -297,6 +297,20 @@ describe('конструктор статей базы знаний', () => {
     expect(await screen.findByRole('heading', { name: 'Новая статья' })).toBeInTheDocument()
     expect(screen.getByLabelText('Заголовок')).toHaveValue('')
     expect(screen.queryByText(/^Статья опубликована/)).not.toBeInTheDocument()
+  })
+
+  it('итог публикации — вместе с перечитанной статьёй, не рядом с прежним бейджем (ответ с задержкой)', async () => {
+    // Задержка разводит ответ на публикацию и перечитывание статьи: между ними на экране прежняя форма.
+    const { click } = setup('/articles/6', undefined, 20)
+    await click(await screen.findByRole('button', { name: 'Опубликовать' }))
+    const published = await screen.findByText(/^Статья опубликована/)
+    expect(within(published.closest('form')!).getByText('Опубликована')).toBeInTheDocument()
+    expect(published).toBeInTheDocument()
+
+    await click(within(published.closest('form')!).getByRole('button', { name: 'Снять с публикации' }))
+    const unpublished = await screen.findByText(/снята с публикации/)
+    expect(within(unpublished.closest('form')!).getByText('Черновик')).toBeInTheDocument()
+    expect(unpublished).toBeInTheDocument()
   })
 
   it('неполадки после публикации — «Поддержка» → «Неполадки»', async () => {
