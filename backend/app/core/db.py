@@ -11,7 +11,8 @@ from app.core.config import get_settings
 
 @lru_cache
 def get_engine() -> Engine:
-    return create_engine(get_settings().database_url, pool_pre_ping=True)
+    # hide_parameters: телефоны и прочие ПД не попадают в текст исключений и логи (ADR 0005).
+    return create_engine(get_settings().database_url, pool_pre_ping=True, hide_parameters=True)
 
 
 @lru_cache

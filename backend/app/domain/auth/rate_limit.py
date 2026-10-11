@@ -27,16 +27,6 @@ def hit(redis: Redis, key: str, window_seconds: int) -> Hit:
     return Hit(count=int(count), retry_after=int(ttl) if ttl and ttl > 0 else window_seconds)
 
 
-def peek(redis: Redis, key: str) -> Hit:
-    """Текущее значение счётчика без увеличения."""
-    full_key = PREFIX + key
-    with redis.pipeline(transaction=True) as pipe:
-        pipe.get(full_key)
-        pipe.ttl(full_key)
-        count, ttl = pipe.execute()
-    return Hit(count=int(count or 0), retry_after=int(ttl) if ttl and ttl > 0 else 0)
-
-
 def acquire_cooldown(redis: Redis, key: str, seconds: int) -> int:
     """Пауза между событиями: 0 — пауза взята; иначе — сколько секунд ждать."""
     full_key = PREFIX + key
@@ -48,3 +38,15 @@ def acquire_cooldown(redis: Redis, key: str, seconds: int) -> int:
 
 def reset(redis: Redis, *keys: str) -> None:
     redis.delete(*(PREFIX + k for k in keys))
+
+
+# DECR только существующего ключа: иначе получился бы счётчик -1 без TTL.
+_UNDO = """
+if redis.call('EXISTS', KEYS[1]) == 1 then return redis.call('DECR', KEYS[1]) end
+return 0
+"""
+
+
+def undo_hit(redis: Redis, key: str) -> None:
+    """Возвращает одно обращение в окно (событие не состоялось или было успешным)."""
+    redis.register_script(_UNDO)(keys=[PREFIX + key])

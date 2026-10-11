@@ -3,9 +3,12 @@
 Реальные PostgreSQL и Redis; каждый ответ сверяется с docs/openapi.yaml (assert_contract).
 """
 
+import pytest
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.api.deps import get_sms_provider
+from app.domain.auth.sms import SmsError
 from app.models import AppUser, PdConsent, RefreshToken
 from app.models.enums import UserRole
 from tests.api.conftest import (
@@ -106,10 +109,12 @@ def test_attempts_exhausted_429(client, sms):
     code = code_from(sms, PHONE)
     wrong = "0000" if code != "0000" else "1111"
     payload = {"phone": PHONE, "code": wrong, "pd_policy_version": POLICY}
-    statuses = [
-        client.post(f"{API}/auth/phone/verify-code", json=payload).status_code for _ in range(5)
-    ]
-    assert statuses == [400, 400, 400, 400, 429]
+    responses = [client.post(f"{API}/auth/phone/verify-code", json=payload) for _ in range(5)]
+    assert [r.status_code for r in responses] == [400, 400, 400, 400, 429]
+    assert_contract(responses[-1], "verifyPhoneCode")
+    assert int(responses[-1].headers["Retry-After"]) > 0
+    r = client.post(f"{API}/auth/phone/verify-code", json=payload)  # код уже сгорел
+    assert_contract(r, "verifyPhoneCode")
     r = client.post(
         f"{API}/auth/phone/verify-code",
         json={"phone": PHONE, "code": code, "pd_policy_version": POLICY},
@@ -234,6 +239,7 @@ def test_staff_login_rate_limited(client, make_staff):
     )
     assert_contract(r, "staffLogin")
     assert r.status_code == 429
+    assert int(r.headers["Retry-After"]) > 0
 
 
 def test_refresh_reuse_revokes_all_sessions(client, login_client, db: Session):
@@ -293,3 +299,57 @@ def test_telegram_link(client, login_client):
     )
     assert_contract(r, "linkTelegram")
     assert r.status_code == 409 and r.json()["error"]["code"] == "TELEGRAM_ALREADY_LINKED"
+
+
+class _FailingSms:
+    def __init__(self, **flags: bool) -> None:
+        self.flags = flags
+
+    def send(self, phone: str, text: str) -> None:
+        raise SmsError("down", **self.flags)
+
+
+@pytest.mark.parametrize(
+    ("flags", "status", "code"),
+    [
+        ({}, 503, "SMS_UNAVAILABLE"),
+        ({"delivery_unknown": True}, 503, "SMS_UNAVAILABLE"),
+        ({"invalid_recipient": True}, 422, "PHONE_NOT_SUPPORTED"),
+    ],
+    ids=["not-sent", "delivery-unknown", "invalid-recipient"],
+)
+def test_sms_provider_failure_contract(app, client, flags, status, code):
+    app.dependency_overrides[get_sms_provider] = lambda: _FailingSms(**flags)
+    r = client.post(f"{API}/auth/phone/request-code", json={"phone": PHONE})
+    assert_contract(r, "requestPhoneCode")
+    assert r.status_code == status and r.json()["error"]["code"] == code
+    # Не отправлено — можно сразу повторить; доставка неизвестна — только после паузы.
+    again = client.post(f"{API}/auth/phone/request-code", json={"phone": PHONE})
+    assert again.status_code == (429 if flags.get("delivery_unknown") else status)
+
+
+def test_blank_policy_version_is_consent_required_and_keeps_code(client, sms):
+    client.post(f"{API}/auth/phone/request-code", json={"phone": PHONE})
+    code = code_from(sms, PHONE)
+    r = client.post(
+        f"{API}/auth/phone/verify-code",
+        json={"phone": PHONE, "code": code, "pd_policy_version": "   "},
+    )
+    assert_contract(r, "verifyPhoneCode")
+    assert r.status_code == 422 and r.json()["error"]["code"] == "PD_CONSENT_REQUIRED"
+    r = client.post(
+        f"{API}/auth/phone/verify-code",
+        json={"phone": PHONE, "code": code, "pd_policy_version": f" {POLICY} "},
+    )
+    assert r.status_code == 200
+
+
+def test_control_characters_rejected_422(client, login_client):
+    session = login_client(PHONE)
+    r = client.post(
+        f"{API}/auth/telegram/link",
+        json={"telegram_id": "tg\u0000x"},
+        headers=bearer(session["access_token"]),
+    )
+    assert_contract(r, "linkTelegram")
+    assert r.status_code == 422

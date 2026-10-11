@@ -23,7 +23,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     application.include_router(auth.router, prefix=API_PREFIX)
     application.include_router(users.router, prefix=API_PREFIX)
-    if settings.environment == "local":
+    # Отладочный маршрут SMS-кода — только local с фейковым провайдером (Issue #46).
+    if settings.environment == "local" and settings.sms_provider == "fake":
         application.include_router(debug.router, prefix=API_PREFIX)
     return application
 

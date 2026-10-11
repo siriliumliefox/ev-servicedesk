@@ -7,6 +7,7 @@ import pytest
 
 from app.core.config import Settings
 from app.core.errors import ApiError
+from app.core.security import hash_sms_code
 from app.domain.auth import codes
 from app.domain.auth.sms import FakeSmsProvider, SmsError
 
@@ -25,7 +26,7 @@ def sms():
 
 
 def make_settings(**overrides) -> Settings:
-    return Settings(environment="test", **overrides)
+    return Settings(_env_file=None, environment="test", **overrides)
 
 
 def sent_code(sms: FakeSmsProvider, phone: str = PHONE) -> str:
@@ -42,7 +43,8 @@ def test_code_stored_as_hmac_with_ttl(redis, sms):
     assert len(code) == settings.sms_code_length
     stored = redis.hgetall(codes.code_key(PHONE))
     assert stored["attempts"] == "0"
-    assert stored["h"] != code and code not in stored["h"]
+    # Хранится HMAC (64 hex), а не код.
+    assert stored["h"] == hash_sms_code(PHONE, code, settings) and stored["h"] != code
     assert 0 < redis.ttl(codes.code_key(PHONE)) <= settings.sms_code_ttl_seconds
     # Код нигде в Redis не лежит открытым.
     for key in redis.keys("*"):
@@ -54,10 +56,23 @@ def test_correct_code_ok_and_single_use(redis, sms):
     settings = make_settings()
     codes.request_code(redis, sms, settings, PHONE, IP)
     code = sent_code(sms)
-    assert codes.check_code(redis, settings, PHONE, code).status is codes.CodeCheck.OK
-    assert codes.consume_code(redis, PHONE) is True
-    assert codes.consume_code(redis, PHONE) is False
+    result = codes.check_code(redis, settings, PHONE, code)
+    assert result.status is codes.CodeCheck.OK
+    # Верный код не тратит попытку (может понадобиться после 422 PD_CONSENT_REQUIRED).
+    assert redis.hget(codes.code_key(PHONE), "attempts") == "0"
+    assert codes.consume_code(redis, PHONE, result.code_hash) is True
+    assert codes.consume_code(redis, PHONE, result.code_hash) is False
     assert codes.check_code(redis, settings, PHONE, code).status is codes.CodeCheck.MISSING
+
+
+def test_consume_deletes_only_the_verified_code(redis, sms):
+    """Проверенный старый код не «съедает» выпущенный следом новый (compare-and-delete)."""
+    settings = make_settings()
+    codes.request_code(redis, sms, settings, PHONE, IP)
+    old = codes.check_code(redis, settings, PHONE, sent_code(sms))
+    redis.hset(codes.code_key(PHONE), "h", "f" * 64)  # тем временем выпущен другой код
+    assert codes.consume_code(redis, PHONE, old.code_hash) is False
+    assert redis.exists(codes.code_key(PHONE))
 
 
 def test_wrong_code_counts_attempts(redis, sms):
@@ -85,10 +100,11 @@ def test_code_burns_after_max_attempts(redis, sms):
 
 
 def test_code_expires_after_ttl(redis, sms):
-    settings = make_settings(sms_code_ttl_seconds=1)
+    settings = make_settings()
     codes.request_code(redis, sms, settings, PHONE, IP)
     code = sent_code(sms)
-    time.sleep(1.2)
+    redis.pexpire(codes.code_key(PHONE), 50)  # TTL истекает (минимальный TTL настроек — 30 с)
+    time.sleep(0.2)
     assert codes.check_code(redis, settings, PHONE, code).status is codes.CodeCheck.MISSING
 
 
@@ -155,21 +171,75 @@ def test_daily_failure_limit(redis, sms):
 
 
 class BrokenSms:
-    def __init__(self, invalid_recipient: bool = False) -> None:
+    def __init__(self, invalid_recipient: bool = False, delivery_unknown: bool = False) -> None:
         self.invalid_recipient = invalid_recipient
+        self.delivery_unknown = delivery_unknown
 
     def send(self, phone: str, text: str) -> None:
-        raise SmsError("down", invalid_recipient=self.invalid_recipient)
+        raise SmsError(
+            "down", invalid_recipient=self.invalid_recipient, delivery_unknown=self.delivery_unknown
+        )
 
 
 @pytest.mark.parametrize(("invalid", "status"), [(False, 503), (True, 422)])
-def test_sms_failure_removes_code(redis, invalid, status):
+def test_sms_not_sent_removes_code_and_returns_limits(redis, invalid, status):
+    settings = make_settings()
     with pytest.raises(ApiError) as exc:
-        codes.request_code(redis, BrokenSms(invalid), make_settings(), PHONE, IP)
+        codes.request_code(redis, BrokenSms(invalid), settings, PHONE, IP)
     assert exc.value.status_code == status
     assert not redis.exists(codes.code_key(PHONE))
+    # SMS точно не ушло — пауза и лимит номера не потрачены: можно сразу повторить.
+    assert not redis.exists("auth:rl:sms-cooldown:" + PHONE)
+    assert redis.get("auth:rl:sms-phone:" + PHONE) == "0"
+    sms = FakeSmsProvider()
+    codes.request_code(redis, sms, settings, PHONE, IP)
+    assert sms.sent_count == 1
+
+
+def test_sms_delivery_unknown_keeps_code_and_cooldown(redis):
+    """Таймаут ответа A1: SMS могло дойти — код действует, повтор только после паузы."""
+    settings = make_settings()
+    with pytest.raises(ApiError) as exc:
+        codes.request_code(redis, BrokenSms(delivery_unknown=True), settings, PHONE, IP)
+    assert exc.value.status_code == 503
+    assert redis.exists(codes.code_key(PHONE))
+    with pytest.raises(ApiError) as again:
+        codes.request_code(redis, FakeSmsProvider(), settings, PHONE, IP)
+    assert again.value.status_code == 429
 
 
 def test_sms_text_contains_no_extra_digits():
     # Отладочный эндпоинт ищет первое число в тексте — в шаблоне других чисел быть не должно.
     assert not any(ch.isdigit() for ch in codes.SMS_TEXT.replace("{code}", ""))
+
+
+def test_refund_does_not_touch_code_issued_during_check(redis, sms, monkeypatch):
+    """Возврат попытки — только проверенному коду, не выпущенному в этот момент новому."""
+    settings = make_settings()
+    codes.request_code(redis, sms, settings, PHONE, IP)
+    code = sent_code(sms)
+    original = codes.sms_code_matches
+
+    def reissue_during_compare(*args, **kwargs):
+        redis.hset(codes.code_key(PHONE), mapping={"h": "e" * 64, "attempts": 0})
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(codes, "sms_code_matches", reissue_during_compare)
+    assert codes.check_code(redis, settings, PHONE, code).status is codes.CodeCheck.OK
+    assert redis.hget(codes.code_key(PHONE), "attempts") == "0"  # не -1
+
+
+def test_burn_does_not_delete_code_issued_during_check(redis, sms, monkeypatch):
+    settings = make_settings(sms_code_max_attempts=1)
+    codes.request_code(redis, sms, settings, PHONE, IP)
+    code = sent_code(sms)
+    original = codes.sms_code_matches
+
+    def reissue_during_compare(*args, **kwargs):
+        redis.hset(codes.code_key(PHONE), mapping={"h": "e" * 64, "attempts": 0})
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(codes, "sms_code_matches", reissue_during_compare)
+    with pytest.raises(ApiError):
+        codes.check_code(redis, settings, PHONE, "0000" if code != "0000" else "1111")
+    assert redis.hget(codes.code_key(PHONE), "h") == "e" * 64

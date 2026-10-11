@@ -3,6 +3,11 @@
 Refresh одноразовый: при обновлении старый отзывается и выдаётся новый (ротация).
 Повторное предъявление отозванного токена считается кражей — отзываются все токены
 пользователя (reuse detection).
+
+Порядок блокировок там, где сценарии пересекаются (ротация, отзыв всех токенов, вход по
+коду, отзыв согласия): сначала строка app_user (lock_user), затем его refresh_token и
+pd_consent. Так параллельная ротация и обнаружение повторного использования сериализуются
+по пользователю и не оставляют «пропущенный» новый токен.
 """
 
 from dataclasses import dataclass
@@ -42,7 +47,13 @@ def issue_pair(db: Session, user: AppUser, settings: Settings) -> TokenPair:
     )
 
 
+def lock_user(db: Session, user_id: int) -> None:
+    """FOR NO KEY UPDATE на app_user: не мешает вставкам с FK, но сериализует сценарии."""
+    db.execute(select(AppUser.id).where(AppUser.id == user_id).with_for_update(key_share=True))
+
+
 def revoke_all(db: Session, user_id: int) -> None:
+    lock_user(db, user_id)
     db.execute(
         update(RefreshToken)
         .where(RefreshToken.user_id == user_id, RefreshToken.revoked_at.is_(None))
@@ -53,12 +64,15 @@ def revoke_all(db: Session, user_id: int) -> None:
 def rotate(db: Session, refresh_token: str, settings: Settings) -> TokenPair:
     """POST /auth/refresh. Строка блокируется (FOR UPDATE): параллельная ротация — одна."""
     now = datetime.now(UTC)
+    token_hash = hash_refresh_token(refresh_token)
+    user_id = db.scalar(select(RefreshToken.user_id).where(RefreshToken.token_hash == token_hash))
+    if user_id is None:
+        raise unauthorized("Недействительный refresh-токен")
+    lock_user(db, user_id)
     row = db.scalars(
-        select(RefreshToken)
-        .where(RefreshToken.token_hash == hash_refresh_token(refresh_token))
-        .with_for_update()
+        select(RefreshToken).where(RefreshToken.token_hash == token_hash).with_for_update()
     ).one_or_none()
-    if row is None:
+    if row is None:  # удалён между поиском и блокировкой (например, вместе с пользователем)
         raise unauthorized("Недействительный refresh-токен")
     if row.revoked_at is not None:
         revoke_all(db, row.user_id)

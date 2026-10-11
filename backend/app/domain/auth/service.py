@@ -56,6 +56,9 @@ def verify_phone_code(
         if not user.is_active:
             raise ApiError(400, "ACCOUNT_DISABLED", "Вход заблокирован администратором")
 
+    if user is not None:
+        # Сериализация с DELETE /auth/pd-consent: согласие читается под блокировкой пользователя.
+        tokens.lock_user(db, user.id)
     consent = _active_consent(db, user.id) if user is not None else None
     if consent is None and not pd_policy_version:
         # Код не расходуется: клиент повторит запрос с согласием (99-З, ст. 5).
@@ -65,7 +68,7 @@ def verify_phone_code(
             "Требуется согласие на обработку персональных данных",
         )
 
-    if not codes.consume_code(redis, phone):
+    if not codes.consume_code(redis, phone, result.code_hash):
         raise ApiError(400, "CODE_EXPIRED", "Код уже использован — запросите новый")
     rate_limit.reset(redis, f"verify-fail:{phone}")
 
@@ -80,6 +83,7 @@ def verify_phone_code(
             db.rollback()
             user = db.scalars(select(AppUser).where(AppUser.phone == phone)).one()
             is_new = False
+            tokens.lock_user(db, user.id)
             consent = _active_consent(db, user.id)
 
     if pd_policy_version and (consent is None or consent.policy_version != pd_policy_version):
@@ -98,23 +102,25 @@ def staff_login(
     db: Session, redis: Redis, settings: Settings, phone: str, password: str, client_ip: str
 ) -> LoginResult:
     """POST /auth/staff/login: пароль argon2id, лимит неудачных попыток (N-06, N-08)."""
+    # Попытка учитывается ДО проверки пароля: параллельные запросы не обходят лимит.
+    # Успешный вход возвращает попытку — счётчики считают только неудачи.
     window = 15 * 60
-    by_phone = rate_limit.peek(redis, f"staff-fail:{phone}")
-    by_ip = rate_limit.peek(redis, f"staff-fail-ip:{client_ip}")
-    if by_phone.count >= settings.staff_login_failures_per_phone_15min:
+    phone_key, ip_key = f"staff-fail:{phone}", f"staff-fail-ip:{client_ip}"
+    by_phone = rate_limit.hit(redis, phone_key, window)
+    by_ip = rate_limit.hit(redis, ip_key, window)
+    if by_phone.exceeded(settings.staff_login_failures_per_phone_15min):
         raise rate_limited(by_phone.retry_after, "Слишком много неудачных попыток входа")
-    if by_ip.count >= settings.staff_login_failures_per_ip_15min:
+    if by_ip.exceeded(settings.staff_login_failures_per_ip_15min):
         raise rate_limited(by_ip.retry_after, "Слишком много неудачных попыток входа")
 
     user = db.scalars(select(AppUser).where(AppUser.phone == phone)).one_or_none()
     password_hash = user.password_hash if user is not None else None
     ok = verify_password(password, password_hash)  # считаем всегда — время не выдаёт номер
     if not ok or user is None or user.role not in STAFF_ROLES or not user.is_active:
-        rate_limit.hit(redis, f"staff-fail:{phone}", window)
-        rate_limit.hit(redis, f"staff-fail-ip:{client_ip}", window)
         raise unauthorized("Неверный телефон или пароль")
 
-    rate_limit.reset(redis, f"staff-fail:{phone}")
+    rate_limit.reset(redis, phone_key)
+    rate_limit.undo_hit(redis, ip_key)
     pair = tokens.issue_pair(db, user, settings)
     db.commit()
     return LoginResult(tokens=pair, user=user)
@@ -123,8 +129,11 @@ def staff_login(
 def withdraw_pd_consent(db: Session, user: AppUser) -> None:
     """DELETE /auth/pd-consent (99-З, ст. 10): отзыв + завершение всех сессий.
 
-    Анонимизация по очереди `ix_pd_consent_withdrawn_at` (≤ 15 дней) — фоновая задача, ADR 0013.
+    Очередь анонимизации (≤ 15 дней, глава 25) — пользователи БЕЗ действующего согласия,
+    по последнему withdrawn_at: строка с withdrawn_at бывает и у согласия, заменённого
+    новой редакцией (ADR 0013, п. 9).
     """
+    tokens.lock_user(db, user.id)
     consent = db.scalars(
         select(PdConsent)
         .where(PdConsent.user_id == user.id, PdConsent.withdrawn_at.is_(None))

@@ -1,7 +1,11 @@
 """Auth Service — пути `/auth/*` контракта (docs/openapi.yaml, тег Auth)."""
 
+import asyncio
+from functools import partial
 from typing import Annotated
+from weakref import WeakKeyDictionary
 
+import anyio
 from fastapi import APIRouter, Depends, Response, status
 
 from app.api.deps import (
@@ -32,12 +36,29 @@ from app.models.enums import UserRole
 router = APIRouter(prefix="/auth", tags=["Auth"])
 ClientIp = Annotated[str, Depends(client_ip)]
 
+# Отправка SMS ждёт провайдера (очередь 10 запросов/с, сеть) — в отдельном пуле потоков,
+# чтобы медленный A1 не занял общий пул остальных эндпоинтов (ADR 0013). Лимитер
+# привязан к циклу событий, поэтому создаётся на каждый цикл.
+SMS_THREADS = 50
+_sms_limiters: WeakKeyDictionary[asyncio.AbstractEventLoop, anyio.CapacityLimiter] = (
+    WeakKeyDictionary()
+)
+
+
+def _sms_limiter() -> anyio.CapacityLimiter:
+    loop = asyncio.get_running_loop()
+    limiter = _sms_limiters.get(loop)
+    if limiter is None:
+        limiter = _sms_limiters[loop] = anyio.CapacityLimiter(SMS_THREADS)
+    return limiter
+
 
 @router.post("/phone/request-code", operation_id="requestPhoneCode")
-def request_phone_code(
+async def request_phone_code(
     body: PhoneRequestCode, redis: RedisDep, sms: SmsDep, settings: SettingsDep, ip: ClientIp
 ) -> RequestCodeResponse:
-    ttl = codes.request_code(redis, sms, settings, body.phone, ip)
+    send = partial(codes.request_code, redis, sms, settings, body.phone, ip)
+    ttl = await anyio.to_thread.run_sync(send, limiter=_sms_limiter())
     return RequestCodeResponse(ttl_seconds=ttl)
 
 

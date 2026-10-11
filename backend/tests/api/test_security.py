@@ -8,6 +8,7 @@ from fastapi.routing import APIRoute
 from sqlalchemy.orm import Session
 
 from app.core.security import create_access_token
+from app.main import create_app
 from app.models import AppUser
 from app.models.enums import UserRole
 from tests.api.conftest import API, STAFF_PASSWORD, api_settings, assert_contract, bearer
@@ -152,10 +153,36 @@ def test_logout_cannot_revoke_foreign_refresh(client, login_client):
     assert r.status_code == 200
 
 
-def test_debug_route_absent_outside_local(client):
-    """Отладочный эндпоинт SMS-кода есть только при ENVIRONMENT=local."""
-    r = client.get(f"{API}/_debug/sms/last-code", params={"phone": "+375291000008"})
-    assert r.status_code == 404
+STRONG = "s" * 40
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"environment": "test"},
+        {"environment": "staging", "jwt_secret": STRONG, "sms_code_secret": STRONG},
+        {
+            "environment": "production",
+            "jwt_secret": STRONG,
+            "sms_code_secret": STRONG,
+            "sms_provider": "a1",
+            "sms_provider_user": "375290000000",
+            "sms_provider_api_key": "k",
+        },
+        # local, но с реальным провайдером: кода в памяти нет — маршрута тоже.
+        {
+            "environment": "local",
+            "sms_provider": "a1",
+            "sms_provider_user": "1",
+            "sms_provider_api_key": "k",
+        },
+    ],
+    ids=["test", "staging", "production", "local-a1"],
+)
+def test_debug_route_not_mounted_outside_local_fake(overrides):
+    """Проверка по таблице маршрутов: 404 по HTTP ничего не доказывает (как и у пустого пути)."""
+    application = create_app(api_settings(**overrides))
+    assert not any("_debug" in getattr(r, "path", "") for r in application.routes)
 
 
 def test_errors_do_not_leak_internals(client):
@@ -170,16 +197,20 @@ def test_debug_route_local_only_returns_code(db, real_redis):
     """ENVIRONMENT=local: код фейкового SMS доступен только через /_debug, вне OpenAPI."""
     from fastapi.testclient import TestClient
 
+    from app.api.deps import get_sms_provider
     from app.core.config import get_settings
     from app.core.db import get_db
     from app.core.redis import get_redis
-    from app.main import create_app
+    from app.domain.auth.sms import fake_provider
 
     settings = api_settings(environment="local")
     local = create_app(settings)
+    assert any("_debug" in getattr(r, "path", "") for r in local.routes)
     local.dependency_overrides[get_settings] = lambda: settings
     local.dependency_overrides[get_db] = lambda: db
     local.dependency_overrides[get_redis] = lambda: real_redis
+    # Явно модульный фейк: /_debug читает именно его; реальный провайдер исключён.
+    local.dependency_overrides[get_sms_provider] = fake_provider
     c = TestClient(local)
     phone = "+375291000099"
     assert c.post(f"{API}/auth/phone/request-code", json={"phone": phone}).status_code == 200

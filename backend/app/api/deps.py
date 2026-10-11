@@ -38,7 +38,9 @@ SmsDep = Annotated[SmsProvider, Depends(get_sms_provider)]
 
 
 def client_ip(request: Request) -> str:
-    # За обратным прокси uvicorn запускается с --proxy-headers (Глава 26).
+    # За обратным прокси uvicorn нужен --forwarded-allow-ips=<IP/CIDR прокси> (или
+    # FORWARDED_ALLOW_IPS): иначе X-Forwarded-For игнорируется и лимит по IP считается
+    # по адресу прокси. '*' — только если приложение недоступно напрямую (Глава 26).
     return request.client.host if request.client else "unknown"
 
 

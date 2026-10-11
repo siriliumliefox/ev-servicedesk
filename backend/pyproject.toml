@@ -24,7 +24,7 @@ pytest = "^8.3.0"
 ruff = "^0.7.0"
 openapi-spec-validator = "^0.7"
 pyyaml = "^6.0"
-fakeredis = ">=2.26,<3"
+fakeredis = {version = ">=2.26,<3", extras = ["lua"]}
 openapi-schema-validator = ">=0.6,<0.7"
 
 [build-system]

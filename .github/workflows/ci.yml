@@ -50,6 +50,8 @@ jobs:
               - "docs/requirements/RBAC_MATRIX.md"
               - ".github/workflows/backend-ci.yml"
               - ".github/workflows/ci.yml"
+              - ".github/workflows/cd-staging.yml"     # сборка и smoke образа (ADR 0013)
+              - "scripts/smoke_backend_image.sh"
             web:
               - "web-engineer/**"
               - "web-admin/**"

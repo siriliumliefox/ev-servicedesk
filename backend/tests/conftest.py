@@ -67,6 +67,33 @@ def migrated_engine(db_url: URL) -> Iterator[Engine]:
     engine.dispose()
 
 
+# Переменные, которые могли бы переключить тесты на реальный SMS-провайдер или чужие
+# секреты (экспорт в оболочке разработчика). .env тесты не читают: Settings(_env_file=None).
+_ISOLATED_ENV_PREFIXES = (
+    "SMS_",
+    "JWT_",
+    "ACCESS_TOKEN_",
+    "REFRESH_TOKEN_",
+    "VERIFY_",
+    "STAFF_LOGIN_",
+)
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """До импорта тестовых модулей: настройки уровня модуля не видят экспорт оболочки."""
+    for name in list(os.environ):
+        if name.upper().startswith(_ISOLATED_ENV_PREFIXES):
+            del os.environ[name]
+
+
+@pytest.fixture(autouse=True)
+def _isolate_auth_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """И переменные, выставленные уже во время прогона."""
+    for name in list(os.environ):
+        if name.upper().startswith(_ISOLATED_ENV_PREFIXES):
+            monkeypatch.delenv(name, raising=False)
+
+
 def _test_redis_url() -> str:
     return os.environ.get("TEST_REDIS_URL", "redis://localhost:6379/15")
 

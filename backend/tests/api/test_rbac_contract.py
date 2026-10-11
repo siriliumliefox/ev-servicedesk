@@ -12,7 +12,7 @@ from app.core.config import Settings
 from app.main import API_PREFIX, create_app
 from tests.api.conftest import _inline, contract, contract_operation
 
-APP = create_app(Settings(environment="test"))
+APP = create_app(Settings(_env_file=None, environment="test"))
 GENERATED = APP.openapi()
 
 

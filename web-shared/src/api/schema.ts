@@ -15,7 +15,7 @@ export interface paths {
         put?: never;
         /**
          * Запросить SMS-код для входа/регистрации по телефону
-         * @description Отправляет SMS с одноразовым кодом на указанный номер.
+         * @description Отправляет SMS с одноразовым кодом на указанный номер (код 4–8 цифр, по умолчанию 4; TTL — ttl_seconds). 429 RATE_LIMITED — пауза между запросами и лимиты на номер и адрес (заголовок Retry-After); 422 PHONE_NOT_SUPPORTED — SMS на номер не доставляется; 503 SMS_UNAVAILABLE (через default) — провайдер недоступен. Коды ошибок уточнены в 1.2.0.
          */
         post: operations["requestPhoneCode"];
         delete?: never;
@@ -35,7 +35,7 @@ export interface paths {
         put?: never;
         /**
          * Подтвердить SMS-код — вход или создание аккаунта (role=client)
-         * @description Проверяет код; создаёт пользователя при первом обращении. 422 PD_CONSENT_REQUIRED — нет действующего согласия на обработку ПД и не передан pd_policy_version (99-З, ст. 5); либо иная ошибка валидации.
+         * @description Проверяет код; создаёт пользователя при первом обращении. 422 PD_CONSENT_REQUIRED — нет действующего согласия на обработку ПД и не передан pd_policy_version (99-З, ст. 5); либо иная ошибка валидации. Код не расходуется при 422 — запрос можно повторить с согласием. Сервер принимает code только из 4–8 цифр; pd_policy_version обрезается по краям, пустое значение равно отсутствию согласия, управляющие символы — 422. 400: CODE_INVALID (details.attempts_left), CODE_EXPIRED (истёк, не запрашивался или уже использован), STAFF_PASSWORD_LOGIN (сотрудник — вход по паролю), ACCOUNT_DISABLED. 429 RATE_LIMITED — исчерпаны попытки ввода кода или суточный лимит, заголовок Retry-After. Коды ошибок уточнены в 1.2.0.
          */
         post: operations["verifyPhoneCode"];
         delete?: never;
@@ -55,7 +55,7 @@ export interface paths {
         put?: never;
         /**
          * Обновить access-токен по refresh-токену
-         * @description Выдаёт новую пару токенов взамен истекающего access-токена.
+         * @description Выдаёт новую пару токенов взамен истекающего access-токена; предъявленный refresh-токен отзывается (ротация). Повторное предъявление уже использованного токена отзывает все сессии пользователя (401). Сервер принимает refresh_token длиной до 512 символов. Уточнено в 1.2.0.
          */
         post: operations["refreshToken"];
         delete?: never;
@@ -135,7 +135,7 @@ export interface paths {
         put?: never;
         /**
          * Привязать Telegram к текущему аккаунту
-         * @description Сохраняет telegram_id для уже авторизованного пользователя.
+         * @description Сохраняет telegram_id для уже авторизованного пользователя. Сервер принимает telegram_id длиной до 50 символов без управляющих символов (иначе 422); 409 TELEGRAM_ALREADY_LINKED — привязан к другому аккаунту. Уточнено в 1.2.0.
          */
         post: operations["linkTelegram"];
         delete?: never;
@@ -1509,6 +1509,8 @@ export interface components {
         /** @description Превышен лимит запросов (напр. попытки SMS-кода) */
         RateLimited: {
             headers: {
+                /** @description Секунд до повторной попытки (добавлено в 1.2.0) */
+                "Retry-After"?: number;
                 [name: string]: unknown;
             };
             content: {

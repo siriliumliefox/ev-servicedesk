@@ -16,7 +16,13 @@ name: cd-staging
 on:
   push:
     branches: [develop]
-    paths: ["backend/**", "web-engineer/**", "web-admin/**", "web-shared/**"]
+    paths:
+      - "backend/**"
+      - "web-engineer/**"
+      - "web-admin/**"
+      - "web-shared/**"
+      - "scripts/smoke_backend_image.sh"
+      - ".github/workflows/cd-staging.yml"
   workflow_dispatch:
     inputs:
       git_sha:

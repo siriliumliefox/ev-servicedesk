@@ -37,12 +37,14 @@ STAFF_PASSWORD = "Staff-pass-123"
 
 
 def api_settings(**overrides: Any) -> Settings:
+    """Настройки тестов: без .env разработчика и всегда с фейковым SMS-провайдером."""
     values: dict[str, Any] = {
         "environment": "test",
         "jwt_secret": "api-test-secret-" + "q" * 32,
         "sms_code_secret": "api-test-sms-secret-" + "w" * 32,
+        "sms_provider": "fake",
     }
-    return Settings(**(values | overrides))
+    return Settings(_env_file=None, **(values | overrides))
 
 
 @pytest.fixture

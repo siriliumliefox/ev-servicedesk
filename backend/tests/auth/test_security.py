@@ -11,7 +11,7 @@ from pydantic import ValidationError
 from app.core import security
 from app.core.config import Settings
 
-SETTINGS = Settings(environment="test", jwt_secret="unit-test-secret-" + "x" * 32)
+SETTINGS = Settings(_env_file=None, environment="test", jwt_secret="unit-test-secret-" + "x" * 32)
 
 
 def test_access_token_roundtrip():
@@ -37,7 +37,7 @@ def test_expired_access_token_rejected():
 
 
 def test_token_signed_with_other_secret_rejected():
-    other = Settings(environment="test", jwt_secret="another-secret-" + "y" * 32)
+    other = Settings(_env_file=None, environment="test", jwt_secret="another-secret-" + "y" * 32)
     token = security.create_access_token(1, "admin", other)
     with pytest.raises(security.InvalidTokenError):
         security.decode_access_token(token, SETTINGS)
@@ -120,7 +120,7 @@ def test_sms_code_format_and_hmac():
     code = security.generate_sms_code(4)
     assert len(code) == 4 and code.isdigit()
     h = security.hash_sms_code("+375291234567", code, SETTINGS)
-    assert code not in h and len(h) == 64
+    assert h != code and len(h) == 64 and all(c in "0123456789abcdef" for c in h)
     assert security.sms_code_matches("+375291234567", code, h, SETTINGS)
     # Тот же код другого номера и неверный код не совпадают.
     assert not security.sms_code_matches("+375291234568", code, h, SETTINGS)
@@ -144,24 +144,60 @@ def test_password_hash_argon2():
 
 def test_real_environment_rejects_default_secrets():
     with pytest.raises(ValidationError, match="JWT_SECRET"):
-        Settings(environment="staging")
+        Settings(_env_file=None, environment="staging")
 
 
 def test_production_rejects_fake_sms_provider():
     strong = "z" * 40
     with pytest.raises(ValidationError, match="SMS_PROVIDER=fake"):
-        Settings(environment="production", jwt_secret=strong, sms_code_secret=strong)
+        Settings(
+            _env_file=None, environment="production", jwt_secret=strong, sms_code_secret=strong
+        )
 
 
 def test_a1_requires_credentials():
     strong = "z" * 40
     with pytest.raises(ValidationError, match="SMS_PROVIDER_USER"):
         Settings(
-            environment="staging", jwt_secret=strong, sms_code_secret=strong, sms_provider="a1"
+            _env_file=None,
+            environment="staging",
+            jwt_secret=strong,
+            sms_code_secret=strong,
+            sms_provider="a1",
         )
 
 
 def test_staging_with_real_secrets_ok():
     strong = "z" * 40
-    s = Settings(environment="staging", jwt_secret=strong, sms_code_secret=strong)
+    s = Settings(_env_file=None, environment="staging", jwt_secret=strong, sms_code_secret=strong)
     assert s.sms_provider == "fake"
+
+
+def test_settings_reject_unknown_environment():
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, environment="prod")
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"sms_provider_rps": 0},
+        {"sms_provider_rps": 11},
+        {"sms_code_length": 3},
+        {"sms_code_length": 9},
+        {"sms_sender": "TOO-LONG-NAME"},
+        {"sms_code_max_attempts": 0},
+    ],
+)
+def test_settings_reject_out_of_range(override):
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, environment="test", **override)
+
+
+def test_validation_error_hides_secret_values():
+    """Ошибка старта перечисляет имена переменных, но не их значения."""
+    secret = "short-leaky-secret"  # < 32 символов — отклоняется
+    with pytest.raises(ValidationError) as exc:
+        Settings(_env_file=None, environment="staging", jwt_secret=secret)
+    assert secret not in str(exc.value)
+    assert "JWT_SECRET" in str(exc.value)

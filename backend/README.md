@@ -31,6 +31,9 @@ curl 'http://localhost:8000/v1/_debug/sms/last-code?phone=%2B375291234567'
 ```
 Вне local этого маршрута нет. Переменные окружения — [`.env.example`](../.env.example).
 
+Реальные SMS через A1 (`SMS_PROVIDER=a1`): IP машины должен быть разрешён в A1.
+Проверить ключ, IP и альфа-имя (ключ вводится скрыто): `python3 ../scripts/a1_check.py --sender ETSGOMEL`.
+
 ## Структура
 | Путь | Назначение |
 |---|---|
