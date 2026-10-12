@@ -765,7 +765,7 @@ export interface paths {
         put?: never;
         /**
          * Зарегистрировать FCM push-токен устройства
-         * @description Сохраняет токен устройства для последующей push-рассылки.
+         * @description Сохраняет токен устройства для последующей push-рассылки. Повторная регистрация своего токена — 201; токен, привязанный к другому пользователю (сменили аккаунт на телефоне), перепривязывается к текущему — 201, 409 не возвращается. Токен длиннее 1024 символов — 422. Уточнено в 1.6.0 (ADR 0019 п. 8).
          */
         post: operations["registerPushToken"];
         delete?: never;
@@ -788,7 +788,7 @@ export interface paths {
         post?: never;
         /**
          * Удалить push-токен (логаут с устройства/отключение уведомлений)
-         * @description Прекращает отправку push-уведомлений на данное устройство.
+         * @description Прекращает отправку push-уведомлений на данное устройство (токен отзывается, журнал доставок сохраняется). 404 — нет активного токена с этим значением у текущего пользователя. Уточнено в 1.6.0 (ADR 0019 п. 8).
          */
         delete: operations["deletePushToken"];
         options?: never;
@@ -805,13 +805,13 @@ export interface paths {
         };
         /**
          * Центр уведомлений клиента
-         * @description Постраничная лента уведомлений (прошивки/ТО/новости/акции).
+         * @description Постраничная лента уведомлений (прошивки/ТО/новости/акции), новые первыми. В ленте — только уведомления, в аудиторию которых клиент вошёл в момент публикации (ADR 0019 п. 3).
          */
         get: operations["listNotifications"];
         put?: never;
         /**
          * Опубликовать уведомление (новости/акции/ручная рассылка)
-         * @description target_vehicle_model_id — единственный источник таргетинга (Глава 2, 3НФ). Для type=firmware обычно создаётся автоматически через POST /firmware-releases, но ручная публикация тоже разрешена.
+         * @description target_vehicle_model_id — единственный источник таргетинга (Глава 2, 3НФ). Для type=firmware обычно создаётся автоматически через POST /firmware-releases, но ручная публикация тоже разрешена: релиз той же модели обязателен, аудитория — владельцы авто модели с более ранней или неизвестной прошивкой. Уточнено в 1.6.0 (ADR 0019): type=maintenance — только системные напоминания о ТО (422 NOTIFICATION_TYPE_RESERVED); message — 1–1000 символов после обрезки пробелов (422); аудитория — активные клиенты с действующим согласием ПД и неудалёнными авто модели (null — все клиенты). Перед отправкой — previewNotificationAudience.
          */
         post: operations["createNotification"];
         delete?: never;
@@ -842,6 +842,68 @@ export interface paths {
         patch: operations["markNotificationRead"];
         trace?: never;
     };
+    "/notifications/{notificationId}/opened": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                notificationId: number;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Отметить открытие push-уведомления
+         * @description Вызывается приложением при нажатии на push: пишет NotificationDelivery.opened_at доставки на устройство с этим токеном (аналитика открываемости, Глава 16) и read_at, если уведомление ещё не прочитано. Токен без доставки этого уведомления — только read_at. 404 — уведомления нет в ленте текущего пользователя. Добавлено в 1.6.0 (ADR 0019 п. 12).
+         */
+        post: operations["markNotificationOpened"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/notifications/published": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Лента публикаций (админ-панель)
+         * @description Публикации администратора (firmware, news, promo; напоминания о ТО не входят), новые первыми, со счётчиками аудитории, доставки и открытий. Добавлено в 1.6.0 (ADR 0019 п. 12, закрывает ADR 0012 п. 5).
+         */
+        get: operations["listPublishedNotifications"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/notifications/audience-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Проверить аудиторию публикации без отправки
+         * @description Число клиентов и устройств, которые получат публикацию с таким телом, по тем же правилам, что createNotification (включая его проверки и 422). Ничего не создаёт и не отправляет. Добавлено в 1.6.0 (ADR 0019 п. 12, U-45).
+         */
+        post: operations["previewNotificationAudience"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/firmware-releases": {
         parameters: {
             query?: never;
@@ -851,13 +913,13 @@ export interface paths {
         };
         /**
          * Список релизов прошивок
-         * @description Возвращает релизы, опционально отфильтрованные по модели авто.
+         * @description Возвращает релизы, опционально отфильтрованные по модели авто; новые первыми (released_at, затем id по убыванию).
          */
         get: operations["listFirmwareReleases"];
         put?: never;
         /**
          * Опубликовать релиз прошивки
-         * @description Атомарно создаёт FirmwareRelease и триггерит Notification(type=firmware) с targeting по vehicle_model_id.
+         * @description Атомарно создаёт FirmwareRelease и триггерит Notification(type=firmware) с targeting по vehicle_model_id. Уточнено в 1.6.0 (ADR 0019 п. 4): текст уведомления формирует сервер; аудитория — владельцы авто модели, у которых прошивка не указана или выпущена раньше (released_at, при равенстве — id). Неизвестная модель, повтор версии модели, дата в будущем — 422.
          */
         post: operations["createFirmwareRelease"];
         delete?: never;
@@ -883,7 +945,7 @@ export interface paths {
         head?: never;
         /**
          * Зафиксировать текущую прошивку авто (после русификации/визита)
-         * @description Обновляет current_firmware_release_id автомобиля.
+         * @description Обновляет current_firmware_release_id автомобиля; уведомлений не создаёт. Доступ — как у записи работ по авто (инженер — по своему тикету в работе, ADR 0014). Уточнено в 1.6.0.
          */
         patch: operations["setVehicleFirmware"];
         trace?: never;
@@ -1207,11 +1269,23 @@ export interface components {
             updated_at: string;
             /** @description Кто изменил последним; null — значения по умолчанию из миграции. */
             updated_by_user_id?: number | null;
+            /**
+             * @description Напоминание о ТО, когда до порога «требуется замена» осталось не больше N км (N-10). Добавлено в 1.6.0 (ADR 0019 п. 5).
+             * @example 1000
+             */
+            reminder_before_km: number;
+            /**
+             * @description То же по времени — не больше N дней. Добавлено в 1.6.0.
+             * @example 14
+             */
+            reminder_before_days: number;
         };
-        /** @description 1 ≤ yellow_from_percent < red_above_percent ≤ 200, иначе 422. */
+        /** @description 1 ≤ yellow_from_percent < red_above_percent ≤ 200, иначе 422. reminder_before_km и reminder_before_days необязательны (не переданы — не меняются), добавлены в 1.6.0. */
         AggregateStatusThresholdsUpdateRequest: {
             yellow_from_percent: number;
             red_above_percent: number;
+            reminder_before_km?: number;
+            reminder_before_days?: number;
         };
         AggregateReplaceRequest: {
             /** Format: date */
@@ -1445,6 +1519,10 @@ export interface components {
             type: "firmware" | "maintenance" | "news" | "promo";
             target_vehicle_model_id?: number | null;
             firmware_release_id?: number | null;
+            /** @description Авто напоминания о ТО (type=maintenance), иначе null. Добавлено в 1.6.0. */
+            vehicle_id?: number | null;
+            /** @description Агрегат напоминания о ТО (type=maintenance), иначе null. Добавлено в 1.6.0. */
+            aggregate_type_id?: number | null;
             message: string;
             /** Format: date-time */
             created_at: string;
@@ -1459,6 +1537,37 @@ export interface components {
         NotificationList: {
             items: components["schemas"]["NotificationListItem"][];
             meta: components["schemas"]["PaginationMeta"];
+        };
+        NotificationOpenedRequest: {
+            /** @description FCM-токен устройства, на котором открыт push */
+            token: string;
+        };
+        /** @description Добавлено в 1.6.0 (ADR 0019 п. 12). */
+        NotificationDeliveryStats: {
+            /** @description Клиентов в аудитории */
+            recipients: number;
+            /** @description Доставок, принятых FCM */
+            delivered: number;
+            /** @description Доставок с окончательной ошибкой */
+            failed: number;
+            /** @description Доставок, открытых на устройстве */
+            opened: number;
+            /** @description Клиентов, прочитавших уведомление */
+            read: number;
+        };
+        PublishedNotification: components["schemas"]["Notification"] & {
+            stats: components["schemas"]["NotificationDeliveryStats"];
+        };
+        PublishedNotificationList: {
+            items: components["schemas"]["PublishedNotification"][];
+            meta: components["schemas"]["PaginationMeta"];
+        };
+        /** @description Добавлено в 1.6.0 (ADR 0019 п. 12, U-45). */
+        NotificationAudiencePreview: {
+            /** @description Клиентов получат уведомление в ленту */
+            recipients: number;
+            /** @description Активных push-токенов этих клиентов */
+            devices: number;
         };
         FirmwareReleaseCreateRequest: {
             vehicle_model_id: number;
@@ -3117,6 +3226,93 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            default: components["responses"]["ServerError"];
+        };
+    };
+    markNotificationOpened: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                notificationId: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NotificationOpenedRequest"];
+            };
+        };
+        responses: {
+            /** @description Отмечено */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["ValidationError"];
+            default: components["responses"]["ServerError"];
+        };
+    };
+    listPublishedNotifications: {
+        parameters: {
+            query?: {
+                type?: "firmware" | "news" | "promo";
+                /** @description Публикации для этой модели (без публикаций «для всех моделей»). */
+                target_vehicle_model_id?: number;
+                page?: components["parameters"]["PageParam"];
+                page_size?: components["parameters"]["PageSizeParam"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Страница публикаций */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublishedNotificationList"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            422: components["responses"]["ValidationError"];
+            default: components["responses"]["ServerError"];
+        };
+    };
+    previewNotificationAudience: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NotificationCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Размер аудитории */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationAudiencePreview"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            422: components["responses"]["ValidationError"];
             default: components["responses"]["ServerError"];
         };
     };
