@@ -74,38 +74,42 @@ class VehicleSwitcher extends StatelessWidget {
       context: context,
       builder: (sheetContext) {
         final app = AppScope.of(sheetContext);
+        // Много авто (5 тестовых авто главы 19) не помещаются в шторку — список прокручивается.
         return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: EvSpace.s4),
-                child: Text('Мои автомобили', style: Theme.of(sheetContext).textTheme.titleLarge),
-              ),
-              const SizedBox(height: EvSpace.s2),
-              for (final v in app.vehicles)
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: EvSpace.s4),
+                  child: Text('Мои автомобили', style: Theme.of(sheetContext).textTheme.titleLarge),
+                ),
+                const SizedBox(height: EvSpace.s2),
+                for (final v in app.vehicles)
+                  ListTile(
+                    leading: const Icon(Icons.directions_car_outlined),
+                    title:
+                        Text([v.vehicleModel.title, if (v.vehicleModel.trim != null) v.vehicleModel.trim].join(' · ')),
+                    subtitle: Text('${v.vinMasked} · ${formatKm(v.mileage)}'),
+                    trailing: v.id == vehicle.id ? const Icon(Icons.check) : null,
+                    selected: v.id == vehicle.id,
+                    onTap: () {
+                      app.selectVehicle(v.id);
+                      Navigator.of(sheetContext).pop();
+                    },
+                  ),
                 ListTile(
-                  leading: const Icon(Icons.directions_car_outlined),
-                  title: Text([v.vehicleModel.title, if (v.vehicleModel.trim != null) v.vehicleModel.trim].join(' · ')),
-                  subtitle: Text('${v.vinMasked} · ${formatKm(v.mileage)}'),
-                  trailing: v.id == vehicle.id ? const Icon(Icons.check) : null,
-                  selected: v.id == vehicle.id,
+                  leading: const Icon(Icons.add),
+                  title: const Text('Добавить авто'),
                   onTap: () {
-                    app.selectVehicle(v.id);
                     Navigator.of(sheetContext).pop();
+                    openAddVehicle(context);
                   },
                 ),
-              ListTile(
-                leading: const Icon(Icons.add),
-                title: const Text('Добавить авто'),
-                onTap: () {
-                  Navigator.of(sheetContext).pop();
-                  openAddVehicle(context);
-                },
-              ),
-              const SizedBox(height: EvSpace.s2),
-            ],
+                const SizedBox(height: EvSpace.s2),
+              ],
+            ),
           ),
         );
       },

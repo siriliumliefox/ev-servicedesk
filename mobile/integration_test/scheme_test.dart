@@ -78,32 +78,42 @@ void main() {
         await _tap(tester, find.textContaining(vehicle.vinMasked).last);
       }
       final statuses = await repo.aggregateStatuses(vehicle.id);
-      await _waitFor(tester, find.byKey(Key('row-${statuses.first.aggregateTypeCode}')));
-      for (final s in statuses) {
+      final onScheme = [
+        for (final s in statuses)
+          if (aggregateSchemePositions.containsKey(s.aggregateTypeCode)) s
+      ];
+      await _waitFor(tester, find.byKey(Key('zone-${onScheme.first.aggregateTypeCode}')));
+      // Экран «Авто» — ленивый ListView: схема вверху, строки списка строятся при прокрутке к ним.
+      final screen = find.descendant(of: find.byType(RefreshIndicator), matching: find.byType(Scrollable)).first;
+
+      for (final s in onScheme) {
         final expected = '${s.aggregateTypeName}: ${s.status.label}';
-        final row = find.byKey(Key('row-${s.aggregateTypeCode}'));
-        await tester.ensureVisible(row);
-        await tester.pumpAndSettle();
-        expect(find.descendant(of: row, matching: find.text(s.status.label)), findsOneWidget, reason: expected);
-        if (!aggregateSchemePositions.containsKey(s.aggregateTypeCode)) continue;
         final zone = find.byKey(Key('zone-${s.aggregateTypeCode}'));
-        await tester.ensureVisible(zone);
+        await tester.scrollUntilVisible(zone, -150, scrollable: screen);
         await tester.pumpAndSettle();
         expect(tester.getSemantics(zone).label, expected, reason: vehicle.vinMasked);
         expect(zone.hitTestable(), findsOneWidget, reason: expected);
         await tester.tap(zone);
         await _waitFor(tester, find.byType(BottomSheet));
         await tester.pumpAndSettle();
-        expect(
-          find.descendant(of: find.byType(BottomSheet), matching: find.byType(StatusBadge)),
-          findsOneWidget,
-        );
-        expect(find.descendant(of: find.byType(BottomSheet), matching: find.text(s.status.label)), findsWidgets,
+        final sheet = find.byType(BottomSheet);
+        expect(find.descendant(of: sheet, matching: find.text(s.aggregateTypeName)), findsWidgets, reason: expected);
+        expect(find.descendant(of: sheet, matching: find.text(s.status.label)), findsOneWidget,
             reason: '$expected — в карточке агрегата');
-        await tester.tapAt(const Offset(10, 60));
+        await tester.tapAt(const Offset(10, 60)); // затемнение над шитом
         await tester.pumpAndSettle();
         compared++;
       }
+
+      for (final s in statuses) {
+        final row = find.byKey(Key('row-${s.aggregateTypeCode}'));
+        await tester.scrollUntilVisible(row, 150, scrollable: screen);
+        await tester.pumpAndSettle();
+        expect(find.descendant(of: row, matching: find.text(s.status.label)), findsOneWidget,
+            reason: '${s.aggregateTypeName}: ${s.status.label} — в списке');
+      }
+      await tester.scrollUntilVisible(find.byKey(const Key('open-vehicle-card')), -300, scrollable: screen);
+      await tester.pumpAndSettle();
       debugPrint('PASS  ${vehicle.vehicleModel.title} ${vehicle.vinMasked}: '
           '${statuses.map((s) => '${s.aggregateTypeCode} ${s.status.name}').join(', ')}');
     }

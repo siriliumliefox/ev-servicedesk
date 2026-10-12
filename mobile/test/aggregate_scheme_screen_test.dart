@@ -141,6 +141,28 @@ void main() {
     });
   });
 
+  testWidgets('шторка «Мои автомобили» с 6 авто на iPhone SE — без переполнения, последнее выбирается', (tester) async {
+    tester.view.physicalSize = const Size(375, 667);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final repo = PrototypeRepository(latency: Duration.zero);
+    for (final tail in ['000001', '000002', '000003', '000004']) {
+      await tester.runAsync(() => repo.addVehicle('L6TZZZ1Z2RA$tail')); // таймер прототипа — вне подменного времени
+    }
+    await tester.pumpWidget(EvServiceDeskApp(repository: repo, signedIn: true));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('vehicle-switcher')));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    final last = find.textContaining('•••• 0004');
+    await tester.scrollUntilVisible(last, 100,
+        scrollable: find.descendant(of: find.byType(BottomSheet), matching: find.byType(Scrollable)));
+    await tester.tap(last);
+    await tester.pumpAndSettle();
+    expect(find.descendant(of: find.byKey(const Key('vehicle-switcher')), matching: find.textContaining('•••• 0004')),
+        findsOneWidget);
+  });
+
   group('данные схемы', () {
     testWidgets('статусы читаются одной страницей максимального размера', (tester) async {
       final requests = await _pumpHttp(tester, () => http.Response('{"items": []}', 200));
