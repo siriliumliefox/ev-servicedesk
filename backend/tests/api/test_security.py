@@ -107,6 +107,18 @@ def test_protected_routes_exist(app):
         "validateDecisionTree",
         "updateDecisionTreeNode",
         "deleteDecisionTreeNode",
+        # Notifications Service (Глава 15)
+        "registerPushToken",
+        "deletePushToken",
+        "listNotifications",
+        "createNotification",
+        "listPublishedNotifications",
+        "previewNotificationAudience",
+        "markNotificationRead",
+        "markNotificationOpened",
+        "listFirmwareReleases",
+        "createFirmwareRelease",
+        "setVehicleFirmware",
     }
 
 
@@ -243,6 +255,8 @@ STRONG = "s" * 40
             "sms_provider": "a1",
             "sms_provider_user": "375290000000",
             "sms_provider_api_key": "k",
+            "push_provider": "fcm",
+            "fcm_service_account_json": "{}",
         },
         # local, но с реальным провайдером: кода в памяти нет — маршрута тоже.
         {

@@ -249,6 +249,8 @@ SCHEMA_TABLE = {
     "KnowledgeArticleRevisionSummary": ("knowledge_article_revision", {"published_at"}),
     "KnowledgeArticleRevision": ("knowledge_article_revision", {"published_at"}),
     "Notification": ("notification", set()),
+    # stats — счётчики аудитории и доставки (1.6.0, ADR 0019 п. 12).
+    "PublishedNotification": ("notification", {"stats"}),
     "NotificationCreateRequest": ("notification", set()),
     "FirmwareRelease": ("firmware_release", set()),
     "FirmwareReleaseCreateRequest": ("firmware_release", set()),

@@ -6,6 +6,8 @@ erDiagram
         smallint id PK
         smallint yellow_from_percent
         smallint red_above_percent
+        integer reminder_before_km
+        smallint reminder_before_days
         bigint updated_by_user_id FK "nullable"
         timestamptz created_at
         timestamptz updated_at
@@ -92,11 +94,23 @@ erDiagram
         timestamptz created_at
         timestamptz updated_at
     }
+    maintenance_reminder {
+        bigint id PK
+        bigint vehicle_id FK
+        bigint aggregate_type_id FK
+        maintenance_reminder_kind kind
+        date cycle_replaced_at "nullable"
+        integer cycle_replaced_mileage "nullable"
+        bigint notification_id FK
+        timestamptz created_at
+    }
     notification {
         bigint id PK
         notification_type type
         bigint firmware_release_id FK "nullable"
         bigint target_vehicle_model_id FK "nullable"
+        bigint vehicle_id FK "nullable"
+        bigint aggregate_type_id FK "nullable"
         text message
         timestamptz created_at
     }
@@ -106,6 +120,10 @@ erDiagram
         bigint push_token_id FK
         timestamptz delivered_at "nullable"
         timestamptz opened_at "nullable"
+        smallint attempts
+        timestamptz next_attempt_at
+        timestamptz failed_at "nullable"
+        varchar_50 error_code "nullable"
         timestamptz created_at
     }
     notification_recipient {
@@ -127,7 +145,8 @@ erDiagram
     push_token {
         bigint id PK
         bigint user_id FK
-        varchar_255 token UK
+        varchar_1024 token "unique (token) where revoked_at IS NULL"
+        timestamptz revoked_at "nullable"
         timestamptz created_at
         timestamptz updated_at
     }
@@ -233,8 +252,13 @@ erDiagram
     vehicle ||--o{ maintenance_record : "vehicle_id (RESTRICT)"
     aggregate_type ||--o{ maintenance_regulation : "aggregate_type_id (RESTRICT)"
     vehicle_model ||--o{ maintenance_regulation : "vehicle_model_id (RESTRICT)"
+    aggregate_type ||--o{ maintenance_reminder : "aggregate_type_id (RESTRICT)"
+    notification ||--o{ maintenance_reminder : "notification_id (CASCADE)"
+    vehicle ||--o{ maintenance_reminder : "vehicle_id (RESTRICT)"
+    aggregate_type |o--o{ notification : "aggregate_type_id (RESTRICT)"
     firmware_release |o--o{ notification : "firmware_release_id, target_vehicle_model_id (RESTRICT)"
     vehicle_model |o--o{ notification : "target_vehicle_model_id (RESTRICT)"
+    vehicle |o--o{ notification : "vehicle_id (RESTRICT)"
     notification ||--o{ notification_delivery : "notification_id (CASCADE)"
     push_token ||--o{ notification_delivery : "push_token_id (CASCADE)"
     notification ||--o{ notification_recipient : "notification_id (CASCADE)"

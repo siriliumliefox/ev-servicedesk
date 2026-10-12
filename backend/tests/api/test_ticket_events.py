@@ -9,6 +9,7 @@
 import json
 import logging
 import time
+from contextlib import ExitStack
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -157,13 +158,14 @@ def test_message_created_is_rendered_per_recipient(
     admin_headers, admin = as_staff("+375295500021", UserRole.ADMIN)
     admin_token = admin_headers["Authorization"].removeprefix("Bearer ")
 
-    with (
-        connect(client, ticket_id) as client_ws,
-        connect(client, ticket_id) as eng_ws,
-        connect(client, ticket_id) as admin_ws,
-    ):
+    # Авторизация — сразу после подключения: тайм-аут кадра auth в модуле 0,3 с, и на
+    # загруженном CI подключение следующих сокетов успевало его исчерпать (4401).
+    with ExitStack() as stack:
+        client_ws = stack.enter_context(connect(client, ticket_id))
         auth(client_ws, owner[1])
+        eng_ws = stack.enter_context(connect(client, ticket_id))
         auth(eng_ws, eng_token)
+        admin_ws = stack.enter_context(connect(client, ticket_id))
         auth(admin_ws, admin_token)
         eng_ws.send_text("ping")  # прочие сообщения клиента игнорируются
 

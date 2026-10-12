@@ -111,7 +111,13 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
   private treeNodes: DecisionTreeNode[] = [];
   private aggregateTypes: AggregateType[] = [];
   private regulations: MaintenanceRegulation[] = [];
-  private thresholds: AggregateStatusThresholds = { yellow_from_percent: 70, red_above_percent: 100, updated_at: "" };
+  private thresholds: AggregateStatusThresholds = {
+    yellow_from_percent: 70,
+    red_above_percent: 100,
+    updated_at: "",
+    reminder_before_km: 1000,
+    reminder_before_days: 14,
+  };
   private firmware: FirmwareRelease[] = [];
   private notifications: Notification[] = [];
   private nextId = 10_000;
@@ -156,7 +162,13 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
     this.treeNodes = empty ? [] : clone(DECISION_TREE_NODES);
     this.aggregateTypes = clone(AGGREGATE_TYPES);
     this.regulations = empty ? [] : seedRegulations();
-    this.thresholds = { yellow_from_percent: 70, red_above_percent: 100, updated_at: "2026-10-01T08:00:00Z" };
+    this.thresholds = {
+      yellow_from_percent: 70,
+      red_above_percent: 100,
+      updated_at: "2026-10-01T08:00:00Z",
+      reminder_before_km: 1000,
+      reminder_before_days: 14,
+    };
     this.firmware = empty ? [] : clone(FIRMWARE_RELEASES);
     this.notifications = empty ? [] : seedNotifications(now);
   }
@@ -336,7 +348,19 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
       if (!Number.isInteger(y) || !Number.isInteger(r) || y < 1 || r > 200 || y >= r) {
         throw validation("Нужно 1 ≤ «жёлтый с» < «красный выше» ≤ 200", "yellow_from_percent");
       }
-      this.thresholds = { yellow_from_percent: y, red_above_percent: r, updated_at: this.clock().toISOString() };
+      // Порог напоминания о ТО (ADR 0019 п. 5): не передан — не меняется.
+      const km = body.reminder_before_km ?? this.thresholds.reminder_before_km;
+      const days = body.reminder_before_days ?? this.thresholds.reminder_before_days;
+      if (!Number.isInteger(km) || !Number.isInteger(days) || km < 1 || km > 100000 || days < 1 || days > 365) {
+        throw validation("Напоминание о ТО: 1–100 000 км и 1–365 дней", "reminder_before_km");
+      }
+      this.thresholds = {
+        yellow_from_percent: y,
+        red_above_percent: r,
+        updated_at: this.clock().toISOString(),
+        reminder_before_km: km,
+        reminder_before_days: days,
+      };
       return this.thresholds;
     });
   }

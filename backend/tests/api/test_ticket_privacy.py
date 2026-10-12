@@ -14,6 +14,7 @@ import logging
 import re
 import uuid
 from collections.abc import Iterable
+from contextlib import ExitStack
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlencode, urlsplit, urlunsplit
@@ -119,13 +120,11 @@ def test_ws_frames_hide_staff_contacts_per_recipient(
     contacts = give_contacts(client, world, db)
     tid = world.tickets[ASSIGNED]
     get_ttl = settings.presign_get_ttl_seconds
-    with (
-        connect(client, tid) as owner_ws,
-        connect(client, tid) as engineer_ws,
-        connect(client, tid) as admin_ws,
-    ):
-        sockets = {OWNER: owner_ws, ENGINEER: engineer_ws, ADMIN: admin_ws}
-        for actor, ws in sockets.items():
+    # Авторизация — сразу после подключения каждого сокета (тайм-аут кадра auth).
+    with ExitStack() as stack:
+        sockets = {}
+        for actor in (OWNER, ENGINEER, ADMIN):
+            sockets[actor] = ws = stack.enter_context(connect(client, tid))
             auth(ws, world.tokens[actor])
 
         for author in (OWNER, ENGINEER, ADMIN):

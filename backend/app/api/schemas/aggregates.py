@@ -59,6 +59,9 @@ class AggregateReplaceRequest(BaseModel):
 class AggregateStatusThresholdsUpdateRequest(BaseModel):
     yellow_from_percent: Annotated[int, Field(ge=1, le=199)]
     red_above_percent: Annotated[int, Field(ge=2, le=200)]
+    # Порог напоминания о ТО «за N км / N дней» (N-10, ADR 0019 п. 5); не передан — не меняется.
+    reminder_before_km: Annotated[int, Field(ge=1, le=100_000)] | None = None
+    reminder_before_days: Annotated[int, Field(ge=1, le=365)] | None = None
 
     @model_validator(mode="after")
     def _order(self) -> "AggregateStatusThresholdsUpdateRequest":
@@ -108,6 +111,8 @@ class AggregateStatusThresholdsOut(BaseModel):
     red_above_percent: int
     updated_at: datetime
     updated_by_user_id: int | None
+    reminder_before_km: int
+    reminder_before_days: int
 
 
 class AggregateTypeList(BaseModel):

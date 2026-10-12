@@ -148,6 +148,11 @@ def update_aggregate_status_thresholds(
     body: AggregateStatusThresholdsUpdateRequest, user: CurrentUser, db: DbDep
 ) -> AggregateStatusThresholdsOut:
     thresholds = service.update_thresholds(
-        db, user, body.yellow_from_percent, body.red_above_percent
+        db,
+        user,
+        body.yellow_from_percent,
+        body.red_above_percent,
+        body.reminder_before_km,
+        body.reminder_before_days,
     )
     return AggregateStatusThresholdsOut.model_validate(thresholds)

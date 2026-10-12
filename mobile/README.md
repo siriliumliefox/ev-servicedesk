@@ -40,4 +40,4 @@ flutter test
 - `test/` — дизайн-система, сценарии прототипа и правило 3-х кликов
 
 Прототип и сценарии ревью — `docs/design/MOBILE_PROTOTYPE.md` (глава 7, ADR 0011).
-Реальный API, авторизация, push — главы 18–20.
+Реальный API, авторизация, push — главы 18–20. Отладочный экран push для проверки FCM на iPhone (глава 15) — отдельная точка входа `lib/main_push_debug.dart`, инструкция — `docs/NOTIFICATIONS_E2E.md`.

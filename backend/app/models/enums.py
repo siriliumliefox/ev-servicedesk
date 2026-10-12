@@ -47,6 +47,13 @@ class NotificationType(enum.StrEnum):
     PROMO = "promo"
 
 
+class MaintenanceReminderKind(enum.StrEnum):
+    """Вид напоминания о ТО (ADR 0019 п. 6): остаток ≤ N — «скоро», красный — «просрочено»."""
+
+    DUE_SOON = "due_soon"
+    OVERDUE = "overdue"
+
+
 def pg_enum(enum_cls: type[enum.StrEnum], name: str) -> Enum:
     """ENUM, хранящий value ("in_progress"), а не имя члена ("IN_PROGRESS")."""
     return Enum(
@@ -64,4 +71,5 @@ PG_ENUMS: dict[str, type[enum.StrEnum]] = {
     "attachment_type": AttachmentType,
     "kb_article_type": KbArticleType,
     "notification_type": NotificationType,
+    "maintenance_reminder_kind": MaintenanceReminderKind,
 }

@@ -11,6 +11,7 @@ from app.models.auth import AppUser, PdConsent, RefreshToken
 from app.models.base import Base
 from app.models.knowledge import DecisionTreeNode, KnowledgeArticle, KnowledgeArticleRevision
 from app.models.notifications import (
+    MaintenanceReminder,
     Notification,
     NotificationDelivery,
     NotificationRecipient,
@@ -29,6 +30,7 @@ __all__ = [
     "KnowledgeArticle",
     "KnowledgeArticleRevision",
     "MaintenanceRecord",
+    "MaintenanceReminder",
     "MaintenanceRegulation",
     "Notification",
     "NotificationDelivery",

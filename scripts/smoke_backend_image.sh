@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Smoke-тест образа backend (Главы 10–14, ADR 0013, 0014, 0016, 0017, 0018): запуск как в
-# staging, Auth, Vehicle, Aggregates, Tickets/Uploads, WebSocket событий тикета, Knowledge Base.
+# Smoke-тест образа backend (Главы 10–15, ADR 0013, 0014, 0016–0019): запуск как в
+# staging, Auth, Vehicle, Aggregates, Tickets/Uploads, WebSocket событий тикета, Knowledge Base,
+# Notifications и worker уведомлений.
 # Нужен Redis на localhost:6379 (в CI — service container, локально — docker compose up -d redis).
 # БД Redis 14 отведена smoke-тесту и очищается перед запуском. S3 — собственный сайдкар MinIO
 # во внутренней docker-сети smoke-теста (без порта на хосте; MinIO из docker compose не
@@ -81,6 +82,16 @@ if [ "$r" = refused ] && ! grep -q 'ENVIRONMENT=production: JWT_SECRET, SMS_CODE
 fi
 check "образ без ENVIRONMENT не стартует (production, нет секретов)" "$r" refused
 
+# Worker уведомлений (ADR 0019): в production без FCM — отказ на проверке настроек, даже если
+# остальные секреты заданы (фейковый push в production запрещён).
+out=$(docker run --rm -e JWT_SECRET -e SMS_CODE_SECRET -e S3_ACCESS_KEY -e S3_SECRET_KEY \
+        -e SMS_PROVIDER=a1 -e SMS_PROVIDER_USER=375290000000 -e SMS_PROVIDER_API_KEY=smoke \
+        "$IMAGE" python -m app.workers.notifications 2>&1) && r=started || r=refused
+if [ "$r" = refused ] && ! grep -q 'ENVIRONMENT=production: PUSH_PROVIDER=fake' <<<"$out"; then
+  r="refused-other-reason"
+fi
+check "worker уведомлений в production без FCM не стартует" "$r" refused
+
 # Сайдкар MinIO: внутренняя сеть (без выхода наружу и без порта на хосте).
 docker network create --internal "$NET" >/dev/null
 docker run -d --name "$MINIO" --network "$NET" --network-alias minio \
@@ -126,7 +137,7 @@ done
 
 check "/health отвечает, окружение staging" \
   "$(curl -fsS "$BASE/health" | python3 -c 'import json,sys; print(json.load(sys.stdin)["environment"])')" staging
-check "Swagger: все операции Auth Service, /me, Vehicle, Aggregates, Tickets, Uploads и KnowledgeBase" \
+check "Swagger: все операции Auth, /me, Vehicle, Aggregates, Tickets, Uploads, KnowledgeBase, Notifications" \
   "$(curl -fsS "$BASE/openapi.json" | python3 -c '
 import json, sys
 need = {"requestPhoneCode", "verifyPhoneCode", "refreshToken", "logout", "withdrawPdConsent",
@@ -143,7 +154,11 @@ need = {"requestPhoneCode", "verifyPhoneCode", "refreshToken", "logout", "withdr
         "listKnowledgeArticles", "createKnowledgeArticle", "getKnowledgeArticle",
         "updateKnowledgeArticle", "unpublishKnowledgeArticle", "listKnowledgeArticleRevisions",
         "getKnowledgeArticleRevision", "listDecisionTreeNodes", "createDecisionTreeNode",
-        "validateDecisionTree", "updateDecisionTreeNode", "deleteDecisionTreeNode"}
+        "validateDecisionTree", "updateDecisionTreeNode", "deleteDecisionTreeNode",
+        "registerPushToken", "deletePushToken", "listNotifications", "createNotification",
+        "listPublishedNotifications", "previewNotificationAudience", "markNotificationRead",
+        "markNotificationOpened", "listFirmwareReleases", "createFirmwareRelease",
+        "setVehicleFirmware"}
 ops = {o["operationId"] for p in json.load(sys.stdin)["paths"].values() for o in p.values()}
 print("ok" if need <= ops else sorted(need - ops))')" ok
 check "POST /v1/auth/phone/request-code → 200" \
@@ -167,6 +182,17 @@ check "PATCH /v1/decision-tree-nodes/1 с подделанным токеном 
   "$(status -X PATCH "$BASE/v1/decision-tree-nodes/1" -H 'Content-Type: application/json' \
       -H "Authorization: Bearer $FORGED" \
       -d '{"question_text":"x","is_root":true,"is_escalation":false}')" 401
+check "GET /v1/notifications без токена → 401" "$(status "$BASE/v1/notifications")" 401
+check "POST /v1/push-tokens с подделанным токеном → 401" \
+  "$(status -X POST "$BASE/v1/push-tokens" -H 'Content-Type: application/json' \
+      -H "Authorization: Bearer $FORGED" -d '{"token":"smoke"}')" 401
+check "POST /v1/firmware-releases без токена → 401" \
+  "$(status -X POST "$BASE/v1/firmware-releases" -H 'Content-Type: application/json' \
+      -d '{"vehicle_model_id":1,"version":"1.0","released_at":"2026-01-01"}')" 401
+# Worker в staging: модуль и фейковый отправитель поднимаются в том же образе.
+check "worker уведомлений: staging без Firebase — фейковый push" \
+  "$(docker exec "$NAME" python -c \
+      "from app.core.config import get_settings; from app.domain.notifications.push import get_push_sender; import app.workers.notifications; print(type(get_push_sender(get_settings())).__name__)")" FakePushSender
 check "POST /v1/uploads/presign без токена → 401" \
   "$(status -X POST "$BASE/v1/uploads/presign" -H 'Content-Type: application/json' \
       -d '{"file_name":"photo.jpg","file_type":"photo"}')" 401

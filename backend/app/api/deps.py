@@ -23,6 +23,7 @@ from app.core.redis import get_redis
 from app.core.security import InvalidTokenError, decode_access_token
 from app.core.storage import ObjectStorage, get_storage
 from app.domain.auth.sms import SmsProvider, get_sms_provider_for
+from app.domain.notifications.outbox import Outbox
 from app.domain.tickets.events import TicketEvents
 from app.domain.vehicles.vin import MockVinDecoder, VinDecoder
 from app.models import AppUser
@@ -65,6 +66,14 @@ def get_ticket_events(redis: RedisDep, settings: SettingsDep) -> TicketEvents:
 
 
 TicketEventsDep = Annotated[TicketEvents, Depends(get_ticket_events)]
+
+
+def get_outbox(redis: RedisDep, settings: SettingsDep) -> Outbox:
+    """Сигнал worker'у уведомлений после публикации (ADR 0019 п. 2)."""
+    return Outbox(redis, settings.redis_channel_prefix)
+
+
+OutboxDep = Annotated[Outbox, Depends(get_outbox)]
 
 
 def get_vin_decoder() -> VinDecoder:

@@ -148,7 +148,19 @@ describe("регламенты ТО", () => {
     expect(await repo.updateAggregateStatusThresholds({ yellow_from_percent: 75, red_above_percent: 110 })).toMatchObject({
       yellow_from_percent: 75,
       red_above_percent: 110,
+      reminder_before_km: 1000,
+      reminder_before_days: 14,
     });
+  });
+
+  it("порог напоминания о ТО: необязателен, 1–100 000 км и 1–365 дней (ADR 0019)", async () => {
+    const repo = admin();
+    const base = { yellow_from_percent: 70, red_above_percent: 100 };
+    expect(await repo.updateAggregateStatusThresholds({ ...base, reminder_before_km: 500 })).toMatchObject({
+      reminder_before_km: 500,
+      reminder_before_days: 14,
+    });
+    expect((await apiError(repo.updateAggregateStatusThresholds({ ...base, reminder_before_days: 0 }))).status).toBe(422);
   });
 
   it("справочник агрегатов: код по шаблону, без дублей", async () => {

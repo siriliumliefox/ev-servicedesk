@@ -40,8 +40,14 @@ PageDep = Annotated[Page, Depends(page_params)]
 
 def paginate(db: Session, stmt: Select[Any], page: Page) -> tuple[list[Any], PaginationMeta]:
     """Одна страница `stmt` (порядок задаёт вызывающий) и метаданные по полному числу строк."""
+    rows, meta = paginate_rows(db, stmt, page)
+    return [row[0] for row in rows], meta
+
+
+def paginate_rows(db: Session, stmt: Select[Any], page: Page) -> tuple[list[Any], PaginationMeta]:
+    """Как `paginate`, но строки целиком — для запросов из нескольких колонок."""
     total = db.scalar(select(func.count()).select_from(stmt.order_by(None).subquery())) or 0
-    items = list(db.scalars(stmt.limit(page.page_size).offset((page.page - 1) * page.page_size)))
+    items = list(db.execute(stmt.limit(page.page_size).offset((page.page - 1) * page.page_size)))
     meta = PaginationMeta(
         page=page.page,
         page_size=page.page_size,

@@ -15,7 +15,8 @@ dependencies:
     sdk: flutter
   http: ^1.2.0
   flutter_secure_storage: ^9.2.0   # хранение JWT (Глава 18)
-  firebase_messaging: ^15.0.0      # push (Глава 20)
+  firebase_core: ^3.15.2           # push: инициализация Firebase (Глава 15, ADR 0019)
+  firebase_messaging: ^15.0.0      # push: отладочный экран — Глава 15, экраны уведомлений — Глава 20
 
 dev_dependencies:
   flutter_test:
