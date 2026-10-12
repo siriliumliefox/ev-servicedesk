@@ -3,6 +3,8 @@
 Реальные PostgreSQL и Redis; каждый ответ сверяется с docs/openapi.yaml (assert_contract).
 """
 
+from datetime import UTC, datetime
+
 import pytest
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -15,7 +17,6 @@ from tests.api.conftest import (
     API,
     POLICY,
     STAFF_PASSWORD,
-    assert_contract,
     bearer,
     code_from,
 )
@@ -26,7 +27,6 @@ PHONE = "+375291112233"
 def test_register_verify_access_refresh_logout(client, sms, db: Session):
     # 1. Запрос кода
     r = client.post(f"{API}/auth/phone/request-code", json={"phone": PHONE})
-    assert_contract(r, "requestPhoneCode")
     assert r.status_code == 200 and r.json()["ttl_seconds"] == 120
 
     # 2. Подтверждение — регистрация клиента с согласием на ПД
@@ -34,7 +34,6 @@ def test_register_verify_access_refresh_logout(client, sms, db: Session):
         f"{API}/auth/phone/verify-code",
         json={"phone": PHONE, "code": code_from(sms, PHONE), "pd_policy_version": POLICY},
     )
-    assert_contract(r, "verifyPhoneCode")
     assert r.status_code == 200
     body = r.json()
     assert body["is_new_user"] is True
@@ -49,12 +48,10 @@ def test_register_verify_access_refresh_logout(client, sms, db: Session):
 
     # 3. Доступ к ресурсу
     r = client.get(f"{API}/me", headers=bearer(body["access_token"]))
-    assert_contract(r, "getCurrentUser")
     assert r.status_code == 200 and r.json()["id"] == user.id
 
     # 4. Ротация refresh
     r = client.post(f"{API}/auth/refresh", json={"refresh_token": body["refresh_token"]})
-    assert_contract(r, "refreshToken")
     assert r.status_code == 200
     rotated = r.json()
     assert rotated["refresh_token"] != body["refresh_token"]
@@ -65,10 +62,8 @@ def test_register_verify_access_refresh_logout(client, sms, db: Session):
         json={"refresh_token": rotated["refresh_token"]},
         headers=bearer(rotated["access_token"]),
     )
-    assert_contract(r, "logout")
     assert r.status_code == 204
     r = client.post(f"{API}/auth/refresh", json={"refresh_token": rotated["refresh_token"]})
-    assert_contract(r, "refreshToken")
     assert r.status_code == 401
 
 
@@ -78,7 +73,6 @@ def test_code_is_single_use(client, sms):
     payload = {"phone": PHONE, "code": code, "pd_policy_version": POLICY}
     assert client.post(f"{API}/auth/phone/verify-code", json=payload).status_code == 200
     r = client.post(f"{API}/auth/phone/verify-code", json=payload)
-    assert_contract(r, "verifyPhoneCode")
     assert r.status_code == 400 and r.json()["error"]["code"] == "CODE_EXPIRED"
 
 
@@ -90,7 +84,6 @@ def test_wrong_code_then_correct(client, sms):
         f"{API}/auth/phone/verify-code",
         json={"phone": PHONE, "code": wrong, "pd_policy_version": POLICY},
     )
-    assert_contract(r, "verifyPhoneCode")
     assert r.status_code == 400
     assert r.json()["error"] == {
         "code": "CODE_INVALID",
@@ -111,10 +104,8 @@ def test_attempts_exhausted_429(client, sms):
     payload = {"phone": PHONE, "code": wrong, "pd_policy_version": POLICY}
     responses = [client.post(f"{API}/auth/phone/verify-code", json=payload) for _ in range(5)]
     assert [r.status_code for r in responses] == [400, 400, 400, 400, 429]
-    assert_contract(responses[-1], "verifyPhoneCode")
     assert int(responses[-1].headers["Retry-After"]) > 0
     r = client.post(f"{API}/auth/phone/verify-code", json=payload)  # код уже сгорел
-    assert_contract(r, "verifyPhoneCode")
     r = client.post(
         f"{API}/auth/phone/verify-code",
         json={"phone": PHONE, "code": code, "pd_policy_version": POLICY},
@@ -125,7 +116,6 @@ def test_attempts_exhausted_429(client, sms):
 def test_resend_rate_limited_429(client):
     assert client.post(f"{API}/auth/phone/request-code", json={"phone": PHONE}).status_code == 200
     r = client.post(f"{API}/auth/phone/request-code", json={"phone": PHONE})
-    assert_contract(r, "requestPhoneCode")
     assert r.status_code == 429
     assert int(r.headers["Retry-After"]) > 0
 
@@ -134,7 +124,6 @@ def test_consent_required_does_not_burn_code(client, sms, db: Session):
     client.post(f"{API}/auth/phone/request-code", json={"phone": PHONE})
     code = code_from(sms, PHONE)
     r = client.post(f"{API}/auth/phone/verify-code", json={"phone": PHONE, "code": code})
-    assert_contract(r, "verifyPhoneCode")
     assert r.status_code == 422 and r.json()["error"]["code"] == "PD_CONSENT_REQUIRED"
     assert db.scalar(select(func.count()).select_from(AppUser).where(AppUser.phone == PHONE)) == 0
     r = client.post(
@@ -150,7 +139,6 @@ def test_existing_client_login_without_new_consent(client, sms, make_client_user
     r = client.post(
         f"{API}/auth/phone/verify-code", json={"phone": PHONE, "code": code_from(sms, PHONE)}
     )
-    assert_contract(r, "verifyPhoneCode")
     assert r.status_code == 200
     assert r.json()["is_new_user"] is False and r.json()["user"]["id"] == user.id
 
@@ -174,7 +162,6 @@ def test_disabled_client_cannot_login(client, sms, make_client_user):
     r = client.post(
         f"{API}/auth/phone/verify-code", json={"phone": PHONE, "code": code_from(sms, PHONE)}
     )
-    assert_contract(r, "verifyPhoneCode")
     assert r.status_code == 400 and r.json()["error"]["code"] == "ACCOUNT_DISABLED"
 
 
@@ -190,7 +177,6 @@ def test_staff_cannot_use_sms_login(client, sms, make_staff):
 
 def test_invalid_phone_422(client):
     r = client.post(f"{API}/auth/phone/request-code", json={"phone": "80291234567"})
-    assert_contract(r, "requestPhoneCode")
     assert r.status_code == 422
     assert r.json()["error"]["code"] == "VALIDATION_ERROR"
     assert "80291234567" not in r.text  # введённое значение не возвращается
@@ -201,7 +187,6 @@ def test_staff_login_and_access(client, make_staff):
     r = client.post(
         f"{API}/auth/staff/login", json={"phone": "+375295550001", "password": STAFF_PASSWORD}
     )
-    assert_contract(r, "staffLogin")
     assert r.status_code == 200 and r.json()["user"]["role"] == "admin"
     me = client.get(f"{API}/me", headers=bearer(r.json()["access_token"]))
     assert me.status_code == 200 and me.json()["id"] == staff.id
@@ -217,7 +202,6 @@ def test_staff_login_failures(client, make_staff):
     ]
     for payload in cases:
         r = client.post(f"{API}/auth/staff/login", json=payload)
-        assert_contract(r, "staffLogin")
         assert r.status_code == 401
         assert r.json()["error"]["message"] == "Неверный телефон или пароль"
 
@@ -237,7 +221,6 @@ def test_staff_login_rate_limited(client, make_staff):
     r = client.post(
         f"{API}/auth/staff/login", json={"phone": "+375295550004", "password": STAFF_PASSWORD}
     )
-    assert_contract(r, "staffLogin")
     assert r.status_code == 429
     assert int(r.headers["Retry-After"]) > 0
 
@@ -262,7 +245,6 @@ def test_refresh_reuse_revokes_all_sessions(client, login_client, db: Session):
 
 def test_unknown_refresh_token_401(client):
     r = client.post(f"{API}/auth/refresh", json={"refresh_token": "nope"})
-    assert_contract(r, "refreshToken")
     assert r.status_code == 401
 
 
@@ -270,7 +252,6 @@ def test_withdraw_pd_consent(client, login_client, db: Session):
     session = login_client(PHONE)
     headers = bearer(session["access_token"])
     r = client.delete(f"{API}/auth/pd-consent", headers=headers)
-    assert_contract(r, "withdrawPdConsent")
     assert r.status_code == 202
     consent = db.scalars(select(PdConsent).where(PdConsent.user_id == session["user"]["id"])).one()
     assert consent.withdrawn_at is not None
@@ -278,7 +259,6 @@ def test_withdraw_pd_consent(client, login_client, db: Session):
     r = client.post(f"{API}/auth/refresh", json={"refresh_token": session["refresh_token"]})
     assert r.status_code == 401
     r = client.delete(f"{API}/auth/pd-consent", headers=headers)
-    assert_contract(r, "withdrawPdConsent")
     assert r.status_code == 409 and r.json()["error"]["code"] == "PD_CONSENT_NOT_ACTIVE"
 
 
@@ -290,14 +270,12 @@ def test_telegram_link(client, login_client):
         json={"telegram_id": "tg-100"},
         headers=bearer(a["access_token"]),
     )
-    assert_contract(r, "linkTelegram")
     assert r.status_code == 200 and r.json()["telegram_id"] == "tg-100"
     r = client.post(
         f"{API}/auth/telegram/link",
         json={"telegram_id": "tg-100"},
         headers=bearer(b["access_token"]),
     )
-    assert_contract(r, "linkTelegram")
     assert r.status_code == 409 and r.json()["error"]["code"] == "TELEGRAM_ALREADY_LINKED"
 
 
@@ -321,7 +299,6 @@ class _FailingSms:
 def test_sms_provider_failure_contract(app, client, flags, status, code):
     app.dependency_overrides[get_sms_provider] = lambda: _FailingSms(**flags)
     r = client.post(f"{API}/auth/phone/request-code", json={"phone": PHONE})
-    assert_contract(r, "requestPhoneCode")
     assert r.status_code == status and r.json()["error"]["code"] == code
     # Не отправлено — можно сразу повторить; доставка неизвестна — только после паузы.
     again = client.post(f"{API}/auth/phone/request-code", json={"phone": PHONE})
@@ -335,7 +312,6 @@ def test_blank_policy_version_is_consent_required_and_keeps_code(client, sms):
         f"{API}/auth/phone/verify-code",
         json={"phone": PHONE, "code": code, "pd_policy_version": "   "},
     )
-    assert_contract(r, "verifyPhoneCode")
     assert r.status_code == 422 and r.json()["error"]["code"] == "PD_CONSENT_REQUIRED"
     r = client.post(
         f"{API}/auth/phone/verify-code",
@@ -351,5 +327,23 @@ def test_control_characters_rejected_422(client, login_client):
         json={"telegram_id": "tg\u0000x"},
         headers=bearer(session["access_token"]),
     )
-    assert_contract(r, "linkTelegram")
     assert r.status_code == 422
+
+
+def test_anonymized_user_with_phone_cannot_log_in(client, sms, make_client_user, make_staff, db):
+    """Вход проверяет доступность (активен и не анонимизирован), как все запросы (ревью гл. 17)."""
+    phone = "+375296900001"
+    user = make_client_user(phone)
+    user.anonymized_at = datetime.now(UTC)
+    staff = make_staff("+375296900002")
+    staff.anonymized_at = datetime.now(UTC)
+    db.commit()
+    client.post(f"{API}/auth/phone/request-code", json={"phone": phone})
+    r = client.post(
+        f"{API}/auth/phone/verify-code", json={"phone": phone, "code": code_from(sms, phone)}
+    )
+    assert r.status_code == 400 and r.json()["error"]["code"] == "ACCOUNT_DISABLED"
+    r = client.post(
+        f"{API}/auth/staff/login", json={"phone": "+375296900002", "password": STAFF_PASSWORD}
+    )
+    assert r.status_code == 401

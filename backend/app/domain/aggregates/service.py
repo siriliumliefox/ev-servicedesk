@@ -7,7 +7,7 @@
 """
 
 from dataclasses import asdict, dataclass
-from datetime import date, datetime
+from datetime import date
 from decimal import Decimal
 
 from sqlalchemy import Select, select
@@ -15,8 +15,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.db import constraint_name, is_db_id
-from app.core.errors import ApiError
-from app.core.time import BUSINESS_TZ
+from app.core.errors import ApiError, field_error
+from app.core.time import today_in_business_tz
 from app.domain.aggregates.status import (
     AggregateStatusResult,
     Regulation,
@@ -40,14 +40,6 @@ from app.models import (
 
 REGULATION_OUT = (selectinload(MaintenanceRegulation.aggregate_type),)
 THRESHOLDS_ID = 1  # одна строка, seed — миграция 0005 (ADR 0009)
-
-
-def today_in_business_tz() -> date:
-    return datetime.now(BUSINESS_TZ).date()
-
-
-def _field_error(field: str, code: str, message: str) -> ApiError:
-    return ApiError(422, code, message, details={"fields": [{"loc": ["body", field]}]})
 
 
 # ---------- Справочник агрегатов ----------
@@ -123,10 +115,10 @@ def revise_regulation(
         .with_for_update(key_share=True)
     )
     if model_id is None:
-        raise _field_error("vehicle_model_id", "VEHICLE_MODEL_NOT_FOUND", "Модель не найдена")
+        raise field_error("vehicle_model_id", "VEHICLE_MODEL_NOT_FOUND", "Модель не найдена")
     aggregate_type = _aggregate_type(db, aggregate_type_code)
     if aggregate_type is None:
-        raise _field_error(
+        raise field_error(
             "aggregate_type_code", "AGGREGATE_TYPE_NOT_FOUND", "Неизвестный код агрегата"
         )
 
@@ -324,7 +316,7 @@ def replace_aggregate(
     if aggregate_type is None:
         raise ApiError(404, "AGGREGATE_TYPE_NOT_FOUND", "Неизвестный код агрегата")
     if replaced_at > today:
-        raise _field_error("replaced_at", "REPLACED_AT_IN_FUTURE", "Дата замены в будущем")
+        raise field_error("replaced_at", "REPLACED_AT_IN_FUTURE", "Дата замены в будущем")
     if mileage_at_replacement > vehicle.mileage:
         raise ApiError(
             409,

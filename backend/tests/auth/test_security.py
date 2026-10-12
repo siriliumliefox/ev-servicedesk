@@ -208,3 +208,48 @@ def test_validation_error_hides_secret_values():
         Settings(_env_file=None, environment="staging", jwt_secret=secret)
     assert secret not in str(exc.value)
     assert "JWT_SECRET" in str(exc.value)
+
+
+# ---------- Тестовые номера SMS (Глава 17, ADR 0021 п. 6) ----------
+
+
+def test_test_phones_forbidden_in_production():
+    strong = "z" * 40
+    with pytest.raises(ValidationError, match="SMS_TEST_PHONES запрещены в production"):
+        Settings(
+            _env_file=None,
+            environment="production",
+            jwt_secret=strong,
+            sms_code_secret=strong,
+            sms_provider="a1",
+            sms_provider_user="u",
+            sms_provider_api_key="k",
+            sms_test_phones="+375290000001",
+            sms_test_code="1234",
+        )
+
+
+@pytest.mark.parametrize(
+    ("phones", "code"),
+    [
+        ("+375290000001", ""),  # без кода
+        ("+375290000001", "12345"),  # длина не равна SMS_CODE_LENGTH (4)
+        ("+375290000001", "12a4"),
+        ("375290000001", "1234"),  # не E.164
+        ("+375290000001,,bad", "1234"),
+    ],
+)
+def test_test_phones_require_valid_numbers_and_code(phones, code):
+    with pytest.raises(ValidationError, match="SMS_TEST"):
+        Settings(_env_file=None, environment="test", sms_test_phones=phones, sms_test_code=code)
+
+
+def test_test_phones_parsed():
+    s = Settings(
+        _env_file=None,
+        environment="test",
+        sms_test_phones=" +375290000001, +375290000002 ",
+        sms_test_code="4321",
+    )
+    assert s.test_phones == {"+375290000001", "+375290000002"}
+    assert Settings(_env_file=None, environment="test").test_phones == frozenset()

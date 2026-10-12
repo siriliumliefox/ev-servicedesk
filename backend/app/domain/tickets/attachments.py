@@ -35,7 +35,7 @@ from sqlalchemy.orm import Session
 
 from app.core import rate_limit
 from app.core.config import Settings
-from app.core.errors import ApiError
+from app.core.errors import ApiError, field_error
 from app.core.storage import CopySourceChanged, ObjectStorage, StorageError
 from app.models import AppUser, TicketAttachment
 from app.models.enums import AttachmentType
@@ -145,11 +145,8 @@ def check_uploads(
     повторную привязку исключает UNIQUE при вставке (`attach` в `bind`).
     """
     if len(inputs) > settings.max_attachments:
-        raise ApiError(
-            422,
-            "TOO_MANY_ATTACHMENTS",
-            f"Не больше {settings.max_attachments} вложений",
-            details={"fields": [{"loc": ["body", "attachments"]}]},
+        raise field_error(
+            "attachments", "TOO_MANY_ATTACHMENTS", f"Не больше {settings.max_attachments} вложений"
         )
     names: list[str] = []
     for index, item in enumerate(inputs):

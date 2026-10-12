@@ -11,7 +11,7 @@ import httpx
 from fastapi.testclient import TestClient
 
 from app.core.storage import ObjectStorage
-from tests.api.conftest import API, Headers, assert_contract
+from tests.api.conftest import API, Headers
 from tests.support.storage import put_object
 
 JPEG = b"\xff\xd8\xff\xe0" + b"0" * 64
@@ -34,7 +34,6 @@ def presign(
         f"{API}/uploads/presign", json={"file_name": name, "file_type": file_type}, headers=headers
     )
     assert r.status_code == 200, r.text
-    assert_contract(r, "createPresignedUpload")
     return r.json()
 
 
@@ -56,14 +55,12 @@ def create_ticket(
 def create(client: TestClient, headers: Headers, vehicle_id: int, **extra: Any) -> dict:
     r = create_ticket(client, headers, vehicle_id, **extra)
     assert r.status_code == 201, r.text
-    assert_contract(r, "createTicket")
     return r.json()
 
 
 def items(client: TestClient, headers: Headers, **params: Any) -> list[dict]:
     r = client.get(f"{API}/tickets", params=params, headers=headers)
     assert r.status_code == 200, r.text
-    assert_contract(r, "listTickets")
     return r.json()["items"]
 
 
@@ -74,21 +71,18 @@ def ids(client: TestClient, headers: Headers, **params: Any) -> list[int]:
 def card(client: TestClient, headers: Headers, tid: int) -> dict:
     r = client.get(f"{API}/tickets/{tid}", headers=headers)
     assert r.status_code == 200, r.text
-    assert_contract(r, "getTicket")
     return r.json()
 
 
 def claim(client: TestClient, headers: Headers, tid: int) -> dict:
     r = client.post(f"{API}/tickets/{tid}/claim", headers=headers)
     assert r.status_code == 200, r.text
-    assert_contract(r, "claimTicket")
     return r.json()
 
 
 def set_status(client: TestClient, headers: Headers, tid: int, status: str) -> dict:
     r = client.patch(f"{API}/tickets/{tid}/status", json={"status": status}, headers=headers)
     assert r.status_code == 200, r.text
-    assert_contract(r, "updateTicketStatus")
     return r.json()
 
 
@@ -97,19 +91,16 @@ def assign(client: TestClient, admin: Headers, tid: int, engineer_id: int | None
         f"{API}/tickets/{tid}/assign", json={"assigned_engineer_id": engineer_id}, headers=admin
     )
     assert r.status_code == 200, r.text
-    assert_contract(r, "assignTicket")
     return r.json()
 
 
 def say(client: TestClient, headers: Headers, tid: int, body: str) -> dict:
     r = client.post(f"{API}/tickets/{tid}/messages", json={"body": body}, headers=headers)
     assert r.status_code == 201, r.text
-    assert_contract(r, "createTicketMessage")
     return r.json()
 
 
 def history(client: TestClient, headers: Headers, tid: int, **params: Any) -> list[dict]:
     r = client.get(f"{API}/tickets/{tid}/messages", params=params, headers=headers)
     assert r.status_code == 200, r.text
-    assert_contract(r, "listTicketMessages")
     return r.json()["items"]

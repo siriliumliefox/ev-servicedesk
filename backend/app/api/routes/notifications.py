@@ -29,11 +29,10 @@ from app.api.schemas.notifications import (
 from app.api.schemas.vehicles import VehicleOut
 from app.core.db import BIGINT_MAX
 from app.domain.notifications import service
-from app.models.enums import NotificationType, UserRole
+from app.models.enums import STAFF_ROLES, NotificationType, UserRole
 
 router = APIRouter(tags=["Notifications"])
 
-STAFF = (UserRole.ENGINEER, UserRole.ADMIN)
 
 # Диапазон BIGINT проверяет сервис (вне диапазона — 404, как у несуществующего id).
 NotificationId = Annotated[int, Path(alias="notificationId")]
@@ -187,7 +186,9 @@ def create_firmware_release(
     return FirmwareReleaseOut.model_validate(release)
 
 
-@router.patch("/vehicles/{vehicleId}/firmware", operation_id="setVehicleFirmware", **rbac(*STAFF))
+@router.patch(
+    "/vehicles/{vehicleId}/firmware", operation_id="setVehicleFirmware", **rbac(*STAFF_ROLES)
+)
 def set_vehicle_firmware(
     vehicle_id: VehicleId, body: VehicleFirmwareUpdateRequest, user: CurrentUser, db: DbDep
 ) -> VehicleOut:

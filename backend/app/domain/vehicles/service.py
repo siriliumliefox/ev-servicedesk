@@ -17,9 +17,9 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.core import rate_limit
 from app.core.config import Settings
-from app.core.db import constraint_name
-from app.core.errors import ApiError
-from app.core.time import BUSINESS_TZ
+from app.core.db import constraint_name, escape_like, get_by_id
+from app.core.errors import ApiError, field_error
+from app.core.time import today_in_business_tz
 from app.domain.vehicles import access
 from app.domain.vehicles.vin import VinDecoder
 from app.models import AggregateType, AppUser, MaintenanceRecord, Vehicle, VehicleModel
@@ -40,14 +40,10 @@ def _reload_vehicle(db: Session, vehicle_id: int) -> Vehicle:
 # ---------- Модели ----------
 
 
-def _escape_like(value: str) -> str:
-    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-
-
 def search_models_stmt(search: str | None) -> Select:
     stmt = select(VehicleModel).order_by(VehicleModel.brand, VehicleModel.model, VehicleModel.trim)
     if search and search.strip():
-        pattern = f"%{_escape_like(search.strip())}%"
+        pattern = f"%{escape_like(search.strip())}%"
         # Подстрока марки или модели — тоже подстрока «марка модель».
         brand_model = VehicleModel.brand + " " + VehicleModel.model
         stmt = stmt.where(brand_model.ilike(pattern, escape="\\"))
@@ -86,14 +82,9 @@ def _resolve_model(
     db: Session, decoder: VinDecoder, vin: str, vehicle_model_id: int | None
 ) -> VehicleModel:
     if vehicle_model_id is not None:
-        model = db.get(VehicleModel, vehicle_model_id)
+        model = get_by_id(db, VehicleModel, vehicle_model_id)  # вне BIGINT — «нет», не 500
         if model is None:
-            raise ApiError(
-                422,
-                "VEHICLE_MODEL_NOT_FOUND",
-                "Модель не найдена",
-                details={"fields": [{"loc": ["body", "vehicle_model_id"]}]},
-            )
+            raise field_error("vehicle_model_id", "VEHICLE_MODEL_NOT_FOUND", "Модель не найдена")
         return model
     decoded = decoder.decode(vin)
     model = None
@@ -252,10 +243,6 @@ def list_maintenance_stmt(db: Session, user: AppUser, vehicle_id: int) -> Select
     )
 
 
-def _field_error(field: str, code: str, message: str) -> ApiError:
-    return ApiError(422, code, message, details={"fields": [{"loc": ["body", field]}]})
-
-
 def create_maintenance_record(
     db: Session,
     user: AppUser,
@@ -273,8 +260,8 @@ def create_maintenance_record(
     Сброс счётчика агрегата — Глава 12.
     """
     vehicle, ticket_id = access.for_change(db, user, vehicle_id)
-    if performed_at > datetime.now(BUSINESS_TZ).date():
-        raise _field_error("performed_at", "PERFORMED_AT_IN_FUTURE", "Дата работы в будущем")
+    if performed_at > today_in_business_tz():
+        raise field_error("performed_at", "PERFORMED_AT_IN_FUTURE", "Дата работы в будущем")
 
     aggregate_type_id = None
     if aggregate_type_code is not None:
@@ -282,11 +269,11 @@ def create_maintenance_record(
             select(AggregateType.id).where(AggregateType.code == aggregate_type_code)
         )
         if aggregate_type_id is None:
-            raise _field_error(
+            raise field_error(
                 "aggregate_type_code", "AGGREGATE_TYPE_NOT_FOUND", "Неизвестный код агрегата"
             )
     if aggregate_type_id is None and description is None:
-        raise _field_error(
+        raise field_error(
             "description", "MAINTENANCE_SUBJECT_REQUIRED", "Укажите агрегат или описание работы"
         )
 

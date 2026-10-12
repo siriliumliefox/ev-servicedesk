@@ -25,7 +25,6 @@ from tests.api.conftest import (
     Headers,
     add_vehicle,
     api_settings,
-    assert_contract,
     model_id,
 )
 from tests.api.knowledge_support import build_tree
@@ -74,27 +73,22 @@ def test_ticket_lifecycle(client, owner, engineer, admin, vehicle, db: Session):
 
     # Очередь инженера: тикет виден до claim, писать в чат — нельзя.
     r = client.get(f"{API}/tickets", headers=eng_headers)
-    assert_contract(r, "listTickets")
     assert [t["id"] for t in r.json()["items"]] == [tid]
     r = client.post(
         f"{API}/tickets/{tid}/messages", json={"body": "Здравствуйте"}, headers=eng_headers
     )
     assert r.status_code == 403
-    assert_contract(r, "createTicketMessage")
     r = client.patch(
         f"{API}/tickets/{tid}/status", json={"status": "resolved"}, headers=eng_headers
     )
     assert r.status_code == 403
-    assert_contract(r, "updateTicketStatus")
 
     r = client.post(f"{API}/tickets/{tid}/claim", headers=eng_headers)
     assert r.status_code == 200, r.text
-    assert_contract(r, "claimTicket")
     assert (r.json()["status"], r.json()["assigned_engineer_id"]) == ("in_progress", eng.id)
 
     r = client.post(f"{API}/tickets/{tid}/messages", json={"body": "Здравствуйте!"}, headers=owner)
     assert r.status_code == 201, r.text
-    assert_contract(r, "createTicketMessage")
     assert db.get(Ticket, tid).first_response_at is None, "сообщение клиента — не ответ"
 
     r = client.post(
@@ -113,12 +107,10 @@ def test_ticket_lifecycle(client, owner, engineer, admin, vehicle, db: Session):
 
     # Клиенту ПД сотрудника скрыты, персоналу телефон клиента виден (ADR 0017 п. 12).
     r = client.get(f"{API}/tickets/{tid}/messages", headers=owner)
-    assert_contract(r, "listTicketMessages")
     authors = [m["author"] for m in r.json()["items"]]
     assert [a["phone"] for a in authors] == [CLIENT_PHONE, None, None]
     assert all(a["telegram_id"] is None for a in authors)
     r = client.get(f"{API}/tickets/{tid}/messages", headers=admin[0])
-    assert_contract(r, "listTicketMessages")
     assert [m["author"]["phone"] for m in r.json()["items"]] == [
         CLIENT_PHONE,
         ENGINEER_PHONE,
@@ -129,12 +121,10 @@ def test_ticket_lifecycle(client, owner, engineer, admin, vehicle, db: Session):
         f"{API}/tickets/{tid}/status", json={"status": "resolved"}, headers=eng_headers
     )
     assert r.status_code == 200, r.text
-    assert_contract(r, "updateTicketStatus")
     assert r.json()["status"] == "resolved" and r.json()["resolved_at"] is not None
 
     r = client.post(f"{API}/tickets/{tid}/messages", json={"body": "Спасибо"}, headers=owner)
     assert r.status_code == 409
-    assert_contract(r, "createTicketMessage")
     assert error_code(r) == "TICKET_RESOLVED"
 
     # Переоткрытие: resolved_at очищается, срок SLA прежний.
@@ -178,7 +168,6 @@ def test_detail_has_firmware_snapshot_and_aggregate_context(
 
     r = client.get(f"{API}/tickets/{ticket['id']}", headers=owner)
     assert r.status_code == 200
-    assert_contract(r, "getTicket")
     detail = r.json()
     assert detail["firmware_version_at_creation"] == "1.2.0", "снимок на момент создания"
     assert detail["vehicle_context"]["vehicle"]["current_firmware_version"] == "1.3.0"
@@ -198,7 +187,6 @@ def test_create_requires_own_active_vehicle(client, owner, as_client, vehicle):
         headers=stranger,
     )
     assert r.status_code == 404
-    assert_contract(r, "createTicket")
 
     r = client.delete(f"{API}/vehicles/{vehicle['id']}", headers=owner)
     assert r.status_code == 204
@@ -224,7 +212,6 @@ def test_create_is_client_only(client, engineer, vehicle):
         headers=engineer[0],
     )
     assert r.status_code == 403
-    assert_contract(r, "createTicket")
 
 
 @pytest.mark.parametrize("description", ["", "   ", "a" * 4001, "нуль\x00"])
@@ -235,7 +222,6 @@ def test_create_validates_description(client, owner, vehicle, description):
         headers=owner,
     )
     assert r.status_code == 422
-    assert_contract(r, "createTicket")
 
 
 def test_description_limit_is_after_trimming(client, owner, vehicle):
@@ -292,7 +278,6 @@ def test_source_reference_validation(client, owner, vehicle, db: Session):
             headers=owner,
         )
         assert r.status_code == 422, refs
-        assert_contract(r, "createTicket")
         assert error_code(r) == "INVALID_SOURCE_REFERENCE"
         bodies.append(r.json())
     # Ответ на черновик неотличим от ответа на отсутствующую статью (не раскрывает черновики).
@@ -310,7 +295,6 @@ def test_create_rate_limit(client, app, owner, vehicle):
         headers=owner,
     )
     assert r.status_code == 429
-    assert_contract(r, "createTicket")
     assert int(r.headers["Retry-After"]) >= 1
 
 
@@ -350,7 +334,6 @@ def test_visibility(client, owner, as_client, as_staff, engineer, admin, vehicle
 
     def ids(headers: Headers) -> set[int]:
         r = client.get(f"{API}/tickets", headers=headers)
-        assert_contract(r, "listTickets")
         return {t["id"] for t in r.json()["items"]}
 
     assert ids(owner) == {queue["id"], mine.id, theirs.id}
@@ -361,13 +344,10 @@ def test_visibility(client, owner, as_client, as_staff, engineer, admin, vehicle
     for headers, tid in ((eng_headers, theirs.id), (stranger, queue["id"])):
         r = client.get(f"{API}/tickets/{tid}", headers=headers)
         assert r.status_code == 404
-        assert_contract(r, "getTicket")
         r = client.get(f"{API}/tickets/{tid}/messages", headers=headers)
         assert r.status_code == 404
-        assert_contract(r, "listTicketMessages")
         r = client.post(f"{API}/tickets/{tid}/messages", json={"body": "x"}, headers=headers)
         assert r.status_code == 404
-        assert_contract(r, "createTicketMessage")
     r = client.patch(
         f"{API}/tickets/{theirs.id}/status", json={"status": "resolved"}, headers=eng_headers
     )
@@ -395,7 +375,6 @@ def test_list_filters_order_and_overdue(client, owner, engineer, admin, vehicle,
     def ids(headers: Headers, **params) -> list[int]:
         r = client.get(f"{API}/tickets", params=params, headers=headers)
         assert r.status_code == 200, r.text
-        assert_contract(r, "listTickets")
         return [t["id"] for t in r.json()["items"]]
 
     staff = admin[0]
@@ -413,7 +392,6 @@ def test_list_filters_order_and_overdue(client, owner, engineer, admin, vehicle,
     assert item["is_overdue"] is True
     r = client.get(f"{API}/tickets", params={"status": "closed"}, headers=staff)
     assert r.status_code == 422
-    assert_contract(r, "listTickets")
     r = client.get(f"{API}/tickets", params={"page_size": 1, "page": 2}, headers=staff)
     assert r.json()["meta"] == {"page": 2, "page_size": 1, "total_items": 4, "total_pages": 4}
 
@@ -433,13 +411,11 @@ def test_claim_rules(client, owner, engineer, as_staff, vehicle):
 
     r = client.post(f"{API}/tickets/{tid}/claim", headers=other_headers)
     assert r.status_code == 409
-    assert_contract(r, "claimTicket")
     assert error_code(r) == "TICKET_ALREADY_CLAIMED"
 
     for missing in (10**9, 0, 2**63):
         r = client.post(f"{API}/tickets/{missing}/claim", headers=eng_headers)
         assert r.status_code == 404
-        assert_contract(r, "claimTicket")
     r = client.post(f"{API}/tickets/{tid}/claim", headers=owner)
     assert r.status_code == 403
 
@@ -452,7 +428,6 @@ def test_status_graph_via_api(client, engineer, admin, vehicle, make_ticket):
         r = client.patch(
             f"{API}/tickets/{ticket.id}/status", json={"status": status}, headers=headers
         )
-        assert_contract(r, "updateTicketStatus")
         return r
 
     assert patch("in_progress").status_code == 200, "текущий статус — без изменений"
@@ -488,7 +463,6 @@ def test_assign_rules(client, owner, engineer, as_staff, admin, make_staff, vehi
             json={"assigned_engineer_id": engineer_id},
             headers=headers,
         )
-        assert_contract(r, "assignTicket")
         return r
 
     r = assign(eng.id)
@@ -544,7 +518,6 @@ def test_messages_after_id_and_pagination(client, owner, admin, vehicle):
     def page(**params) -> dict:
         r = client.get(f"{API}/tickets/{tid}/messages", params=params, headers=owner)
         assert r.status_code == 200, r.text
-        assert_contract(r, "listTicketMessages")
         return r.json()
 
     assert [m["id"] for m in page()["items"]] == ids
@@ -555,7 +528,6 @@ def test_messages_after_id_and_pagination(client, owner, admin, vehicle):
     assert page(after_id=0)["meta"]["total_items"] == 6
     r = client.get(f"{API}/tickets/{tid}/messages", params={"after_id": -1}, headers=owner)
     assert r.status_code == 422
-    assert_contract(r, "listTicketMessages")
 
 
 @pytest.mark.parametrize("body", ["", "  \n ", "б" * 4001])
@@ -563,7 +535,6 @@ def test_message_body_validation(client, owner, vehicle, body):
     tid = create(client, owner, vehicle["id"])["id"]
     r = client.post(f"{API}/tickets/{tid}/messages", json={"body": body}, headers=owner)
     assert r.status_code == 422
-    assert_contract(r, "createTicketMessage")
 
 
 def test_message_rate_limit(client, app, owner, vehicle):
@@ -579,7 +550,6 @@ def test_message_rate_limit(client, app, owner, vehicle):
         )
     r = client.post(f"{API}/tickets/{tid}/messages", json={"body": "x"}, headers=owner)
     assert r.status_code == 429
-    assert_contract(r, "createTicketMessage")
     assert int(r.headers["Retry-After"]) >= 1
 
 

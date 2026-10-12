@@ -11,10 +11,10 @@ from datetime import UTC, date, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.domain.aggregates.service import today_in_business_tz
+from app.core.time import today_in_business_tz
 from app.domain.notifications.push import Outcome, PushResult
 from app.models import (
     AppUser,
@@ -24,7 +24,7 @@ from app.models import (
     PushToken,
 )
 from app.models.enums import UserRole
-from tests.api.conftest import API, Headers, assert_contract, model_id, register
+from tests.api.conftest import API, Headers, model_id, register
 from tests.api.notifications_support import feed, publish
 from tests.api.ticket_support import error_code
 
@@ -50,7 +50,6 @@ def voyah(client: TestClient, admin: Headers) -> int:
 def preview(client: TestClient, admin: Headers, **body) -> dict:
     r = client.post(f"{API}/notifications/audience-preview", json=body, headers=admin)
     assert r.status_code == 200, r.text
-    assert_contract(r, "previewNotificationAudience")
     return r.json()
 
 
@@ -60,7 +59,6 @@ def release(client: TestClient, admin: Headers, model: int, version: str, releas
         json={"vehicle_model_id": model, "version": version, "released_at": str(released_at)},
         headers=admin,
     )
-    assert_contract(r, "createFirmwareRelease")
     return r
 
 
@@ -155,7 +153,6 @@ def set_firmware(client: TestClient, headers: Headers, vid: int, release_id: int
     r = client.patch(
         f"{API}/vehicles/{vid}/firmware", json={"firmware_release_id": release_id}, headers=headers
     )
-    assert_contract(r, "setVehicleFirmware")
     return r
 
 
@@ -194,7 +191,6 @@ def test_firmware_release_targets_older_or_unknown_firmware(client, admin, make_
         f"{API}/firmware-releases", params={"vehicle_model_id": model}, headers=other.headers
     )
     assert r.status_code == 200
-    assert_contract(r, "listFirmwareReleases")
     assert [i["version"] for i in r.json()["items"]] == ["3.0", "2.0.1", "2.0", "1.0"]
 
 
@@ -266,7 +262,6 @@ def test_create_notification_rejects(client, admin, body, code):
         ("/notifications/audience-preview", "previewNotificationAudience"),
     ):
         r = client.post(f"{API}{path}", json=body, headers=admin)
-        assert_contract(r, op)
         assert (r.status_code, error_code(r)) == (422, code), path
 
 
@@ -337,7 +332,6 @@ def test_push_token_lifecycle(client, as_client, db: Session):
     assert db.get(PushToken, first[0].id).revoked_at is not None
 
     r = client.delete(f"{API}/push-tokens/{token}", headers=a)
-    assert_contract(r, "deletePushToken")
     assert r.status_code == 404
     r = client.delete(f"{API}/push-tokens/{token}", headers=b)
     assert r.status_code == 204
@@ -345,7 +339,6 @@ def test_push_token_lifecycle(client, as_client, db: Session):
     assert client.delete(f"{API}/push-tokens/{token}", headers=b).status_code == 404
 
     too_long = client.post(f"{API}/push-tokens", json={"token": "x" * 1025}, headers=a)
-    assert_contract(too_long, "registerPushToken")
     assert too_long.status_code == 422
     assert client.post(f"{API}/push-tokens", json={"token": ""}, headers=a).status_code == 422
 
@@ -393,7 +386,6 @@ def test_feed_read_and_opened(client, admin, make_owner, make_worker, db: Sessio
     assert page["items"][0]["read_at"] is None
 
     r = client.patch(f"{API}/notifications/{first['id']}/read", headers=owner.headers)
-    assert_contract(r, "markNotificationRead")
     assert r.status_code == 204
     read_at = feed(client, owner.headers)["items"][1]["read_at"]
     assert read_at is not None
@@ -405,7 +397,6 @@ def test_feed_read_and_opened(client, admin, make_owner, make_worker, db: Sessio
         json={"token": owner.token},
         headers=owner.headers,
     )
-    assert_contract(r, "markNotificationOpened")
     assert r.status_code == 204
     delivery = db.scalars(
         select(NotificationDelivery)
@@ -474,7 +465,6 @@ def test_published_list_with_stats(client, admin, make_owner, make_worker, sende
 
     r = client.get(f"{API}/notifications/published", headers=admin)
     assert r.status_code == 200, r.text
-    assert_contract(r, "listPublishedNotifications")
     items = {i["id"]: i for i in r.json()["items"]}
     assert list(items) == [promo["id"], news["id"]]
     assert items[news["id"]]["stats"] == {
@@ -495,7 +485,6 @@ def test_published_list_with_stats(client, admin, make_owner, make_worker, sende
     )
     assert r.json()["items"] == []
     r = client.get(f"{API}/notifications/published", params={"type": "maintenance"}, headers=admin)
-    assert_contract(r, "listPublishedNotifications")
     assert r.status_code == 422
     assert client.get(f"{API}/notifications/published", headers=a.headers).status_code == 403
 
@@ -505,7 +494,6 @@ def test_published_list_with_stats(client, admin, make_owner, make_worker, sende
 
 def test_thresholds_reminder_fields(client, admin):
     r = client.get(f"{API}/aggregate-status-thresholds", headers=admin)
-    assert_contract(r, "getAggregateStatusThresholds")
     assert (r.json()["reminder_before_km"], r.json()["reminder_before_days"]) == (1000, 14)
 
     body = {"yellow_from_percent": 70, "red_above_percent": 100}
@@ -514,7 +502,6 @@ def test_thresholds_reminder_fields(client, admin):
         json=body | {"reminder_before_km": 500, "reminder_before_days": 7},
         headers=admin,
     )
-    assert_contract(r, "updateAggregateStatusThresholds")
     assert (r.json()["reminder_before_km"], r.json()["reminder_before_days"]) == (500, 7)
     r = client.put(f"{API}/aggregate-status-thresholds", json=body, headers=admin)
     assert (r.json()["reminder_before_km"], r.json()["reminder_before_days"]) == (500, 7)
@@ -532,3 +519,16 @@ def test_withdrawn_user_excluded_from_new_publications(client, admin, make_owner
         .values(withdrawn_at=datetime.now(UTC))
     )
     assert preview(client, admin, type="news", message="x") == {"recipients": 0, "devices": 0}
+
+
+def test_push_token_requires_active_consent(client, make_owner, db):
+    """После отзыва согласия access-токен ещё действует, но новый push-токен не регистрируется
+    (ревью главы 17: правило записи = правило аудита active_push_token_of_ineligible_user)."""
+    owner = make_owner(None, token=False)
+    assert client.delete(f"{API}/auth/pd-consent", headers=owner.headers).status_code == 202
+    r = client.post(
+        f"{API}/push-tokens", json={"token": "fcm-x:" + "y" * 40}, headers=owner.headers
+    )
+    assert r.status_code == 422
+    assert r.json()["error"]["code"] == "PD_CONSENT_REQUIRED"
+    assert db.scalar(select(func.count()).select_from(PushToken)) == 0

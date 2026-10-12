@@ -17,7 +17,7 @@ from sqlalchemy.dialects.postgresql import REGCONFIG
 from sqlalchemy.orm import Session
 
 from app.core.db import get_by_id, is_db_id
-from app.core.errors import ApiError
+from app.core.errors import ApiError, field_error
 from app.domain.knowledge import access
 from app.domain.knowledge.tree import TreeIssue, TreeNode, validate_tree
 from app.models import (
@@ -32,10 +32,6 @@ from app.models.enums import KbArticleType, TicketCategory, UserRole
 
 MAX_NODES = 100  # узлов в дереве (ADR 0018 п. 3)
 SNAPSHOT_FIELDS = ("title", "content", "category", "vehicle_model_id", "firmware_release_id")
-
-
-def _field_error(field: str, code: str, message: str) -> ApiError:
-    return ApiError(422, code, message, details={"fields": [{"loc": ["body", field]}]})
 
 
 # ---------- Список и карточка ----------
@@ -87,12 +83,12 @@ def get_article(db: Session, user: AppUser, article_id: int) -> KnowledgeArticle
 def _check_binding(db: Session, vehicle_model_id: int | None, firmware_release_id: int | None):
     """Модель существует; прошивка — той же модели (C-06), без модели прошивки нет."""
     if vehicle_model_id is not None and get_by_id(db, VehicleModel, vehicle_model_id) is None:
-        raise _field_error("vehicle_model_id", "VEHICLE_MODEL_NOT_FOUND", "Модель не найдена")
+        raise field_error("vehicle_model_id", "VEHICLE_MODEL_NOT_FOUND", "Модель не найдена")
     if firmware_release_id is None:
         return
     firmware = get_by_id(db, FirmwareRelease, firmware_release_id)
     if firmware is None or firmware.vehicle_model_id != vehicle_model_id:
-        raise _field_error(
+        raise field_error(
             "firmware_release_id",
             "FIRMWARE_RELEASE_NOT_FOUND",
             "Прошивка не найдена у модели статьи",
@@ -101,7 +97,7 @@ def _check_binding(db: Session, vehicle_model_id: int | None, firmware_release_i
 
 def _check_category(article_type: KbArticleType, category: TicketCategory | None) -> None:
     if article_type is KbArticleType.TROUBLESHOOTING and category is None:
-        raise _field_error(
+        raise field_error(
             "category",
             "CATEGORY_REQUIRED",
             "У статьи «устранение неполадок» должна быть категория ошибки",
@@ -452,9 +448,4 @@ def escalation_version(db: Session, article_id: int | None, node_id: int | None)
 
 
 def _source_error(message: str) -> ApiError:
-    return ApiError(
-        422,
-        "INVALID_SOURCE_REFERENCE",
-        message,
-        details={"fields": [{"loc": ["body", "source_article_id"]}]},
-    )
+    return field_error("source_article_id", "INVALID_SOURCE_REFERENCE", message)

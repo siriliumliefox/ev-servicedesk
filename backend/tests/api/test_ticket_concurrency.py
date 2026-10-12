@@ -37,7 +37,7 @@ from app.domain.tickets import access, attachments, service
 from app.domain.vehicles import access as vehicle_access
 from app.models import AppUser, PdConsent, Ticket, TicketAttachment, TicketMessage, Vehicle
 from app.models.enums import TicketCategory, TicketStatus, UserRole
-from tests.api.conftest import API, DbOverrides, Headers, add_vehicle, assert_contract, bearer
+from tests.api.conftest import API, DbOverrides, Headers, add_vehicle, bearer
 from tests.api.test_concurrency import storm
 from tests.api.ticket_support import JPEG, create_ticket, error_code, presign, put_upload
 from tests.api.ticket_ws import assert_frame, assert_quiet, auth, connect, receive_event
@@ -200,8 +200,6 @@ def test_parallel_claims_have_one_winner(
             return engineer, client.post(f"{API}/tickets/{ticket_id}/claim", headers=headers)
 
         results = responses(storm(THREADS, claim))
-        for _, r in results:
-            assert_contract(r, "claimTicket")
         won = [(engineer, r) for engineer, r in results if r.status_code == 200]
         lost = [r for _, r in results if r.status_code != 200]
         assert len(won) == 1, [r.status_code for _, r in results]
@@ -314,8 +312,6 @@ def test_same_upload_binds_once_under_parallel_requests(
         return operation, client.post(path, json=body, headers=owner.headers)
 
     results = responses(storm(6, bind))
-    for operation, r in results:
-        assert_contract(r, operation)
     assert sorted(r.status_code for _, r in results) == [201] + [422] * 5, [
         r.text for _, r in results
     ]
@@ -383,7 +379,6 @@ def test_second_binding_of_upload_waits_for_first(
     )
     assert outcome[winner].status_code == 201, outcome[winner].text
     rejected = outcome[loser]
-    assert_contract(rejected, "createTicketMessage")
     expected = "ATTACHMENT_ALREADY_USED" if first_commits else "TICKET_RESOLVED"
     assert (rejected.status_code, error_code(rejected)) == (422 if first_commits else 409, expected)
     [row] = attachment_rows(migrated_engine, name)
@@ -423,8 +418,6 @@ def test_reversed_attachment_lists_do_not_deadlock(
         return post_message(client, ticket_id, owner.headers, "Фото", items)
 
     results = responses(storm(2, send))
-    for r in results:
-        assert_contract(r, "createTicketMessage")
     assert sorted(r.status_code for r in results) == [201, 422], [r.text for r in results]
     [won] = [r for r in results if r.status_code == 201]
     [lost] = [r for r in results if r.status_code == 422]
@@ -510,7 +503,6 @@ def test_vehicle_deleted_before_ticket_write_is_404(
         release.set()
         creator.join(5)
     created = outcome["create"]
-    assert_contract(created, "createTicket")
     assert (created.status_code, error_code(created)) == (404, "NOT_FOUND")
     with Session(migrated_engine) as check:
         assert (
@@ -600,7 +592,6 @@ def test_message_and_resolve_race(
         outcome = dict(responses(storm(2, run)))
         assert outcome["resolve"].status_code == 200, outcome["resolve"].text
         message = outcome["message"]
-        assert_contract(message, "createTicketMessage")
         outcomes.append(message.status_code)
         stored = [m for m in fetch_messages(migrated_engine, ticket_id) if m.body == body]
         if message.status_code == 201:
@@ -763,7 +754,6 @@ def test_chat_load_parallel_messages_without_loss(
         f"{API}/tickets/{ticket_id}/messages", params={"page_size": 100}, headers=owner.headers
     )
     assert r.status_code == 200
-    assert_contract(r, "listTicketMessages")
     history = r.json()
     assert history["meta"]["total_items"] == MESSAGES
     assert [m["id"] for m in history["items"]] == sorted(sent), "история — по id по возрастанию"

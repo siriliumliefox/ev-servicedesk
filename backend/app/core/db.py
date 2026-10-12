@@ -19,6 +19,11 @@ def is_db_id(value: int) -> bool:
     return 1 <= value <= BIGINT_MAX
 
 
+def escape_like(value: str) -> str:
+    """Литерал для `LIKE ... ESCAPE '\\'`: `%`, `_` и `\\` из ввода — обычные символы."""
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def get_by_id[M](db: Session, model: type[M], value: int, **kwargs: Any) -> M | None:
     """`Session.get`, но id вне диапазона BIGINT — None (строки нет), а не ошибка драйвера."""
     return db.get(model, value, **kwargs) if is_db_id(value) else None

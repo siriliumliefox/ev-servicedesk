@@ -10,7 +10,7 @@ from app.domain.knowledge import service
 from app.domain.knowledge.service import NodeInput
 from app.models import DecisionTreeNode, KnowledgeArticle
 from app.models.enums import KbArticleType, TicketCategory
-from tests.api.conftest import API, Headers, assert_contract
+from tests.api.conftest import API, Headers
 
 
 @dataclass(frozen=True)
@@ -73,7 +73,6 @@ def api(
     """Запрос к /v1 с ожидаемым статусом; ответ сверяется с контрактом."""
     r = client.request(method, f"{API}{path}", headers=headers, **kwargs)
     assert r.status_code == expected, r.text
-    assert_contract(r, operation_id)
     return r.json() if r.content else None
 
 

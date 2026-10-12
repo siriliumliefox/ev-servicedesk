@@ -2,7 +2,7 @@
 
 Подключение — Starlette TestClient; события идут через настоящий Redis pub/sub (тестовый
 сервер). Кадры событий сверяются со схемами docs/openapi.yaml (`TicketMessage`, `Ticket`).
-Приложение запущено (`with TestClient(app)`): все подключения работают в одном цикле событий
+Приложение запущено (`with ContractClient(app)`): все подключения работают в одном цикле событий
 и делят одно соединение подписки, как в процессе uvicorn.
 """
 
@@ -33,7 +33,14 @@ from app.domain.tickets import events
 from app.main import create_app
 from app.models import AppUser
 from app.models.enums import UserRole
-from tests.api.conftest import API, RUN_CHANNEL_PREFIX, Headers, add_vehicle, api_settings
+from tests.api.conftest import (
+    API,
+    RUN_CHANNEL_PREFIX,
+    ContractClient,
+    Headers,
+    add_vehicle,
+    api_settings,
+)
 from tests.api.ticket_support import create
 from tests.api.ticket_ws import (
     READY,
@@ -135,6 +142,19 @@ def test_inactive_user_closes_4401(client, ticket_id, engineer, db):
     db.commit()
     with connect(client, ticket_id) as ws:
         ws.send_json({"type": "auth", "access_token": engineer[1]})
+        assert close_code(ws) == 4401
+
+
+def test_blocked_while_idle_closes_4401(client, ticket_id, engineer, as_staff, monkeypatch):
+    """Блокировка администратором закрывает подписку и без событий тикета (ADR 0021 п. 3)."""
+    monkeypatch.setattr(ticket_events, "LISTEN_TIMEOUT_SECONDS", 0.2)
+    admin_headers, _ = as_staff("+375295500031", UserRole.ADMIN)
+    with connect(client, ticket_id) as ws:
+        auth(ws, engineer[1])
+        r = client.patch(
+            f"{API}/users/{engineer[2].id}", json={"is_active": False}, headers=admin_headers
+        )
+        assert r.status_code == 200
         assert close_code(ws) == 4401
 
 
@@ -388,7 +408,7 @@ def test_apps_in_one_process_each_deliver(app, client, settings, ticket_id, owne
     other_app = create_app(settings)  # своя общая подписка — из своего lifespan
     other_app.dependency_overrides.update(app.dependency_overrides)
 
-    with TestClient(other_app) as second:
+    with ContractClient(other_app) as second:
         with connect(client, ticket_id) as one, connect(second, ticket_id) as two:
             auth(one, owner[1])
             auth(two, owner[1])

@@ -50,6 +50,11 @@ def forbidden(message: str = "Недостаточно прав") -> ApiError:
     return ApiError(403, "FORBIDDEN", message)
 
 
+def field_error(field: str, code: str, message: str, location: str = "body") -> ApiError:
+    """422 с указанием поля (`details.fields[].loc`), как ошибки валидации схемы."""
+    return ApiError(422, code, message, details={"fields": [{"loc": [location, field]}]})
+
+
 def rate_limited(retry_after: int, message: str = "Слишком много попыток") -> ApiError:
     retry_after = max(retry_after, 1)
     return ApiError(

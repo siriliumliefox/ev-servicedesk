@@ -10,8 +10,7 @@ import time
 from datetime import UTC, date, datetime, timedelta
 
 import pytest
-from fastapi.testclient import TestClient
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.core.time import BUSINESS_TZ
@@ -20,14 +19,16 @@ from app.domain.notifications.push import Outcome, PushResult
 from app.domain.notifications.reminders import run_maintenance_reminders
 from app.domain.tickets.events import MessageCreated, TicketEvents, TicketUpdated
 from app.models import (
+    AppUser,
     MaintenanceReminder,
     Notification,
     NotificationDelivery,
+    PdConsent,
     PushToken,
 )
 from app.models.enums import UserRole
 from tests.api.conftest import API, Headers, model_id
-from tests.api.notifications_support import feed, publish
+from tests.api.notifications_support import feed, mileage, publish, regulation, replace
 
 
 @pytest.fixture
@@ -152,29 +153,6 @@ def test_publication_reaches_sender_via_redis_signal_fast(
 
 
 # ---------- Cron: напоминания о ТО (C-11, N-10, ADR 0019 п. 5–7) ----------
-
-
-def regulation(client: TestClient, admin: Headers, model: int, code: str, **interval) -> None:
-    r = client.post(
-        f"{API}/maintenance-regulations",
-        json={"vehicle_model_id": model, "aggregate_type_code": code, **interval},
-        headers=admin,
-    )
-    assert r.status_code == 201, r.text
-
-
-def replace(client: TestClient, admin: Headers, vid: int, code: str, day: date, km: int) -> None:
-    r = client.post(
-        f"{API}/vehicles/{vid}/aggregate-statuses/{code}/replace",
-        json={"replaced_at": str(day), "mileage_at_replacement": km},
-        headers=admin,
-    )
-    assert r.status_code == 200, r.text
-
-
-def mileage(client: TestClient, headers: Headers, vid: int, km: int) -> None:
-    r = client.patch(f"{API}/vehicles/{vid}/mileage", json={"mileage": km}, headers=headers)
-    assert r.status_code == 200, r.text
 
 
 def reminders(db: Session, vid: int) -> list[tuple[str, str]]:
@@ -509,3 +487,83 @@ def test_reminder_counts_to_configured_red_threshold(
     else:
         ((kind, text),) = got
         assert kind == expected[0] and expected[1] in text and "-" not in text.split(":")[1]
+
+
+# ---------- Право на уведомление при отправке (Глава 17, ADR 0021 п. 5) ----------
+
+
+def queued_reminder(client, admin, make_owner, make_worker, db: Session):
+    """Клиент с авто и поставленным в очередь (не отправленным) напоминанием о ТО."""
+    owner = make_owner("Zeekr")
+    model = model_id(client, admin, "Zeekr")
+    regulation(client, admin, model, "engine_oil", interval_km=10_000)
+    replace(client, admin, owner.vehicle_id, "engine_oil", date(2026, 1, 10), 0)
+    mileage(client, owner.headers, owner.vehicle_id, 12_000)
+    worker = make_worker()
+    assert run_maintenance_reminders(db, worker.outbox, date(2026, 6, 1)) == 1
+    (notification_id,) = db.scalars(
+        select(Notification.id).where(Notification.vehicle_id == owner.vehicle_id)
+    )
+    return owner, worker, notification_id
+
+
+def test_queued_reminder_not_sent_after_vehicle_deleted(
+    client, admin, make_owner, make_worker, sender, db: Session
+):
+    owner, worker, notification_id = queued_reminder(client, admin, make_owner, make_worker, db)
+    r = client.delete(f"{API}/vehicles/{owner.vehicle_id}", headers=owner.headers)
+    assert r.status_code == 204
+
+    assert worker.dispatch() == 1
+    (row,) = deliveries(db, notification_id)
+    assert row.failed_at is not None and row.delivered_at is None
+    assert row.error_code == "RECIPIENT_NOT_ELIGIBLE"
+    assert row.attempts == 0
+    assert sender.sent == []
+
+
+@pytest.mark.parametrize("change", ["blocked", "consent_withdrawn", "anonymized"])
+def test_queued_news_not_sent_to_ineligible_recipient(
+    change, client, admin, make_owner, make_worker, sender, db: Session
+):
+    """Токен не отозван (изменение мимо API) — доставку закрывает повторная проверка права."""
+    owner = make_owner(None)
+    other = make_owner(None)
+    news = publish(client, admin, type="news", message="Новость")
+    user_id = client.get(f"{API}/me", headers=owner.headers).json()["id"]
+    user = db.get(AppUser, user_id)
+    if change == "blocked":
+        user.is_active = False
+    elif change == "consent_withdrawn":
+        db.execute(
+            update(PdConsent)
+            .where(PdConsent.user_id == user_id)
+            .values(withdrawn_at=datetime.now(UTC))
+        )
+    else:
+        user.anonymized_at = datetime.now(UTC)
+    db.commit()
+
+    assert make_worker().dispatch() == 2
+    by_token = {
+        token: row
+        for row in deliveries(db, news["id"])
+        for token in db.scalars(select(PushToken.token).where(PushToken.id == row.push_token_id))
+    }
+    assert by_token[owner.token].error_code == "RECIPIENT_NOT_ELIGIBLE"
+    assert by_token[other.token].delivered_at is not None
+    assert sender.to(owner.token) == [] and len(sender.to(other.token)) == 1
+
+
+def test_ticket_push_skips_deleted_vehicle(
+    client, make_owner, make_worker, make_ticket, as_staff, sender, real_redis, settings
+):
+    owner = make_owner("Zeekr")
+    ticket = make_ticket(owner.vehicle_id, as_staff("+375293490004")[1])
+    r = client.delete(f"{API}/vehicles/{owner.vehicle_id}", headers=owner.headers)
+    assert r.status_code == 204
+    events = TicketEvents(real_redis, settings.redis_channel_prefix)
+    make_worker().handle_message(
+        events.channel(ticket.id), TicketUpdated(ticket_id=ticket.id).model_dump_json()
+    )
+    assert sender.sent == [], "тикет удалённого авто клиенту не виден — push нет"

@@ -34,13 +34,11 @@ from app.core.config import Settings
 from app.core.security import create_access_token
 from tests.api.conftest import (
     API,
+    ContractClient,
     Headers,
     add_vehicle,
     api_settings,
-    assert_contract,
     bearer,
-    contract,
-    contract_operation,
 )
 from tests.api.ticket_world import (
     ADMIN,
@@ -66,6 +64,7 @@ from tests.api.ticket_ws import (
     receive_event,
     run_events,
 )
+from tests.support.contract import contract, contract_operation
 
 NEW_OWNER_PHONE = "+375296610007"
 GHOST_ID = 10**9  # id, которого нет
@@ -256,7 +255,6 @@ def test_rejected_token_is_401_everywhere(client, world, settings, db, real_redi
     for op_id in OPS:
         r = call(client, world, op_id, headers)
         assert r.status_code == 401, (op_id, r.text)
-        assert_contract(r, op_id)
         assert r.json()["error"]["code"] == "UNAUTHORIZED", op_id
         assert r.headers["WWW-Authenticate"] == "Bearer", op_id
     assert ws_outcome(client, real_redis, world.tickets[ASSIGNED], token) == 4401
@@ -289,7 +287,6 @@ def test_role_outside_contract_roles_is_403(client, world):
             if role in roles:  # тикет ASSIGNED виден всем трём ролям
                 r = call(client, world, op_id, headers)
                 assert 200 <= r.status_code < 300, (op_id, role, r.text)
-                assert_contract(r, op_id)
                 continue
             targets: list[dict[str, Any]] = [{}]
             if op_id in TICKET_OPS:
@@ -297,7 +294,6 @@ def test_role_outside_contract_roles_is_403(client, world):
             for target in targets:
                 r = call(client, world, op_id, headers, **target)
                 assert r.status_code == 403, (op_id, role, target, r.text)
-                assert_contract(r, op_id)
                 assert r.json()["error"]["code"] == "FORBIDDEN", (op_id, role, target)
 
 
@@ -360,7 +356,6 @@ LISTED = {
 def listed(client: TestClient, world: World, headers: Headers, **params: Any) -> set[str]:
     r = client.get(f"{API}/tickets", params=params, headers=headers)
     assert r.status_code == 200, r.text
-    assert_contract(r, "listTickets")
     body = r.json()
     by_id = {tid: key for key, tid in world.tickets.items()}
     ids = [t["id"] for t in body["items"]]
@@ -393,7 +388,6 @@ def test_object_level_matrix(client, world, real_redis, actor):
                 got = ws_outcome(client, real_redis, world.tickets[ticket], world.tokens[actor])
             else:
                 r = call(client, world, op_id, headers, ticket=ticket)
-                assert_contract(r, op_id)
                 got = r.status_code
                 if got == want and want >= 400:
                     code = "TICKET_ALREADY_CLAIMED" if want == 409 else ERROR_CODES[want]
@@ -420,7 +414,6 @@ def test_create_ticket_only_on_own_active_vehicle(client, world):
             json={"vehicle_id": vehicle_id, "category": "sim", "description": "x"},
             headers=world.headers(actor),
         )
-        assert_contract(r, "createTicket")
         return r
 
     assert create(OWNER, world.vehicles[OWNER]).status_code == 201
@@ -473,15 +466,14 @@ def test_sold_vehicle_tickets_hidden_from_ex_and_new_owner(client, world, login_
 
 @pytest.mark.parametrize("op_id", TICKET_OPS)
 def test_out_of_range_ticket_id_is_404_not_500(app, world, op_id):
-    client = TestClient(app, raise_server_exceptions=False)
+    client = ContractClient(app, raise_server_exceptions=False)
     headers = world.headers(ENGINEER if op_id == "claimTicket" else ADMIN)
     for tid in OUT_OF_RANGE_IDS:
         r = call(client, world, op_id, headers, tid=tid)
         assert r.status_code == 404, (tid, r.text)
-        assert_contract(r, op_id)
         assert r.json()["error"]["code"] == "NOT_FOUND"
-    # Не целое число — ошибка валидации пути. 422 объявлен не у всех операций (getTicket,
-    # claimTicket), поэтому ответ с контрактом не сверяется: важно, что это не 500.
+    # Не целое число — ошибка валидации пути: 422 объявлен у всех операций с id в пути (1.7.1,
+    # раньше у getTicket и claimTicket его не было — нашла сверка ответов, ADR 0021 п. 2).
     for tid in NOT_INTEGER_IDS:
         r = call(client, world, op_id, headers, tid=tid)
         assert r.status_code == 422, (tid, r.text)
@@ -515,10 +507,9 @@ def test_ws_out_of_range_ticket_id(client, world, real_redis):
 )
 def test_out_of_range_query_is_not_500(app, world, op_id, params):
     """Параметр запроса вне диапазона — 422 или пустая страница, но не ошибка БД (500)."""
-    client = TestClient(app, raise_server_exceptions=False)
+    client = ContractClient(app, raise_server_exceptions=False)
     r = call(client, world, op_id, world.headers(ADMIN), params=params)
     assert r.status_code in (200, 422), r.text
-    assert_contract(r, op_id)
     if r.status_code == 200:
         assert r.json()["items"] == []
 
@@ -526,9 +517,8 @@ def test_out_of_range_query_is_not_500(app, world, op_id, params):
 @pytest.mark.parametrize("op_id", ["listTickets", "listTicketMessages"])
 def test_last_page_within_bigint_offset(app, world, op_id):
     """Наибольшая допустимая страница при наибольшем page_size — OFFSET в BIGINT: 200, пусто."""
-    client = TestClient(app, raise_server_exceptions=False)
+    client = ContractClient(app, raise_server_exceptions=False)
     params = {"page": PAGE_MAX, "page_size": PAGE_SIZE_MAX}
     r = call(client, world, op_id, world.headers(ADMIN), params=params)
     assert r.status_code == 200, r.text
-    assert_contract(r, op_id)
     assert r.json()["items"] == [] and r.json()["meta"]["page"] == PAGE_MAX

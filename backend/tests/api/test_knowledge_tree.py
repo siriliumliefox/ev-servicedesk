@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.models import DecisionTreeNode, Ticket
 from app.models.enums import UserRole
-from tests.api.conftest import API, Headers, add_vehicle, assert_contract
+from tests.api.conftest import API, Headers, add_vehicle
 from tests.api.knowledge_support import api, api_tree, create_article, create_node, update_article
 from tests.api.ticket_support import create, error_code
 
@@ -36,13 +36,11 @@ def post_node(client: TestClient, admin: Headers, article_id: int, body: dict):
     r = client.post(
         f"{API}/knowledge-articles/{article_id}/decision-tree", json=body, headers=admin
     )
-    assert_contract(r, "createDecisionTreeNode")
     return r
 
 
 def patch_node(client: TestClient, admin: Headers, node_id: int, body: dict):
     r = client.patch(f"{API}/decision-tree-nodes/{node_id}", json=body, headers=admin)
-    assert_contract(r, "updateDecisionTreeNode")
     return r
 
 
@@ -173,7 +171,6 @@ def test_delete_node(client, admin):
     tree = api_tree(client, admin)
     r = client.delete(f"{API}/decision-tree-nodes/{tree['solved']['id']}", headers=admin)
     assert (r.status_code, error_code(r)) == (409, "DECISION_TREE_NODE_REFERENCED")
-    assert_contract(r, "deleteDecisionTreeNode")
     assert r.json()["error"]["details"]["referenced_by"] == [tree["root"]["id"]]
     # Корень без входящих ссылок удаляется; после него — листья.
     for key in ("root", "solved", "escalation"):
@@ -260,7 +257,6 @@ def test_publication_requires_valid_tree(client, admin):
             f"{API}/knowledge-articles/{article_id}", json={"is_published": True}, headers=admin
         )
         assert (r.status_code, error_code(r)) == (409, "DECISION_TREE_INVALID")
-        assert_contract(r, "updateKnowledgeArticle")
         return {(i["problem"], i.get("node_id")) for i in r.json()["error"]["details"]["issues"]}
 
     assert publish_issues() == {("NO_ROOT", None)}

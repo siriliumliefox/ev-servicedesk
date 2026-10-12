@@ -104,7 +104,8 @@ def request_code(
         "Превышен лимит SMS на этот номер",
     )
 
-    code = generate_sms_code(settings.sms_code_length)
+    test_phone = phone in settings.test_phones  # ADR 0021 п. 6: код из секрета, без SMS
+    code = settings.sms_test_code if test_phone else generate_sms_code(settings.sms_code_length)
     key = code_key(phone)
     with redis.pipeline(transaction=True) as pipe:
         pipe.delete(key)  # новый код сбрасывает старый и счётчик попыток
@@ -112,6 +113,8 @@ def request_code(
         pipe.expire(key, settings.sms_code_ttl_seconds)
         pipe.execute()
 
+    if test_phone:
+        return settings.sms_code_ttl_seconds
     try:
         sms.send(phone, SMS_TEXT.format(code=code))
     except SmsError as exc:

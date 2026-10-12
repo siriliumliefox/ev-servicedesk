@@ -13,7 +13,7 @@ from app.domain.vehicles.vin import (
     MockVinDecoder,
     validate_vin,
 )
-from tests.api.conftest import contract
+from tests.support.contract import contract
 
 VALID = [
     "L6TZ0010000000001",
@@ -54,7 +54,7 @@ def test_pattern_matches_contract_and_db() -> None:
     schema = contract()["components"]["schemas"]["VehicleCreateRequest"]["properties"]["vin"]
     assert VIN_PATTERN.pattern == schema["pattern"]
     # Тот же шаблон в CHECK vin_format (docs/EV_ServiceDesk_Glava2_DDL.sql).
-    from tests.api.conftest import DOCS
+    from tests.support.contract import DOCS
 
     ddl = (DOCS / "EV_ServiceDesk_Glava2_DDL.sql").read_text(encoding="utf-8")
     assert re.search(re.escape(f"vin ~ '{VIN_PATTERN.pattern}'"), ddl)

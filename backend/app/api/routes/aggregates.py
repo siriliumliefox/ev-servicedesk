@@ -24,11 +24,10 @@ from app.api.schemas.aggregates import (
 )
 from app.core.db import BIGINT_MAX
 from app.domain.aggregates import service
-from app.models.enums import UserRole
+from app.models.enums import STAFF_ROLES, UserRole
 
 router = APIRouter(tags=["Aggregates"])
 
-STAFF = (UserRole.ENGINEER, UserRole.ADMIN)
 
 # Диапазон BIGINT проверяют access и сервис (вне диапазона — 404, как у несуществующего id).
 VehicleId = Annotated[int, Path(alias="vehicleId")]
@@ -51,7 +50,9 @@ def create_aggregate_type(body: AggregateTypeCreateRequest, db: DbDep) -> Aggreg
     return AggregateTypeOut.model_validate(service.create_aggregate_type(db, body.code, body.name))
 
 
-@router.get("/maintenance-regulations", operation_id="listMaintenanceRegulations", **rbac(*STAFF))
+@router.get(
+    "/maintenance-regulations", operation_id="listMaintenanceRegulations", **rbac(*STAFF_ROLES)
+)
 def list_maintenance_regulations(
     db: DbDep,
     page: PageDep,
@@ -109,7 +110,7 @@ def list_aggregate_statuses(
 @router.post(
     "/vehicles/{vehicleId}/aggregate-statuses/{aggregateTypeCode}/replace",
     operation_id="replaceAggregateStatus",
-    **rbac(*STAFF),
+    **rbac(*STAFF_ROLES),
 )
 def replace_aggregate_status(
     vehicle_id: VehicleId,
@@ -133,7 +134,7 @@ def replace_aggregate_status(
 @router.get(
     "/aggregate-status-thresholds",
     operation_id="getAggregateStatusThresholds",
-    **rbac(*STAFF),
+    **rbac(*STAFF_ROLES),
 )
 def get_aggregate_status_thresholds(db: DbDep) -> AggregateStatusThresholdsOut:
     return AggregateStatusThresholdsOut.model_validate(service.get_thresholds(db))

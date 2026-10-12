@@ -29,11 +29,10 @@ from app.api.schemas.vehicles import (
     VehicleOut,
 )
 from app.domain.vehicles import service
-from app.models.enums import UserRole
+from app.models.enums import STAFF_ROLES, UserRole
 
 router = APIRouter(tags=["Vehicle"])
 
-STAFF = (UserRole.ENGINEER, UserRole.ADMIN)
 
 # Диапазон BIGINT проверяет access (вне диапазона — 404, как у несуществующего id).
 VehicleId = Annotated[int, Path(alias="vehicleId")]
@@ -130,7 +129,7 @@ def list_maintenance_records(
     "/vehicles/{vehicleId}/maintenance-records",
     operation_id="createMaintenanceRecord",
     status_code=status.HTTP_201_CREATED,
-    **rbac(*STAFF),
+    **rbac(*STAFF_ROLES),
 )
 def create_maintenance_record(
     vehicle_id: VehicleId,

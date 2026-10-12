@@ -115,7 +115,7 @@ export interface paths {
         put?: never;
         /**
          * Логин по паролю для Инженера/Администратора
-         * @description Отдельный флоу от клиентского SMS-логина. Учётные записи engineer/admin создаются администратором вручную (Глава 22), клиент этим эндпоинтом не пользуется. 429 — превышен лимит неудачных попыток входа по номеру или адресу (N-06), заголовок Retry-After. Добавлено в 1.2.0.
+         * @description Отдельный флоу от клиентского SMS-логина. Учётные записи engineer/admin создаёт администратор (createStaffUser; первый — CLI образа, ADR 0021 п. 7), клиент этим эндпоинтом не пользуется. Заблокированный сотрудник — 401, как неверный пароль (уточнено в 1.7.1). 429 — превышен лимит неудачных попыток входа по номеру или адресу (N-06), заголовок Retry-After. Добавлено в 1.2.0.
          */
         post: operations["staffLogin"];
         delete?: never;
@@ -390,7 +390,7 @@ export interface paths {
         put?: never;
         /**
          * Зафиксировать замену агрегата (сброс счётчика)
-         * @description Единственная точка входа для инженера при замене: сбрасывает счётчик (обновляет VehicleAggregateStatus) И создаёт соответствующую запись в истории ТО (MaintenanceRecord, Vehicle Service) одним вызовом — межсервисная синхронизация статуса и истории, чтобы инженер не забыл вызвать второй эндпоинт и данные не разошлись (реализация сцепки — Глава 17). Публичный POST .../maintenance-records (Vehicle Service, шаг 3) остаётся для работ БЕЗ привязки к конкретному отслеживаемому агрегату. Правила (docs/specs/AGGREGATE_STATUS_ALGORITHM.md, §3–4): replaced_at в будущем → 422; mileage_at_replacement больше текущего пробега авто → 409 (сначала updateVehicleMileage). Счётчик сбрасывается, только если дата замены не раньше текущей последней замены; замена задним числом попадает лишь в историю ТО, а ответ содержит прежний статус. Уточнено в 1.3.2 (ADR 0016): 422 REPLACED_AT_IN_FUTURE (дата позже сегодняшней по Europe/Minsk); 409 MILEAGE_AHEAD_OF_VEHICLE (details.current_mileage), пробег авто не поднимается; 404 AGGREGATE_TYPE_NOT_FOUND — неизвестный код агрегата. Без активного регламента замена всё равно фиксируется: 200 со status=unknown (percentage и остатки null, last_replaced_* заполнены). Доступ — как у изменения авто: engineer — по своему тикету не в resolved, удалённое авто — 403/404. Повтор того же запроса создаёт ещё одну запись в истории ТО.
+         * @description Единственная точка входа для инженера при замене: сбрасывает счётчик (обновляет VehicleAggregateStatus) И создаёт соответствующую запись в истории ТО (MaintenanceRecord, Vehicle Service) одним вызовом — межсервисная синхронизация статуса и истории, чтобы инженер не забыл вызвать второй эндпоинт и данные не разошлись (реализация сцепки — глава 12, ADR 0016; уточнено в 1.7.1). Публичный POST .../maintenance-records (Vehicle Service, шаг 3) остаётся для работ БЕЗ привязки к конкретному отслеживаемому агрегату. Правила (docs/specs/AGGREGATE_STATUS_ALGORITHM.md, §3–4): replaced_at в будущем → 422; mileage_at_replacement больше текущего пробега авто → 409 (сначала updateVehicleMileage). Счётчик сбрасывается, только если дата замены не раньше текущей последней замены; замена задним числом попадает лишь в историю ТО, а ответ содержит прежний статус. Уточнено в 1.3.2 (ADR 0016): 422 REPLACED_AT_IN_FUTURE (дата позже сегодняшней по Europe/Minsk); 409 MILEAGE_AHEAD_OF_VEHICLE (details.current_mileage), пробег авто не поднимается; 404 AGGREGATE_TYPE_NOT_FOUND — неизвестный код агрегата. Без активного регламента замена всё равно фиксируется: 200 со status=unknown (percentage и остатки null, last_replaced_* заполнены). Доступ — как у изменения авто: engineer — по своему тикету не в resolved, удалённое авто — 403/404. Повтор того же запроса создаёт ещё одну запись в истории ТО.
          */
         post: operations["replaceAggregateStatus"];
         delete?: never;
@@ -478,7 +478,7 @@ export interface paths {
         };
         /**
          * Карточка тикета с автопривязанным контекстом авто
-         * @description vehicle_context собирается из Vehicle Service и Aggregates Service (модель, текущая прошивка, статусы агрегатов на момент обращения) — межсервисная агрегация на уровне Tickets Service (Глава 17). Уточнено в 1.4.0 (ADR 0017, RBAC-04): client — тикеты своих авто; engineer — очередь (status=new без исполнителя) и тикеты, назначенные ему; admin — все. Невидимый тикет — 404 (как доступ к авто, минимизация ПД). firmware_version_at_creation — прошивка на момент создания тикета (снимок, N-09), в отличие от текущей vehicle_context.vehicle.current_firmware_version. file_url вложений — presigned GET на 15 минут.
+         * @description vehicle_context собирается из Vehicle Service и Aggregates Service (модель, текущая прошивка, статусы агрегатов на момент обращения) — межсервисная агрегация на уровне Tickets Service (глава 13; уточнено в 1.7.1). Уточнено в 1.4.0 (ADR 0017, RBAC-04): client — тикеты своих авто; engineer — очередь (status=new без исполнителя) и тикеты, назначенные ему; admin — все. Невидимый тикет — 404 (как доступ к авто, минимизация ПД). firmware_version_at_creation — прошивка на момент создания тикета (снимок, N-09), в отличие от текущей vehicle_context.vehicle.current_firmware_version. file_url вложений — presigned GET на 15 минут.
          */
         get: operations["getTicket"];
         put?: never;
@@ -524,7 +524,7 @@ export interface paths {
         put?: never;
         /**
          * Инженер берёт тикет в работу (самоназначение)
-         * @description Оптимистичная блокировка: если тикет уже назначен другим инженером — 409, а не тихая перезапись (тест конкурентного доступа, Глава 21). Уточнено в 1.4.0 (ADR 0017): claim атомарен — тикет из очереди (status=new без исполнителя) назначается текущему инженеру и переходит в in_progress. Тикет уже у другого инженера (в т. ч. проигрыш в гонке) — 409 TICKET_ALREADY_CLAIMED; повторный claim своего тикета — 200 без изменений. Подписчики WebSocket получают ticket.updated.
+         * @description Оптимистичная блокировка: если тикет уже назначен другим инженером — 409, а не тихая перезапись (тест конкурентного доступа, Глава 21). Подключения WebSocket других инженеров, видевших тикет из очереди, закрываются 4403 (docs/asyncapi.yaml, уточнено в 1.7.1). Уточнено в 1.4.0 (ADR 0017): claim атомарен — тикет из очереди (status=new без исполнителя) назначается текущему инженеру и переходит в in_progress. Тикет уже у другого инженера (в т. ч. проигрыш в гонке) — 409 TICKET_ALREADY_CLAIMED; повторный claim своего тикета — 200 без изменений. Подписчики WebSocket получают ticket.updated.
          */
         post: operations["claimTicket"];
         delete?: never;
@@ -765,7 +765,7 @@ export interface paths {
         put?: never;
         /**
          * Зарегистрировать FCM push-токен устройства
-         * @description Сохраняет токен устройства для последующей push-рассылки. Повторная регистрация своего токена — 201; токен, привязанный к другому пользователю (сменили аккаунт на телефоне), перепривязывается к текущему — 201, 409 не возвращается. Токен длиннее 1024 символов — 422. Уточнено в 1.6.0 (ADR 0019 п. 8).
+         * @description Сохраняет токен устройства для последующей push-рассылки. Повторная регистрация своего токена — 201; токен, привязанный к другому пользователю (сменили аккаунт на телефоне), перепривязывается к текущему — 201, без 409. 409 PUSH_TOKEN_CONFLICT — только при одновременной регистрации одного токена с разных аккаунтов: повторить запрос (уточнено в 1.7.1). Токен длиннее 1024 символов — 422. Уточнено в 1.6.0 (ADR 0019 п. 8). 422 PD_CONSENT_REQUIRED — нет действующего согласия ПД (отозвано, а access-токен ещё действует): уведомления клиенту не положены (1.7.1, ADR 0021 п. 5).
          */
         post: operations["registerPushToken"];
         delete?: never;
@@ -788,7 +788,7 @@ export interface paths {
         post?: never;
         /**
          * Удалить push-токен (логаут с устройства/отключение уведомлений)
-         * @description Прекращает отправку push-уведомлений на данное устройство (токен отзывается, журнал доставок сохраняется). 404 — нет активного токена с этим значением у текущего пользователя. Уточнено в 1.6.0 (ADR 0019 п. 8).
+         * @description Прекращает отправку push-уведомлений на данное устройство (токен отзывается, журнал доставок сохраняется). 404 PUSH_TOKEN_NOT_FOUND — нет активного токена с этим значением у текущего пользователя. Уточнено в 1.6.0 (ADR 0019 п. 8), код — в 1.7.1.
          */
         delete: operations["deletePushToken"];
         options?: never;
@@ -811,7 +811,7 @@ export interface paths {
         put?: never;
         /**
          * Опубликовать уведомление (новости/акции/ручная рассылка)
-         * @description target_vehicle_model_id — единственный источник таргетинга (Глава 2, 3НФ). Для type=firmware обычно создаётся автоматически через POST /firmware-releases, но ручная публикация тоже разрешена: релиз той же модели обязателен, аудитория — владельцы авто модели с более ранней или неизвестной прошивкой. Уточнено в 1.6.0 (ADR 0019): type=maintenance — только системные напоминания о ТО (422 NOTIFICATION_TYPE_RESERVED); message — 1–1000 символов после обрезки пробелов (422); аудитория — активные клиенты с действующим согласием ПД и неудалёнными авто модели (null — все клиенты). Перед отправкой — previewNotificationAudience.
+         * @description target_vehicle_model_id — единственный источник таргетинга (Глава 2, 3НФ). Для type=firmware обычно создаётся автоматически через POST /firmware-releases, но ручная публикация тоже разрешена: релиз той же модели обязателен, аудитория — владельцы авто модели с более ранней или неизвестной прошивкой. Уточнено в 1.6.0 (ADR 0019): type=maintenance — только системные напоминания о ТО (422 NOTIFICATION_TYPE_RESERVED); message — 1–1000 символов после обрезки пробелов (422); аудитория — активные клиенты с действующим согласием ПД и неудалёнными авто модели (null — все клиенты). Перед отправкой — previewNotificationAudience. Коды 422 (уточнено в 1.7.1): VEHICLE_MODEL_NOT_FOUND, FIRMWARE_RELEASE_REQUIRED, FIRMWARE_RELEASE_NOT_ALLOWED (релиз у не-прошивки), FIRMWARE_RELEASE_NOT_FOUND, FIRMWARE_MODEL_MISMATCH.
          */
         post: operations["createNotification"];
         delete?: never;
@@ -837,7 +837,7 @@ export interface paths {
         head?: never;
         /**
          * Отметить уведомление прочитанным
-         * @description Пишет read_at в NotificationRecipient (лента пользователя, C-13) независимо от push-токенов. Открытие push фиксируется отдельно в NotificationDelivery.opened_at (аналитика, Глава 16).
+         * @description Пишет read_at в NotificationRecipient (лента пользователя, C-13) независимо от push-токенов. Открытие push фиксируется отдельно в NotificationDelivery.opened_at (аналитика, Глава 16). 404 NOTIFICATION_NOT_FOUND — уведомления нет в ленте текущего пользователя (уточнено в 1.7.1).
          */
         patch: operations["markNotificationRead"];
         trace?: never;
@@ -855,7 +855,7 @@ export interface paths {
         put?: never;
         /**
          * Отметить открытие push-уведомления
-         * @description Вызывается приложением при нажатии на push: пишет NotificationDelivery.opened_at доставки на устройство с этим токеном (аналитика открываемости, Глава 16) и read_at, если уведомление ещё не прочитано. Токен без доставки этого уведомления — только read_at. 404 — уведомления нет в ленте текущего пользователя. Добавлено в 1.6.0 (ADR 0019 п. 12).
+         * @description Вызывается приложением при нажатии на push: пишет NotificationDelivery.opened_at доставки на устройство с этим токеном (аналитика открываемости, Глава 16) и read_at, если уведомление ещё не прочитано. Токен без доставки этого уведомления — только read_at. 404 NOTIFICATION_NOT_FOUND — уведомления нет в ленте текущего пользователя. Добавлено в 1.6.0 (ADR 0019 п. 12), код — в 1.7.1.
          */
         post: operations["markNotificationOpened"];
         delete?: never;
@@ -919,7 +919,7 @@ export interface paths {
         put?: never;
         /**
          * Опубликовать релиз прошивки
-         * @description Атомарно создаёт FirmwareRelease и триггерит Notification(type=firmware) с targeting по vehicle_model_id. Уточнено в 1.6.0 (ADR 0019 п. 4): текст уведомления формирует сервер; аудитория — владельцы авто модели, у которых прошивка не указана или выпущена раньше (released_at, при равенстве — id). Неизвестная модель, повтор версии модели, дата в будущем — 422.
+         * @description Атомарно создаёт FirmwareRelease и триггерит Notification(type=firmware) с targeting по vehicle_model_id. Уточнено в 1.6.0 (ADR 0019 п. 4): текст уведомления формирует сервер; аудитория — владельцы авто модели, у которых прошивка не указана или выпущена раньше (released_at, при равенстве — id). Неизвестная модель, повтор версии модели, дата в будущем — 422 VEHICLE_MODEL_NOT_FOUND, FIRMWARE_VERSION_EXISTS, RELEASED_AT_IN_FUTURE (коды — в 1.7.1).
          */
         post: operations["createFirmwareRelease"];
         delete?: never;
@@ -945,7 +945,7 @@ export interface paths {
         head?: never;
         /**
          * Зафиксировать текущую прошивку авто (после русификации/визита)
-         * @description Обновляет current_firmware_release_id автомобиля; уведомлений не создаёт. Доступ — как у записи работ по авто (инженер — по своему тикету в работе, ADR 0014). Уточнено в 1.6.0.
+         * @description Обновляет current_firmware_release_id автомобиля; уведомлений не создаёт. Доступ — как у записи работ по авто (инженер — по своему тикету в работе, ADR 0014). Уточнено в 1.6.0. 422 FIRMWARE_RELEASE_NOT_FOUND — релиза нет или он другой модели (код — в 1.7.1).
          */
         patch: operations["setVehicleFirmware"];
         trace?: never;
@@ -979,13 +979,13 @@ export interface paths {
         };
         /**
          * Список пользователей (админ-панель)
-         * @description Фильтры по роли, активности и подстроке телефона. Анонимизированные (phone = null) включаются.
+         * @description Фильтры по роли, активности и подстроке телефона. Анонимизированные (phone = null) включаются, если не задан search. Уточнено в 1.7.1 (ADR 0021 п. 3): search — подстрока E.164 после обрезки пробелов, символы % и _ — обычные; порядок — по id.
          */
         get: operations["listUsers"];
         put?: never;
         /**
          * Создать учётную запись инженера/администратора
-         * @description Клиенты регистрируются сами (verifyPhoneCode). Персонал создаёт только admin; пароль хранится как password_hash (N-08, ADR 0005). 409 — телефон уже занят.
+         * @description Клиенты регистрируются сами (verifyPhoneCode). Персонал создаёт только admin; пароль хранится как password_hash (N-08, ADR 0005). 409 PHONE_ALREADY_REGISTERED — телефон уже занят (клиентом или сотрудником). Первый администратор среды — CLI образа `python -m app.cli create-admin` (ADR 0021 п. 7). Уточнено в 1.7.1.
          */
         post: operations["createStaffUser"];
         delete?: never;
@@ -1005,7 +1005,7 @@ export interface paths {
         };
         /**
          * Карточка пользователя
-         * @description Просмотр любого пользователя администратором.
+         * @description Просмотр любого пользователя администратором. 404 USER_NOT_FOUND (уточнено в 1.7.1).
          */
         get: operations["getUser"];
         put?: never;
@@ -1015,7 +1015,7 @@ export interface paths {
         head?: never;
         /**
          * Сменить роль или заблокировать/разблокировать пользователя
-         * @description Смена роли client ↔ staff не поддерживается (у клиента нет пароля) — 409 ROLE_CHANGE_NOT_ALLOWED; допустимо engineer ↔ admin. is_active=false блокирует вход и отзывает refresh-токены. 409 LAST_ADMIN — нельзя понизить или заблокировать последнего активного администратора.
+         * @description Смена роли клиента на engineer/admin не поддерживается (у клиента нет пароля) — 409 ROLE_CHANGE_NOT_ALLOWED; role=client запросом не допускается (422); допустимо engineer ↔ admin. is_active=false блокирует вход и отзывает refresh-токены. 409 LAST_ADMIN — нельзя понизить или заблокировать последнего активного администратора. Уточнено в 1.7.1 (ADR 0021 п. 3, глоссарий «Блокировка пользователя»): блокировка отзывает также push-токены; действующий access-токен сразу получает 401 (активность читается при каждом запросе), WebSocket закрывается с 4401 не позже чем через 30 с; тикеты заблокированного инженера остаются назначенными — переназначает администратор (assignTicket). Разблокировка возвращает вход, но не прежние сессии. 404 USER_NOT_FOUND.
          */
         patch: operations["updateUser"];
         trace?: never;
@@ -1291,7 +1291,7 @@ export interface components {
             /** Format: date */
             replaced_at: string;
             mileage_at_replacement: number;
-            /** @description Пробрасывается в связанную запись MaintenanceRecord */
+            /** @description Пробрасывается в связанную запись MaintenanceRecord; до 255 символов (как у MaintenanceRecord), длиннее — 422. Уточнено в 1.7.1. */
             description?: string | null;
         };
         PresignRequest: {
@@ -1548,7 +1548,7 @@ export interface components {
             recipients: number;
             /** @description Доставок, принятых FCM */
             delivered: number;
-            /** @description Доставок с окончательной ошибкой */
+            /** @description Доставок с окончательной ошибкой, в том числе отменённых без отправки: токен отозван (TOKEN_REVOKED) или получатель больше не вправе получать уведомление (RECIPIENT_NOT_ELIGIBLE, ADR 0021 п. 5). Уточнено в 1.7.1. */
             failed: number;
             /** @description Доставок, открытых на устройстве */
             opened: number;
@@ -1706,7 +1706,7 @@ export interface components {
                 "application/json": components["schemas"]["Error"];
             };
         };
-        /** @description Не авторизован (нет/просрочен токен) */
+        /** @description Не авторизован (нет/просрочен токен или учётная запись заблокирована) */
         Unauthorized: {
             headers: {
                 [name: string]: unknown;
@@ -2089,6 +2089,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            422: components["responses"]["ValidationError"];
             default: components["responses"]["ServerError"];
         };
     };
@@ -2113,6 +2114,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            422: components["responses"]["ValidationError"];
             default: components["responses"]["ServerError"];
         };
     };
@@ -2374,6 +2376,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            422: components["responses"]["ValidationError"];
             default: components["responses"]["ServerError"];
         };
     };
@@ -2423,7 +2426,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Статус сброшен на 🟢 */
+            /** @description Статус агрегата после замены: обычно сброшен на 🟢; при замене задним числом — прежний статус, без активного регламента — unknown (уточнено в 1.7.1) */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -2604,6 +2607,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            422: components["responses"]["ValidationError"];
             default: components["responses"]["ServerError"];
         };
     };
@@ -2663,6 +2667,7 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+            422: components["responses"]["ValidationError"];
             default: components["responses"]["ServerError"];
         };
     };
@@ -2847,6 +2852,7 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["NotFound"];
+            422: components["responses"]["ValidationError"];
             default: components["responses"]["ServerError"];
         };
     };
@@ -2871,6 +2877,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            422: components["responses"]["ValidationError"];
             default: components["responses"]["ServerError"];
         };
     };
@@ -3048,6 +3055,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            422: components["responses"]["ValidationError"];
             default: components["responses"]["ServerError"];
         };
     };
@@ -3073,6 +3081,7 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+            422: components["responses"]["ValidationError"];
             default: components["responses"]["ServerError"];
         };
     };
@@ -3235,6 +3244,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            422: components["responses"]["ValidationError"];
             default: components["responses"]["ServerError"];
         };
     };
@@ -3516,6 +3526,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            422: components["responses"]["ValidationError"];
             default: components["responses"]["ServerError"];
         };
     };

@@ -29,11 +29,10 @@ from app.api.schemas.knowledge import (
 )
 from app.core.db import BIGINT_MAX
 from app.domain.knowledge import service
-from app.models.enums import KbArticleType, TicketCategory, UserRole
+from app.models.enums import STAFF_ROLES, KbArticleType, TicketCategory, UserRole
 
 router = APIRouter(tags=["KnowledgeBase"])
 
-STAFF = (UserRole.ENGINEER, UserRole.ADMIN)
 SEARCH_MAX = 200  # длина запроса поиска (ADR 0018 п. 9) — проверка сервера
 
 # Диапазон BIGINT проверяют access и сервис (вне диапазона — 404, как у несуществующего id).
@@ -139,7 +138,7 @@ def unpublish_knowledge_article(article_id: ArticleId, db: DbDep) -> Response:
 @router.get(
     "/knowledge-articles/{articleId}/revisions",
     operation_id="listKnowledgeArticleRevisions",
-    **rbac(*STAFF),
+    **rbac(*STAFF_ROLES),
 )
 def list_knowledge_article_revisions(
     article_id: ArticleId, user: CurrentUser, db: DbDep, page: PageDep
@@ -151,7 +150,7 @@ def list_knowledge_article_revisions(
 @router.get(
     "/knowledge-articles/{articleId}/revisions/{version}",
     operation_id="getKnowledgeArticleRevision",
-    **rbac(*STAFF),
+    **rbac(*STAFF_ROLES),
 )
 def get_knowledge_article_revision(
     article_id: ArticleId,

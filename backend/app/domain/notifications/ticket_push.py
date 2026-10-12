@@ -17,6 +17,7 @@ from redis import Redis
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.domain.notifications.dispatch import send_safely
 from app.domain.notifications.push import Outcome, PushMessage, PushSender
 from app.domain.notifications.service import active_tokens, eligible_client
 from app.domain.tickets.events import MessageCreated, TicketUpdated
@@ -49,7 +50,8 @@ class TicketPush:
         row = db.execute(
             select(Ticket, Vehicle.user_id)
             .join(Vehicle, Vehicle.id == Ticket.vehicle_id)
-            .where(Ticket.id == event.ticket_id)
+            # Тикет удалённого авто клиенту не виден (404) — и push по нему не идёт (ADR 0021 п. 5).
+            .where(Ticket.id == event.ticket_id, Vehicle.deleted_at.is_(None))
         ).one_or_none()
         if row is None:
             return 0
@@ -92,7 +94,8 @@ class TicketPush:
             return 0
         sent = 0
         for token in active_tokens(db, client_id):
-            result = self.sender.send(
+            result = send_safely(
+                self.sender,
                 PushMessage(
                     token.token, TITLE, body, {"type": "ticket", "ticket_id": str(ticket_id)}
                 ),

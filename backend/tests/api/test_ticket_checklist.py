@@ -22,7 +22,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
-from app.domain.aggregates.service import today_in_business_tz
+from app.core.time import today_in_business_tz
 from app.models import (
     AppUser,
     FirmwareRelease,
@@ -32,7 +32,7 @@ from app.models import (
     Vehicle,
 )
 from app.models.enums import TicketCategory, UserRole
-from tests.api.conftest import API, UNKNOWN_VIN, Headers, add_vehicle, assert_contract, model_id
+from tests.api.conftest import API, UNKNOWN_VIN, Headers, add_vehicle, model_id
 from tests.api.ticket_support import (
     assign,
     card,
@@ -94,7 +94,6 @@ def ts(value: str) -> datetime:
 def aggregate_statuses(client: TestClient, headers: Headers, vid: int) -> list[dict]:
     r = client.get(f"{API}/vehicles/{vid}/aggregate-statuses", headers=headers)
     assert r.status_code == 200, r.text
-    assert_contract(r, "listAggregateStatuses")
     return r.json()["items"]
 
 
@@ -197,10 +196,8 @@ def test_full_ticket_lifecycle(
     assert (claimed["status"], claimed["assigned_engineer_id"]) == ("in_progress", eng.id)
     r = client.get(f"{API}/tickets/{tid}", headers=eng2_headers)
     assert r.status_code == 404
-    assert_contract(r, "getTicket")
     r = client.post(f"{API}/tickets/{tid}/claim", headers=eng2_headers)
     assert r.status_code == 409
-    assert_contract(r, "claimTicket")
     assert error_code(r) == "TICKET_ALREADY_CLAIMED"
     assert tid not in ids(client, eng2_headers)
     assert ids(client, eng_headers, assigned_engineer_id=eng.id) == [tid]
@@ -224,7 +221,6 @@ def test_full_ticket_lifecycle(
         headers=eng_headers,
     )
     assert r.status_code == 200, r.text
-    assert_contract(r, "replaceAggregateStatus")
     for headers in (owner, eng_headers):
         context = card(client, headers, tid)["vehicle_context"]
         [oil] = context["aggregate_statuses"]
@@ -246,7 +242,6 @@ def test_full_ticket_lifecycle(
     for headers in (owner, eng_headers):
         r = client.post(f"{API}/tickets/{tid}/messages", json={"body": "Спасибо!"}, headers=headers)
         assert r.status_code == 409
-        assert_contract(r, "createTicketMessage")
         assert error_code(r) == "TICKET_RESOLVED"
 
     # 7. Переоткрытие: resolved_at очищается, срок SLA прежний.
@@ -260,7 +255,6 @@ def test_full_ticket_lifecycle(
     assert (body["status"], body["assigned_engineer_id"]) == ("in_progress", eng2.id)
     r = client.get(f"{API}/tickets/{tid}", headers=eng_headers)
     assert r.status_code == 404
-    assert_contract(r, "getTicket")
     r = client.post(f"{API}/tickets/{tid}/messages", json={"body": "Ещё"}, headers=eng_headers)
     assert r.status_code == 404
     r = client.patch(

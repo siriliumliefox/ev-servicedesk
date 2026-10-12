@@ -69,7 +69,9 @@ _CLOSE_FOR_STATUS = {
     404: CLOSE_FORBIDDEN,
     429: CLOSE_TOO_MANY,
 }
-LISTEN_TIMEOUT_SECONDS = 30.0  # потолок ожидания события между проверками срока токена
+# Потолок ожидания события между проверками срока токена и активности пользователя:
+# заблокированный администратором закрывается не позже чем через этот интервал (ADR 0021 п. 3).
+LISTEN_TIMEOUT_SECONDS = 30.0
 CONNECT_WINDOW_SECONDS = 60
 # BIGINT без знака: прочее (`abc`, `1.5`, `-1`, цифры других алфавитов) — тикета нет.
 _TICKET_ID = re.compile(r"[0-9]{1,19}")
@@ -128,6 +130,12 @@ async def _authenticate(websocket: WebSocket, settings: Settings) -> AccessClaim
         raise unauthorized() from exc
 
 
+def _check_user(scope: SessionScope, user_id: int) -> None:
+    """Пользователь по-прежнему доступен (иначе 401) — проверка в паузе между событиями."""
+    with scope() as db:
+        access.subscriber(db, user_id)
+
+
 def _check_access(scope: SessionScope, user_id: int, ticket_id: int) -> None:
     """Пользователь доступен (иначе 401) и тикет ему виден (иначе 404)."""
     with scope() as db:
@@ -178,6 +186,7 @@ async def _forward(
             raise unauthorized("Срок действия токена истёк")
         data = await listener.get(timeout=min(remaining, LISTEN_TIMEOUT_SECONDS))
         if data is None:
+            await run_in_threadpool(_check_user, scope, claims.user_id)
             continue
         event = parse(data)
         if event is None or event.ticket_id != ticket_id:

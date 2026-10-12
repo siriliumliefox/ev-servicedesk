@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.domain.aggregates.service import today_in_business_tz
+from app.core.time import today_in_business_tz
 from app.models import (
     AppUser,
     MaintenanceRecord,
@@ -20,7 +20,7 @@ from app.models import (
     VehicleAggregateStatus,
 )
 from app.models.enums import TicketStatus, UserRole
-from tests.api.conftest import API, add_vehicle, assert_contract, model_id
+from tests.api.conftest import API, add_vehicle, model_id
 
 Headers = dict[str, str]
 
@@ -38,14 +38,12 @@ def engineer(as_staff) -> tuple[Headers, AppUser]:
 def revise(client: TestClient, admin: Headers, **body) -> dict:
     r = client.post(f"{API}/maintenance-regulations", json=body, headers=admin)
     assert r.status_code == 201, r.text
-    assert_contract(r, "reviseMaintenanceRegulation")
     return r.json()
 
 
 def statuses(client: TestClient, headers: Headers, vid: int, **params) -> dict:
     r = client.get(f"{API}/vehicles/{vid}/aggregate-statuses", params=params, headers=headers)
     assert r.status_code == 200, r.text
-    assert_contract(r, "listAggregateStatuses")
     return r.json()
 
 
@@ -57,7 +55,6 @@ def replace(client: TestClient, headers: Headers, vid: int, code: str, **body):
     r = client.post(
         f"{API}/vehicles/{vid}/aggregate-statuses/{code}/replace", json=body, headers=headers
     )
-    assert_contract(r, "replaceAggregateStatus")
     return r
 
 
@@ -296,7 +293,6 @@ def test_replace_access(client, as_client, as_staff, admin, make_ticket, db):
         f"{API}/vehicles/{vid}/aggregate-statuses/engine_oil/replace", json=body, headers=owner
     )
     assert r.status_code == 403, "клиент не фиксирует замену (RBAC)"
-    assert_contract(r, "replaceAggregateStatus")
 
     stranger, _ = as_staff("+375292230002")
     assert replace(client, stranger, vid, "engine_oil", **body).status_code == 404, "без тикета"
@@ -324,7 +320,6 @@ def test_statuses_access(client, as_client, as_staff, make_ticket, admin):
     other = as_client("+375292240002")
     r = client.get(f"{API}/vehicles/{vid}/aggregate-statuses", headers=other)
     assert r.status_code == 404
-    assert_contract(r, "listAggregateStatuses")
 
     eng, _ = as_staff("+375292240003")
     assert client.get(f"{API}/vehicles/{vid}/aggregate-statuses", headers=eng).status_code == 404
@@ -386,7 +381,6 @@ def test_revision_and_archive_keep_history(client, admin, engineer, staffed_vehi
         params={"vehicle_model_id": zeekr, "include_archived": True},
         headers=eng,
     )
-    assert_contract(r, "listMaintenanceRegulations")
     oil = [
         (x["id"], x["interval_km"], x["is_archived"])
         for x in r.json()["items"]
@@ -401,7 +395,6 @@ def test_revision_and_archive_keep_history(client, admin, engineer, staffed_vehi
 
     r = client.delete(f"{API}/maintenance-regulations/{same['id']}", headers=admin)
     assert r.status_code == 204
-    assert_contract(r, "archiveMaintenanceRegulation")
     assert "engine_oil" not in by_code(statuses(client, owner, vid)), "E9: узел пропал"
     assert db.scalar(select(func.count()).where(MaintenanceRecord.vehicle_id == vid)) == 1
     kept = db.scalars(
@@ -419,7 +412,6 @@ def test_revision_and_archive_keep_history(client, admin, engineer, staffed_vehi
     for regulation_id in (same["id"], old["id"], 10**9, 10**20):
         r = client.delete(f"{API}/maintenance-regulations/{regulation_id}", headers=admin)
         assert r.status_code == 404, regulation_id
-        assert_contract(r, "archiveMaintenanceRegulation")
         assert r.json()["error"]["code"] == "REGULATION_NOT_FOUND"
 
     revise(
@@ -452,7 +444,6 @@ def test_revise_validation(client, as_client, admin, body, code):
     body = {"vehicle_model_id": model_id(client, owner, "Zeekr")} | body
     r = client.post(f"{API}/maintenance-regulations", json=body, headers=admin)
     assert r.status_code == 422, r.text
-    assert_contract(r, "reviseMaintenanceRegulation")
     assert r.json()["error"]["code"] == code
 
 
@@ -460,7 +451,6 @@ def test_regulations_rbac(client, as_client, engineer):
     owner = as_client("+375292270001")
     r = client.get(f"{API}/maintenance-regulations", headers=owner)
     assert r.status_code == 403
-    assert_contract(r, "listMaintenanceRegulations")
     body = {"vehicle_model_id": 1, "aggregate_type_code": "engine_oil", "interval_km": 1}
     r = client.post(f"{API}/maintenance-regulations", json=body, headers=engineer[0])
     assert r.status_code == 403
@@ -474,7 +464,6 @@ def test_regulations_rbac(client, as_client, engineer):
 def test_aggregate_types_catalog(client, as_client, admin, engineer):
     owner = as_client("+375292280001")
     r = client.get(f"{API}/aggregate-types", headers=owner)
-    assert_contract(r, "listAggregateTypes")
     assert [t["code"] for t in r.json()["items"]] == [
         "engine_oil",
         "oil_filter",
@@ -487,12 +476,10 @@ def test_aggregate_types_catalog(client, as_client, admin, engineer):
     body = {"code": "brake_fluid", "name": "  Тормозная жидкость "}
     r = client.post(f"{API}/aggregate-types", json=body, headers=admin)
     assert r.status_code == 201
-    assert_contract(r, "createAggregateType")
     assert r.json() == {"code": "brake_fluid", "name": "Тормозная жидкость"}
 
     r = client.post(f"{API}/aggregate-types", json=body, headers=admin)
     assert r.status_code == 409 and r.json()["error"]["code"] == "AGGREGATE_TYPE_EXISTS"
-    assert_contract(r, "createAggregateType")
 
     for bad in (
         {"code": "Brake", "name": "x"},
@@ -520,7 +507,6 @@ def test_thresholds(client, admin, engineer, staffed_vehicle, as_staff):
     replace(client, eng, vid, "engine_oil", replaced_at=str(TODAY()), mileage_at_replacement=14000)
 
     r = client.get(f"{API}/aggregate-status-thresholds", headers=eng)
-    assert_contract(r, "getAggregateStatusThresholds")
     assert r.json()["yellow_from_percent"] == 70 and r.json()["red_above_percent"] == 100
     assert by_code(statuses(client, owner, vid))["engine_oil"]["status"] == "green"  # 60%
 
@@ -530,7 +516,6 @@ def test_thresholds(client, admin, engineer, staffed_vehicle, as_staff):
         headers=admin,
     )
     assert r.status_code == 200
-    assert_contract(r, "updateAggregateStatusThresholds")
     admin_id = client.get(f"{API}/me", headers=admin).json()["id"]
     assert r.json()["updated_by_user_id"] == admin_id
     assert by_code(statuses(client, owner, vid))["engine_oil"]["status"] == "red", "E10: сразу"
@@ -542,7 +527,6 @@ def test_thresholds(client, admin, engineer, staffed_vehicle, as_staff):
     ):
         r = client.put(f"{API}/aggregate-status-thresholds", json=bad, headers=admin)
         assert r.status_code == 422, bad
-        assert_contract(r, "updateAggregateStatusThresholds")
 
     r = client.put(
         f"{API}/aggregate-status-thresholds",

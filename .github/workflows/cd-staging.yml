@@ -22,7 +22,9 @@ on:
       - "web-admin/**"
       - "web-shared/**"
       - "scripts/smoke_backend_image.sh"
-      - "docker-compose.yml"   # образ MinIO smoke-теста (x-minio-image)
+      - "scripts/integration_stack.sh"   # интеграционный стек (Глава 17, ADR 0021)
+      - "docker-compose.yml"   # образ MinIO smoke-теста (x-minio-image), интеграционный стек
+      - "docker-compose.integration.yml"
       - ".github/workflows/cd-staging.yml"
   workflow_dispatch:
     inputs:
@@ -80,6 +82,22 @@ jobs:
 
       - name: Smoke-тест образа (ENVIRONMENT=staging, ADR 0013, 0017)
         run: scripts/smoke_backend_image.sh backend:smoke
+
+      # Интеграционный стек того же образа до публикации тега staging (ADR 0021 п. 1):
+      # сквозной сценарий и аудит целостности. Python и poetry — для сценария на хосте.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Poetry и зависимости сценария
+        working-directory: backend
+        run: |
+          pipx install poetry==2.5.1
+          poetry config virtualenvs.in-project true
+          poetry install --no-interaction
+
+      - name: Интеграционный стек и сквозной сценарий (ADR 0021)
+        run: scripts/integration_stack.sh backend:smoke
 
       - uses: docker/build-push-action@v6
         with:

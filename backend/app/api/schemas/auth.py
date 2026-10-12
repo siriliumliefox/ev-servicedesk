@@ -6,10 +6,11 @@ telegram_id ≤ 50 = VARCHAR(50), без управляющих символов
 """
 
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.api.pagination import PaginationMeta
 from app.api.schemas.common import no_control_chars
 from app.models.enums import UserRole
 
@@ -64,6 +65,30 @@ class UserPublic(BaseModel):
     is_active: bool
     telegram_id: str | None = None
     created_at: datetime
+
+
+class UserList(BaseModel):
+    items: list[UserPublic]
+    meta: PaginationMeta
+
+
+class StaffUserCreateRequest(BaseModel):
+    phone: PhoneE164
+    role: Literal[UserRole.ENGINEER, UserRole.ADMIN]
+    password: Annotated[str, Field(min_length=12, max_length=128)]
+
+
+class UserUpdateRequest(BaseModel):
+    """minProperties: 1 контракта — пустое тело (или только null) отклоняется с 422."""
+
+    role: Literal[UserRole.ENGINEER, UserRole.ADMIN] | None = None
+    is_active: bool | None = None
+
+    @model_validator(mode="after")
+    def _not_empty(self) -> "UserUpdateRequest":
+        if self.role is None and self.is_active is None:
+            raise ValueError("Нужно указать role или is_active")
+        return self
 
 
 class AuthTokens(BaseModel):

@@ -10,7 +10,7 @@ from fastapi.routing import APIRoute
 
 from app.core.config import Settings
 from app.main import API_PREFIX, create_app
-from tests.api.conftest import _inline, contract, contract_operation
+from tests.support.contract import contract, contract_operation, inline_schema
 
 APP = create_app(Settings(_env_file=None, environment="test"))
 GENERATED = APP.openapi()
@@ -29,22 +29,16 @@ def implemented() -> list[tuple[str, str, dict]]:
 IDS = [op["operationId"] for _, _, op in implemented()]
 
 
-@pytest.mark.parametrize(
-    "tag", ["Auth", "Vehicle", "Aggregates", "Tickets", "Uploads", "KnowledgeBase", "Notifications"]
-)
-def test_service_fully_implemented(tag):
-    tagged = {
+def test_contract_fully_implemented():
+    """Backend полон по контракту (ADR 0021 п. 3): каждая операция docs/openapi.yaml реализована."""
+    contract_ids = {
         op["operationId"]
         for item in contract()["paths"].values()
         for op in item.values()
-        if isinstance(op, dict) and tag in op.get("tags", [])
+        if isinstance(op, dict) and "operationId" in op
     }
-    assert tagged, f"В контракте нет операций с тегом {tag}"
-    assert tagged <= set(IDS), f"Не реализованы: {sorted(tagged - set(IDS))}"
-
-
-def test_current_user_implemented():
-    assert "getCurrentUser" in IDS
+    assert contract_ids, "В контракте нет операций"
+    assert contract_ids <= set(IDS), f"Не реализованы: {sorted(contract_ids - set(IDS))}"
 
 
 @pytest.mark.parametrize(("path", "method", "op"), implemented(), ids=IDS)
@@ -67,7 +61,7 @@ def test_operation_matches_contract(path, method, op):
     if c_body is None:
         assert "requestBody" not in op
     else:
-        c_schema = _inline(c_body)["content"]["application/json"]["schema"]
+        c_schema = inline_schema(c_body)["content"]["application/json"]["schema"]
         ref = op["requestBody"]["content"]["application/json"]["schema"]["$ref"]
         g_schema = GENERATED["components"]["schemas"][ref.rsplit("/", 1)[1]]
         assert set(g_schema.get("required", [])) == set(c_schema.get("required", []))
@@ -94,3 +88,8 @@ def test_deny_by_default():
 def test_bearer_scheme_declared():
     schemes = GENERATED["components"]["securitySchemes"]
     assert any(s.get("scheme") == "bearer" for s in schemes.values())
+
+
+def test_app_version_matches_contract():
+    """Swagger backend (/docs) показывает ту же версию, что docs/openapi.yaml (ревью главы 17)."""
+    assert GENERATED["info"]["version"] == contract()["info"]["version"]
