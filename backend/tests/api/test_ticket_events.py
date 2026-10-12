@@ -138,6 +138,19 @@ def test_inactive_user_closes_4401(client, ticket_id, engineer, db):
         assert close_code(ws) == 4401
 
 
+def test_blocked_while_idle_closes_4401(client, ticket_id, engineer, as_staff, monkeypatch):
+    """Блокировка администратором закрывает подписку и без событий тикета (ADR 0021 п. 3)."""
+    monkeypatch.setattr(ticket_events, "LISTEN_TIMEOUT_SECONDS", 0.2)
+    admin_headers, _ = as_staff("+375295500031", UserRole.ADMIN)
+    with connect(client, ticket_id) as ws:
+        auth(ws, engineer[1])
+        r = client.patch(
+            f"{API}/users/{engineer[2].id}", json={"is_active": False}, headers=admin_headers
+        )
+        assert r.status_code == 200
+        assert close_code(ws) == 4401
+
+
 def test_token_expiry_closes_4401(client, ticket_id, settings, engineer, real_redis):
     user = engineer[2]
     issued = datetime.now(UTC) - timedelta(seconds=settings.access_token_ttl_seconds - 2)

@@ -39,6 +39,8 @@ BODIES = {
     "updateKnowledgeArticle": {"title": "x"},
     "createDecisionTreeNode": {"question_text": "x", "is_root": True, "is_escalation": False},
     "updateDecisionTreeNode": {"question_text": "x", "is_root": True, "is_escalation": False},
+    "createStaffUser": {"phone": "+375290000001", "role": "engineer", "password": "x" * 12},
+    "updateUser": {"is_active": False},
 }
 
 
@@ -123,6 +125,11 @@ def test_protected_routes_exist(app):
         "getTicketResolutionStats",
         "listProblemModels",
         "getMaintenanceConversionStats",
+        # Users (Глава 17)
+        "listUsers",
+        "createStaffUser",
+        "getUser",
+        "updateUser",
     }
 
 

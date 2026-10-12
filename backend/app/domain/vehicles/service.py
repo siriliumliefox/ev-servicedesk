@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.core import rate_limit
 from app.core.config import Settings
-from app.core.db import constraint_name
+from app.core.db import constraint_name, escape_like
 from app.core.errors import ApiError
 from app.core.time import BUSINESS_TZ
 from app.domain.vehicles import access
@@ -40,14 +40,10 @@ def _reload_vehicle(db: Session, vehicle_id: int) -> Vehicle:
 # ---------- Модели ----------
 
 
-def _escape_like(value: str) -> str:
-    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-
-
 def search_models_stmt(search: str | None) -> Select:
     stmt = select(VehicleModel).order_by(VehicleModel.brand, VehicleModel.model, VehicleModel.trim)
     if search and search.strip():
-        pattern = f"%{_escape_like(search.strip())}%"
+        pattern = f"%{escape_like(search.strip())}%"
         # Подстрока марки или модели — тоже подстрока «марка модель».
         brand_model = VehicleModel.brand + " " + VehicleModel.model
         stmt = stmt.where(brand_model.ilike(pattern, escape="\\"))

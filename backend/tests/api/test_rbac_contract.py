@@ -29,22 +29,16 @@ def implemented() -> list[tuple[str, str, dict]]:
 IDS = [op["operationId"] for _, _, op in implemented()]
 
 
-@pytest.mark.parametrize(
-    "tag", ["Auth", "Vehicle", "Aggregates", "Tickets", "Uploads", "KnowledgeBase", "Notifications"]
-)
-def test_service_fully_implemented(tag):
-    tagged = {
+def test_contract_fully_implemented():
+    """Backend полон по контракту (ADR 0021 п. 3): каждая операция docs/openapi.yaml реализована."""
+    contract_ids = {
         op["operationId"]
         for item in contract()["paths"].values()
         for op in item.values()
-        if isinstance(op, dict) and tag in op.get("tags", [])
+        if isinstance(op, dict) and "operationId" in op
     }
-    assert tagged, f"В контракте нет операций с тегом {tag}"
-    assert tagged <= set(IDS), f"Не реализованы: {sorted(tagged - set(IDS))}"
-
-
-def test_current_user_implemented():
-    assert "getCurrentUser" in IDS
+    assert contract_ids, "В контракте нет операций"
+    assert contract_ids <= set(IDS), f"Не реализованы: {sorted(contract_ids - set(IDS))}"
 
 
 @pytest.mark.parametrize(("path", "method", "op"), implemented(), ids=IDS)

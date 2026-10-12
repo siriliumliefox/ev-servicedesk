@@ -118,7 +118,8 @@ def hides_staff_contacts(viewer: AppUser, author: AppUser) -> bool:
 def subscriber(db: Session, user_id: int) -> AppUser:
     """Пользователь токена WebSocket — как в `get_current_user`: роль и активность из БД.
 
-    Проверяется при подключении и заново на каждом событии: деактивированный — 401.
+    Проверяется при подключении, на каждом событии и в паузах между событиями: заблокированный
+    или анонимизированный — 401.
     """
     user = db.get(AppUser, user_id, populate_existing=True)
     if user is None or not user.is_available:

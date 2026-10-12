@@ -141,12 +141,42 @@ def app(
     return application
 
 
+class ContractClient(TestClient):
+    """TestClient, который сверяет КАЖДЫЙ ответ операции контракта с docs/openapi.yaml.
+
+    Вместо Pact (ADR 0021 п. 2): статус объявлен у операции, тело валидно по схеме. Запросы
+    вне контракта (/health, /docs, отладочные маршруты, несуществующие пути) не сверяются.
+    Намеренно неконтрактный ответ — в блоке `with client.unchecked(): ...`.
+    """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._checking = True
+
+    @contextmanager
+    def unchecked(self) -> Iterator[None]:
+        self._checking, previous = False, self._checking
+        try:
+            yield
+        finally:
+            self._checking = previous
+
+    def request(self, method: str, url: Any, *args: Any, **kwargs: Any) -> httpx.Response:
+        response = super().request(method, url, *args, **kwargs)
+        if self._checking:
+            operation_id = operation_for(method, response.request.url.path)
+            if operation_id is not None:
+                assert_contract(response, operation_id)
+        return response
+
+
 @pytest.fixture
 def client(app: FastAPI) -> Iterator[TestClient]:
     """Запущенное приложение (lifespan): запросы и WebSocket — в одном цикле событий, как в
-    процессе uvicorn; общая подписка pub/sub — `app.state.pubsub_hub`.
+    процессе uvicorn; общая подписка pub/sub — `app.state.pubsub_hub`. Ответы сверяются с
+    контрактом (`ContractClient`).
     """
-    with TestClient(app) as running:
+    with ContractClient(app) as running:
         yield running
 
 
@@ -230,6 +260,26 @@ def contract_operation(operation_id: str) -> tuple[str, str, dict]:
             if isinstance(op, dict) and op.get("operationId") == operation_id:
                 return path, method, op
     raise KeyError(operation_id)
+
+
+@cache
+def _operation_patterns() -> list[tuple[str, re.Pattern[str], str]]:
+    """(метод, шаблон пути, operationId); пути без параметров — раньше шаблонных."""
+    patterns = []
+    for path, item in contract()["paths"].items():
+        regex = re.compile(API + re.sub(r"\{[^}]+\}", "[^/]+", path) + "/?")
+        for method, op in item.items():
+            if isinstance(op, dict) and "operationId" in op:
+                patterns.append((path.count("{"), method.upper(), regex, op["operationId"]))
+    return [(m, rx, op) for _, m, rx, op in sorted(patterns, key=lambda p: p[0])]
+
+
+def operation_for(method: str, path: str) -> str | None:
+    """operationId контракта для запроса; None — путь вне контракта."""
+    for op_method, regex, operation_id in _operation_patterns():
+        if op_method == method.upper() and regex.fullmatch(path):
+            return operation_id
+    return None
 
 
 def assert_contract(response: httpx.Response, operation_id: str) -> None:
