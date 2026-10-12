@@ -22,6 +22,7 @@ on:
       - "web-admin/**"
       - "web-shared/**"
       - "scripts/smoke_backend_image.sh"
+      - "docker-compose.yml"   # образ MinIO smoke-теста (x-minio-image)
       - ".github/workflows/cd-staging.yml"
   workflow_dispatch:
     inputs:

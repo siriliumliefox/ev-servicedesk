@@ -21,8 +21,14 @@ BASE="http://localhost:$PORT"
 REDIS_URL="${SMOKE_REDIS_URL:-redis://host.docker.internal:6379/14}"
 HOST_GW=(--add-host=host.docker.internal:host-gateway)
 PHONE="+375290000001"
-# Тот же закреплённый образ, что в docker-compose.yml и backend-ci.yml (ADR 0017).
-MINIO_IMAGE="${SMOKE_MINIO_IMAGE:-pgsty/minio:RELEASE.2026-08-04T00-00-00Z@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372}"
+# Образ MinIO — закреплённый в docker-compose.yml (x-minio-image, ADR 0017); SMOKE_MINIO_IMAGE
+# подменяет его. Конфигурация compose читается целиком, наружу выводится только образ.
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+MINIO_IMAGE="${SMOKE_MINIO_IMAGE:-$(docker compose -f "$ROOT/docker-compose.yml" config --format json minio \
+  | python3 -c 'import json, sys; print(json.load(sys.stdin)["services"]["minio"]["image"])')}"
+if [ -z "$MINIO_IMAGE" ]; then
+  echo "FAIL  образ MinIO не найден в docker-compose.yml"; exit 1
+fi
 S3_BUCKET="ev-servicedesk-smoke"
 FORGED='eyJhbGciOiJub25lIn0.eyJzdWIiOiIxIn0.'  # alg=none, без подписи
 

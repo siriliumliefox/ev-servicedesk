@@ -22,7 +22,6 @@ from fastapi.testclient import TestClient
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
-from app.core.storage import S3ObjectStorage, get_storage
 from app.domain.aggregates.service import today_in_business_tz
 from app.models import (
     AppUser,
@@ -33,11 +32,21 @@ from app.models import (
     Vehicle,
 )
 from app.models.enums import TicketCategory, UserRole
-from tests.api.conftest import API, UNKNOWN_VIN, add_vehicle, assert_contract, model_id
-from tests.api.test_ticket_attachments import presign
-from tests.api.test_tickets import create, error_code
-
-Headers = dict[str, str]
+from tests.api.conftest import API, UNKNOWN_VIN, Headers, add_vehicle, assert_contract, model_id
+from tests.api.ticket_support import (
+    assign,
+    card,
+    claim,
+    create,
+    error_code,
+    history,
+    ids,
+    items,
+    presign,
+    put_upload,
+    say,
+    set_status,
+)
 
 OWNER_PHONE = "+375296600001"
 STRANGER_PHONE = "+375296600002"
@@ -69,12 +78,6 @@ def vehicle(client: TestClient, owner: Headers) -> dict:
 
 
 @pytest.fixture
-def minio(s3_storage: S3ObjectStorage, app) -> S3ObjectStorage:
-    app.dependency_overrides[get_storage] = lambda: s3_storage
-    return s3_storage
-
-
-@pytest.fixture
 def policy(db: Session) -> dict[TicketCategory, timedelta]:
     """Нормативы SLA из таблицы: категория → срок решения."""
     rows = db.execute(select(TicketSlaPolicy.category, TicketSlaPolicy.resolution_minutes))
@@ -86,61 +89,6 @@ def policy(db: Session) -> dict[TicketCategory, timedelta]:
 
 def ts(value: str) -> datetime:
     return datetime.fromisoformat(value)
-
-
-def items(client: TestClient, headers: Headers, **params: Any) -> list[dict]:
-    r = client.get(f"{API}/tickets", params=params, headers=headers)
-    assert r.status_code == 200, r.text
-    assert_contract(r, "listTickets")
-    return r.json()["items"]
-
-
-def ids(client: TestClient, headers: Headers, **params: Any) -> list[int]:
-    return [t["id"] for t in items(client, headers, **params)]
-
-
-def card(client: TestClient, headers: Headers, tid: int) -> dict:
-    r = client.get(f"{API}/tickets/{tid}", headers=headers)
-    assert r.status_code == 200, r.text
-    assert_contract(r, "getTicket")
-    return r.json()
-
-
-def claim(client: TestClient, headers: Headers, tid: int) -> dict:
-    r = client.post(f"{API}/tickets/{tid}/claim", headers=headers)
-    assert r.status_code == 200, r.text
-    assert_contract(r, "claimTicket")
-    return r.json()
-
-
-def set_status(client: TestClient, headers: Headers, tid: int, status: str) -> dict:
-    r = client.patch(f"{API}/tickets/{tid}/status", json={"status": status}, headers=headers)
-    assert r.status_code == 200, r.text
-    assert_contract(r, "updateTicketStatus")
-    return r.json()
-
-
-def assign(client: TestClient, admin: Headers, tid: int, engineer_id: int | None) -> dict:
-    r = client.patch(
-        f"{API}/tickets/{tid}/assign", json={"assigned_engineer_id": engineer_id}, headers=admin
-    )
-    assert r.status_code == 200, r.text
-    assert_contract(r, "assignTicket")
-    return r.json()
-
-
-def say(client: TestClient, headers: Headers, tid: int, body: str) -> dict:
-    r = client.post(f"{API}/tickets/{tid}/messages", json={"body": body}, headers=headers)
-    assert r.status_code == 201, r.text
-    assert_contract(r, "createTicketMessage")
-    return r.json()
-
-
-def history(client: TestClient, headers: Headers, tid: int, **params: Any) -> list[dict]:
-    r = client.get(f"{API}/tickets/{tid}/messages", params=params, headers=headers)
-    assert r.status_code == 200, r.text
-    assert_contract(r, "listTicketMessages")
-    return r.json()["items"]
 
 
 def aggregate_statuses(client: TestClient, headers: Headers, vid: int) -> list[dict]:
@@ -207,8 +155,7 @@ def test_full_ticket_lifecycle(
 
     # 1. Клиент: фото по presigned PUT в MinIO → тикет с вложением и контекстом авто.
     upload = presign(client, owner, name="IMG_0420.JPG")
-    r = httpx.put(upload["upload_url"], content=PHOTO, headers={"Content-Type": "image/jpeg"})
-    assert r.status_code == 200, r.text
+    put_upload(minio, upload, PHOTO, "image/jpeg")
     ticket = create(
         client,
         owner,

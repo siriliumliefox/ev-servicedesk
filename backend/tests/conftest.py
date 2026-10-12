@@ -103,13 +103,13 @@ def _isolate_auth_env(monkeypatch: pytest.MonkeyPatch) -> None:
             monkeypatch.delenv(name, raising=False)
 
 
-def _test_redis_url() -> str:
+def redis_test_url() -> str:
     return os.environ.get("TEST_REDIS_URL", "redis://localhost:6379/15")
 
 
 @pytest.fixture(scope="session")
 def redis_session() -> Iterator[Redis]:
-    url = _test_redis_url()
+    url = redis_test_url()
     if url.rstrip("/").endswith("/0"):
         pytest.fail("TEST_REDIS_URL не должен указывать на БД 0 (dev): тесты очищают БД")
     client = Redis.from_url(url, decode_responses=True)
@@ -148,7 +148,7 @@ def _test_s3_config() -> dict[str, str]:
     }
 
 
-def _s3_admin(config: dict[str, str]) -> BaseClient:
+def s3_admin(config: dict[str, str]) -> BaseClient:
     """Клиент для подготовки бакета (создание, очистка) — вне интерфейса ObjectStorage."""
     return boto3.client(
         "s3",
@@ -162,11 +162,17 @@ def _s3_admin(config: dict[str, str]) -> BaseClient:
     )
 
 
-def _empty_bucket(client: BaseClient, bucket: str) -> None:
+def s3_keys(client: BaseClient, bucket: str) -> Iterator[str]:
+    """Все ключи бакета (постранично)."""
     for page in client.get_paginator("list_objects_v2").paginate(Bucket=bucket):
-        keys = [{"Key": obj["Key"]} for obj in page.get("Contents", [])]
-        if keys:
-            client.delete_objects(Bucket=bucket, Delete={"Objects": keys, "Quiet": True})
+        yield from (obj["Key"] for obj in page.get("Contents", []))
+
+
+def _empty_bucket(client: BaseClient, bucket: str) -> None:
+    keys = [{"Key": key} for key in s3_keys(client, bucket)]
+    for start in range(0, len(keys), 1000):  # DeleteObjects — не больше 1000 ключей
+        chunk = keys[start : start + 1000]
+        client.delete_objects(Bucket=bucket, Delete={"Objects": chunk, "Quiet": True})
 
 
 @pytest.fixture(scope="session")
@@ -181,7 +187,7 @@ def s3_config() -> dict[str, str]:
 @pytest.fixture(scope="session")
 def s3_session(s3_config: dict[str, str]) -> Iterator[S3ObjectStorage]:
     """Тестовый бакет (создаётся при отсутствии); без S3 — skip, при REQUIRE_S3=1 — ошибка."""
-    client = _s3_admin(s3_config)
+    client = s3_admin(s3_config)
     try:
         try:
             client.head_bucket(Bucket=s3_config["bucket"])
@@ -201,7 +207,7 @@ def s3_session(s3_config: dict[str, str]) -> Iterator[S3ObjectStorage]:
 @pytest.fixture
 def s3_storage(s3_session: S3ObjectStorage, s3_config: dict[str, str]) -> Iterator[S3ObjectStorage]:
     """Хранилище на реальном S3 API с пустым тестовым бакетом до и после теста."""
-    client = _s3_admin(s3_config)
+    client = s3_admin(s3_config)
     _empty_bucket(client, s3_config["bucket"])
     yield s3_session
     _empty_bucket(client, s3_config["bucket"])

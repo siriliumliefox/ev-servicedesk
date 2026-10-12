@@ -2,7 +2,7 @@
 
 Токены — настоящие (Глава 10): клиент входит по SMS-коду, персонал — по паролю. Вложения —
 хранилище в памяти (`FakeObjectStorage`); полный цикл через MinIO —
-tests/api/test_ticket_attachments.py. Каждый ответ сверяется с docs/openapi.yaml.
+tests/api/test_ticket_checklist.py. Каждый ответ сверяется с docs/openapi.yaml.
 """
 
 from contextlib import AbstractContextManager
@@ -25,18 +25,17 @@ from app.models import (
     Ticket,
     Vehicle,
 )
-from app.models.enums import KbArticleType, TicketCategory, TicketStatus, UserRole
+from app.models.enums import KbArticleType, TicketStatus, UserRole
 from tests.api.conftest import (
     API,
     UNKNOWN_VIN,
+    Headers,
     add_vehicle,
     api_settings,
     assert_contract,
     model_id,
 )
-from tests.api.test_rbac_contract import IDS, contract
-
-Headers = dict[str, str]
+from tests.api.ticket_support import create, error_code
 
 CLIENT_PHONE = "+375293300001"
 ENGINEER_PHONE = "+375293300002"
@@ -61,28 +60,6 @@ def admin(as_staff) -> tuple[Headers, AppUser]:
 @pytest.fixture
 def vehicle(client: TestClient, owner: Headers) -> dict:
     return add_vehicle(client, owner)
-
-
-def create(client: TestClient, headers: Headers, vehicle_id: int, **extra) -> dict:
-    body = {"vehicle_id": vehicle_id, "category": "navigation", "description": "Нет пробок"}
-    r = client.post(f"{API}/tickets", json=body | extra, headers=headers)
-    assert r.status_code == 201, r.text
-    assert_contract(r, "createTicket")
-    return r.json()
-
-
-def error_code(r) -> str:
-    return r.json()["error"]["code"]
-
-
-def test_tickets_and_uploads_fully_implemented():
-    tagged = {
-        op["operationId"]
-        for item in contract()["paths"].values()
-        for op in item.values()
-        if isinstance(op, dict) and {"Tickets", "Uploads"} & set(op.get("tags", []))
-    }
-    assert tagged and tagged <= set(IDS), f"Не реализованы: {sorted(tagged - set(IDS))}"
 
 
 # ---------- Основной сценарий ----------
@@ -610,28 +587,6 @@ def test_client_of_other_model_sees_model_info(client, as_client):
     )
     ticket = create(client, headers, li["id"])
     assert ticket["vehicle_model"]["brand"] == "Li Auto"
-
-
-def test_without_token_is_401(client):
-    for method, path in (
-        ("get", "/tickets"),
-        ("post", "/tickets"),
-        ("get", "/tickets/1"),
-        ("post", "/tickets/1/claim"),
-        ("post", "/uploads/presign"),
-    ):
-        r = getattr(client, method)(f"{API}{path}")
-        assert r.status_code == 401, path
-
-
-def test_ticket_category_policy_matches_seed(client, owner, vehicle):
-    expected = {"app_crash": 4, "navigation": 8, "sim": 8, "audio": 24, "maintenance": 48}
-    for category in TicketCategory:
-        ticket = create(client, owner, vehicle["id"], category=category.value)
-        delta = datetime.fromisoformat(ticket["sla_due_at"]) - datetime.fromisoformat(
-            ticket["created_at"]
-        )
-        assert delta == timedelta(hours=expected[category.value])
 
 
 def test_rejected_attempts_do_not_consume_limit(client, app, owner, vehicle):

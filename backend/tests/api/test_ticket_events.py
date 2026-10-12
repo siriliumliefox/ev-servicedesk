@@ -12,16 +12,13 @@ import time
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-import anyio
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from openapi_schema_validator import OAS30Validator
 from redis import Redis
 from redis.asyncio.client import PubSub
 from redis.exceptions import ConnectionError as RedisConnectionError
 from sqlalchemy.exc import OperationalError
-from starlette.testclient import WebSocketTestSession
 from starlette.websockets import WebSocketDisconnect
 
 from app.api.deps import get_ticket_events
@@ -32,14 +29,23 @@ from app.core.pubsub import PubSubHub, get_pubsub_hub
 from app.core.redis import get_redis
 from app.core.security import create_access_token
 from app.domain.tickets import events
-from app.domain.tickets.events import TicketEvents
 from app.main import create_app
 from app.models import AppUser
 from app.models.enums import UserRole
-from tests.api.conftest import API, RUN_CHANNEL_PREFIX, _inline, add_vehicle, api_settings
-
-Headers = dict[str, str]
-RECEIVE_TIMEOUT = 5.0
+from tests.api.conftest import API, RUN_CHANNEL_PREFIX, Headers, add_vehicle, api_settings
+from tests.api.ticket_support import create
+from tests.api.ticket_ws import (
+    READY,
+    RECEIVE_TIMEOUT,
+    assert_frame,
+    assert_quiet,
+    auth,
+    close_code,
+    connect,
+    receive,
+    receive_event,
+    run_events,
+)
 
 CLIENT_PHONE = "+375295500001"
 ENGINEER_PHONE = "+375295500002"
@@ -65,87 +71,12 @@ def engineer(as_staff) -> tuple[Headers, str, AppUser]:
 @pytest.fixture
 def ticket_id(client: TestClient, owner) -> int:
     vehicle = add_vehicle(client, owner[0])
-    r = client.post(
-        f"{API}/tickets",
-        json={"vehicle_id": vehicle["id"], "category": "sim", "description": "Нет сети"},
-        headers=owner[0],
-    )
-    assert r.status_code == 201, r.text
-    return r.json()["id"]
-
-
-def receive(ws: WebSocketTestSession) -> dict[str, Any]:
-    """Кадр сервера с тайм-аутом (TestClient ждёт бесконечно); закрытие — WebSocketDisconnect."""
-
-    async def _receive() -> dict[str, Any]:
-        with anyio.fail_after(RECEIVE_TIMEOUT):
-            return await ws._send_rx.receive()
-
-    message = ws.portal.call(_receive)
-    if message["type"] == "websocket.close":
-        raise WebSocketDisconnect(message.get("code", 1000))
-    return message
-
-
-def receive_event(ws: WebSocketTestSession) -> dict[str, Any]:
-    """Следующий кадр события; служебный `ready` пропускается (его проверяет wait_ready)."""
-    while (frame := json.loads(receive(ws)["text"])) == READY:
-        pass
-    return frame
-
-
-READY = {"type": "ready"}
-
-
-def wait_ready(ws: WebSocketTestSession) -> None:
-    """Кадр `ready`: подписка подтверждена Redis и доступ проверен — события не теряются."""
-    assert json.loads(receive(ws)["text"]) == READY
-
-
-def auth(ws: WebSocketTestSession, token: str) -> None:
-    ws.send_json({"type": "auth", "access_token": token})
-    wait_ready(ws)
-
-
-def assert_quiet(ws: WebSocketTestSession, seconds: float = 0.3) -> None:
-    """За `seconds` подключению ничего не пришло (ни кадра, ни закрытия)."""
-
-    async def _poll() -> dict[str, Any] | None:
-        with anyio.move_on_after(seconds):
-            return await ws._send_rx.receive()
-        return None
-
-    assert ws.portal.call(_poll) is None, "лишний кадр"
-
-
-def close_code(ws: WebSocketTestSession) -> int:
-    with pytest.raises(WebSocketDisconnect) as info:
-        receive(ws)
-    return info.value.code
-
-
-def run_events(redis: Redis) -> TicketEvents:
-    """События тикетов в каналах прогона — как у приложения с `api_settings`."""
-    return TicketEvents(redis, RUN_CHANNEL_PREFIX)
+    return create(client, owner[0], vehicle["id"], category="sim", description="Нет сети")["id"]
 
 
 def numsub(redis: Redis, ticket_id: int) -> int:
     channel = run_events(redis).channel(ticket_id)
     return dict(redis.pubsub_numsub(channel)).get(channel, 0)
-
-
-def schema(name: str) -> dict:
-    return _inline({"$ref": f"#/components/schemas/{name}"})
-
-
-def assert_frame(frame: dict, event_type: str, schema_name: str) -> dict:
-    assert set(frame) == {"type", "data"} and frame["type"] == event_type
-    OAS30Validator(schema(schema_name)).validate(frame["data"])
-    return frame["data"]
-
-
-def connect(client: TestClient, ticket_id: int | str):
-    return client.websocket_connect(f"{API}/tickets/{ticket_id}/ws")
 
 
 def hub_of(app: FastAPI) -> PubSubHub:
@@ -389,13 +320,7 @@ def wait_until(predicate, what: str) -> None:
 def test_one_pubsub_connection_per_process(client, ticket_id, owner, engineer, real_redis):
     """Подключения процесса делят одно соединение: SUBSCRIBE на первом, UNSUBSCRIBE на последнем."""
     vehicle_id = client.get(f"{API}/tickets/{ticket_id}", headers=owner[0]).json()["vehicle_id"]
-    r = client.post(
-        f"{API}/tickets",
-        json={"vehicle_id": vehicle_id, "category": "audio", "description": "Второй"},
-        headers=owner[0],
-    )
-    assert r.status_code == 201, r.text
-    other_id = r.json()["id"]
+    other_id = create(client, owner[0], vehicle_id, category="audio", description="Второй")["id"]
 
     with connect(client, ticket_id) as first, connect(client, ticket_id) as second:
         auth(first, owner[1])

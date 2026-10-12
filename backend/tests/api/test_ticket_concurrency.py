@@ -26,33 +26,22 @@ from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
 from typing import Any, NamedTuple
 
-import anyio
 import httpx
 import pytest
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from redis import Redis
 from sqlalchemy import Engine, delete, or_, select, text
 from sqlalchemy.orm import Session, sessionmaker
-from starlette.testclient import WebSocketTestSession
 
-from app.api.deps import get_sms_provider
-from app.core.config import Settings, get_settings
-from app.core.db import get_db, get_session_scope
-from app.core.redis import get_redis
-from app.core.storage import ObjectStorage, S3ObjectStorage, get_storage
-from app.domain.auth.sms import FakeSmsProvider
+from app.core.storage import S3ObjectStorage
 from app.domain.tickets import access, attachments, service
 from app.domain.vehicles import access as vehicle_access
-from app.main import create_app
 from app.models import AppUser, PdConsent, Ticket, TicketAttachment, TicketMessage, Vehicle
 from app.models.enums import TicketCategory, TicketStatus, UserRole
-from tests.api.conftest import API, add_vehicle, assert_contract, bearer
+from tests.api.conftest import API, DbOverrides, Headers, add_vehicle, assert_contract, bearer
 from tests.api.test_concurrency import storm
-from tests.api.test_ticket_events import assert_frame, auth, connect, receive_event
-from tests.conftest import _s3_admin
-
-Headers = dict[str, str]
+from tests.api.ticket_support import JPEG, create_ticket, error_code, presign, put_upload
+from tests.api.ticket_ws import assert_frame, assert_quiet, auth, connect, receive_event
+from tests.conftest import s3_admin, s3_keys
 
 PREFIX = "+37529713"  # телефоны пользователей модуля: по ним `purge` находит данные теста
 VIN = "L6TZ0010000013001"
@@ -61,16 +50,11 @@ CLAIM_ROUNDS = 5
 MESSAGES = 20  # чек-лист главы 13: «20 одновременных сообщений без потерь»
 ROUNDS = 20
 RESOLVE_STEP_SECONDS = 0.0002  # сдвиг старта решения по раундам: 0…3,8 мс
-JPEG = b"\xff\xd8\xff\xe0" + b"0" * 64
 ATTACHMENT_REJECTED = {"ATTACHMENT_ALREADY_USED", "ATTACHMENT_NOT_FOUND"}  # ADR 0017, «Уточнения»
 
 
 def phone(n: int) -> str:
     return f"{PREFIX}{n:04d}"
-
-
-def error_code(response: httpx.Response) -> str:
-    return response.json()["error"]["code"]
 
 
 # ---------- Приложение с сессией на запрос и очистка ----------
@@ -84,29 +68,15 @@ def db(migrated_engine: Engine) -> Iterator[Session]:
 
 
 @pytest.fixture
-def app(
-    settings: Settings,
-    migrated_engine: Engine,
-    real_redis: Redis,
-    sms: FakeSmsProvider,
-    storage: ObjectStorage,
-) -> FastAPI:
+def db_overrides(migrated_engine: Engine) -> DbOverrides:
     """Как `app.core.db`: сессия на запрос и на каждое обращение WebSocket к БД."""
-    application = create_app(settings)
     sessions = sessionmaker(bind=migrated_engine, expire_on_commit=False)
 
     def session_per_request() -> Iterator[Session]:
         with sessions() as session:
             yield session
 
-    overrides = application.dependency_overrides
-    overrides[get_settings] = lambda: settings
-    overrides[get_db] = session_per_request
-    overrides[get_session_scope] = lambda: sessions
-    overrides[get_redis] = lambda: real_redis
-    overrides[get_sms_provider] = lambda: sms
-    overrides[get_storage] = lambda: storage
-    return application
+    return session_per_request, sessions
 
 
 def purge(engine: Engine) -> None:
@@ -151,13 +121,6 @@ def owner(client: TestClient, login_client: Callable[[str], dict]) -> Owner:
     access_token = login_client(phone(1))["access_token"]
     headers = bearer(access_token)
     return Owner(headers, access_token, add_vehicle(client, headers, vin=VIN)["id"])
-
-
-@pytest.fixture
-def minio(app: FastAPI, s3_storage: S3ObjectStorage) -> S3ObjectStorage:
-    """Вложения — на настоящем S3 API (MinIO): HEAD, копирование и удаление в гонке."""
-    app.dependency_overrides[get_storage] = lambda: s3_storage
-    return s3_storage
 
 
 def open_ticket(db: Session, vehicle_id: int, engineer: AppUser | None = None) -> int:
@@ -292,26 +255,18 @@ def test_parallel_first_staff_replies_set_first_response_once(
 # ---------- Одна загрузка — одно вложение (ADR 0017 п. 10, «Уточнения») ----------
 
 
-def upload(client: TestClient, headers: Headers) -> str:
+def upload(client: TestClient, storage: S3ObjectStorage, headers: Headers) -> str:
     """Фото, загруженное клиентом в MinIO по presigned PUT; возвращает file_url."""
-    r = client.post(
-        f"{API}/uploads/presign",
-        json={"file_name": "panel.jpg", "file_type": "photo"},
-        headers=headers,
-    )
-    assert r.status_code == 200, r.text
-    target = r.json()
-    put = httpx.put(target["upload_url"], content=JPEG, headers={"Content-Type": "image/jpeg"})
-    assert put.status_code == 200, put.text
+    target = presign(client, headers, "panel.jpg")
+    put_upload(storage, target, JPEG, "image/jpeg")
     return target["file_url"]
 
 
 def bucket_keys(s3_config: dict[str, str]) -> list[str]:
     """Все ключи тестового бакета (`s3_storage` очищает его перед тестом)."""
-    client = _s3_admin(s3_config)
+    client = s3_admin(s3_config)
     try:
-        pages = client.get_paginator("list_objects_v2").paginate(Bucket=s3_config["bucket"])
-        return sorted(obj["Key"] for page in pages for obj in page.get("Contents", []))
+        return sorted(s3_keys(client, s3_config["bucket"]))
     finally:
         client.close()
 
@@ -337,7 +292,7 @@ def test_same_upload_binds_once_under_parallel_requests(
 ):
     """Загрузка в 6 одновременных запросах: 3 сообщения в разные тикеты и 3 новых тикета."""
     tickets = [open_ticket(db, owner.vehicle_id) for _ in range(3)]
-    file_url = upload(client, owner.headers)
+    file_url = upload(client, minio, owner.headers)
     name = file_url.rsplit("/", 1)[1]
     attachments = [{"file_url": file_url, "file_type": "photo"}]
     new_ticket = {
@@ -388,7 +343,7 @@ def test_second_binding_of_upload_waits_for_first(
     """
     first_ticket = open_ticket(db, owner.vehicle_id)
     second_ticket = open_ticket(db, owner.vehicle_id)
-    file_url = upload(client, owner.headers)
+    file_url = upload(client, minio, owner.headers)
     name = file_url.rsplit("/", 1)[1]
     attachments_in = [{"file_url": file_url, "file_type": "photo"}]
 
@@ -451,7 +406,7 @@ def test_reversed_attachment_lists_do_not_deadlock(
     каждый занял бы первое имя и ждал бы второе — PostgreSQL прервал бы один из них.
     """
     tickets = [open_ticket(db, owner.vehicle_id) for _ in range(2)]
-    x, y = upload(client, owner.headers), upload(client, owner.headers)
+    x, y = upload(client, minio, owner.headers), upload(client, minio, owner.headers)
     barrier = threading.Barrier(2, timeout=5)
     original = attachments._insert_rows
 
@@ -494,7 +449,7 @@ def test_storage_io_does_not_hold_ticket_lock(
     """
     eng_headers, engineer = as_staff(phone(431))
     ticket_id = open_ticket(db, owner.vehicle_id, engineer)
-    file_url = upload(client, owner.headers)
+    file_url = upload(client, minio, owner.headers)
 
     copying, release = threading.Event(), threading.Event()
     original_copy = minio.copy
@@ -527,12 +482,8 @@ def test_storage_io_does_not_hold_ticket_lock(
 # ---------- Создание тикета и удаление авто (ADR 0017 п. 6) ----------
 
 
-def create_ticket(client: TestClient, owner: Owner) -> httpx.Response:
-    return client.post(
-        f"{API}/tickets",
-        json={"vehicle_id": owner.vehicle_id, "category": "audio", "description": "Хрипит"},
-        headers=owner.headers,
-    )
+def new_ticket(client: TestClient, owner: Owner) -> httpx.Response:
+    return create_ticket(client, owner.headers, owner.vehicle_id)
 
 
 def test_vehicle_deleted_before_ticket_write_is_404(
@@ -549,7 +500,7 @@ def test_vehicle_deleted_before_ticket_write_is_404(
 
     monkeypatch.setattr(attachments, "_copy_uploads", paused_copy_uploads)
     outcome: dict[str, httpx.Response] = {}
-    creator = threading.Thread(target=lambda: outcome.update(create=create_ticket(client, owner)))
+    creator = threading.Thread(target=lambda: outcome.update(create=new_ticket(client, owner)))
     creator.start()
     try:
         assert copying.wait(5), "создание не дошло до копирования вложений"
@@ -592,7 +543,7 @@ def test_vehicle_delete_waits_for_ticket_write(
             f"{API}/vehicles/{owner.vehicle_id}", headers=owner.headers
         )
 
-    creator = threading.Thread(target=lambda: outcome.update(create=create_ticket(client, owner)))
+    creator = threading.Thread(target=lambda: outcome.update(create=new_ticket(client, owner)))
     remover = threading.Thread(target=remove)
     creator.start()
     try:
@@ -770,17 +721,6 @@ def test_message_accepted_before_resolve_is_not_dated_after_it(
 # ---------- Нагрузка чата (чек-лист главы 13) ----------
 
 
-def assert_quiet(ws: WebSocketTestSession, seconds: float = 0.3) -> None:
-    """За `seconds` подписчику больше ничего не пришло (нет дублей и лишних событий)."""
-
-    async def _poll() -> dict[str, Any] | None:
-        with anyio.move_on_after(seconds):
-            return await ws._send_rx.receive()
-        return None
-
-    assert ws.portal.call(_poll) is None, "лишний кадр после всех сообщений"
-
-
 def test_chat_load_parallel_messages_without_loss(
     client: TestClient,
     db: Session,
@@ -817,7 +757,7 @@ def test_chat_load_parallel_messages_without_loss(
             ]
             assert sorted(f["id"] for f in frames) == sorted(sent), "каждое сообщение — один раз"
             assert {f["id"]: f["body"] for f in frames} == sent
-            assert_quiet(ws)
+            assert_quiet(ws, msg="лишний кадр после всех сообщений")
 
     r = client.get(
         f"{API}/tickets/{ticket_id}/messages", params={"page_size": 100}, headers=owner.headers

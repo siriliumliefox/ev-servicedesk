@@ -29,7 +29,7 @@ def implemented() -> list[tuple[str, str, dict]]:
 IDS = [op["operationId"] for _, _, op in implemented()]
 
 
-@pytest.mark.parametrize("tag", ["Auth", "Vehicle", "Aggregates"])
+@pytest.mark.parametrize("tag", ["Auth", "Vehicle", "Aggregates", "Tickets", "Uploads"])
 def test_service_fully_implemented(tag):
     tagged = {
         op["operationId"]
@@ -37,6 +37,7 @@ def test_service_fully_implemented(tag):
         for op in item.values()
         if isinstance(op, dict) and tag in op.get("tags", [])
     }
+    assert tagged, f"В контракте нет операций с тегом {tag}"
     assert tagged <= set(IDS), f"Не реализованы: {sorted(tagged - set(IDS))}"
 
 

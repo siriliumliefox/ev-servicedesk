@@ -53,6 +53,7 @@ jobs:
               - ".github/workflows/ci.yml"
               - ".github/workflows/cd-staging.yml"     # сборка и smoke образа (ADR 0013)
               - "scripts/smoke_backend_image.sh"
+              - "docker-compose.yml"                   # MinIO тестов и smoke образа (x-minio-image)
             web:
               - "web-engineer/**"
               - "web-admin/**"

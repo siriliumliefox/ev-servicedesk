@@ -39,7 +39,6 @@ jobs:
       REQUIRE_REDIS: "1"
       # MinIO (шаг «Start MinIO»): эфемерный контейнер задания, ключи — не секреты, как trust
       # у Postgres. Тестовый бакет создаёт фикстура s3_session (tests/conftest.py).
-      MINIO_IMAGE: pgsty/minio:RELEASE.2026-08-04T00-00-00Z@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372
       TEST_S3_ENDPOINT: http://localhost:9000
       TEST_S3_BUCKET: ev-servicedesk-test
       TEST_S3_ACCESS_KEY: ev_ci
@@ -70,19 +69,18 @@ jobs:
       - name: Install dependencies
         run: poetry install --no-interaction
 
-      # S3 API для тестов хранилища вложений (Глава 13, ADR 0017 п. 11). Не service-контейнер:
-      # ему нельзя передать команду, а образу MinIO нужен `server /data`.
+      # S3 API для тестов хранилища вложений (Глава 13, ADR 0017 п. 11) — сервис minio из
+      # docker-compose.yml: тот же закреплённый образ, команда и healthcheck (--wait ждёт его).
+      # Не service-контейнер: ему нельзя передать команду, а образу MinIO нужен `server /data`.
       - name: Start MinIO
+        env:
+          S3_ACCESS_KEY: ${{ env.TEST_S3_ACCESS_KEY }}
+          S3_SECRET_KEY: ${{ env.TEST_S3_SECRET_KEY }}
         run: |
-          docker run -d --name minio -p 9000:9000 \
-            -e MINIO_ROOT_USER="$TEST_S3_ACCESS_KEY" -e MINIO_ROOT_PASSWORD="$TEST_S3_SECRET_KEY" \
-            "$MINIO_IMAGE" server /data
-          for _ in $(seq 1 30); do
-            curl -fsS "$TEST_S3_ENDPOINT/minio/health/live" && exit 0
-            sleep 1
-          done
-          docker logs minio
-          exit 1
+          docker compose -f ../docker-compose.yml up -d --wait minio || {
+            docker compose -f ../docker-compose.yml logs minio
+            exit 1
+          }
 
       - name: Lint (ruff)
         run: poetry run ruff check .
