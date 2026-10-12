@@ -1,5 +1,5 @@
-// Доступ клиента к API (операции docs/openapi.yaml). Реализация на HTTP — глава 18;
-// в прототипе (глава 7) — PrototypeRepository на фикстурах.
+// Доступ клиента к API (операции docs/openapi.yaml): HttpClientRepository — реальный backend (глава 18, ADR 0022),
+// PrototypeRepository — фикстуры прототипа (глава 7, ADR 0011), если сборка без API_BASE_URL.
 import 'models.dart';
 
 /// Нет сети / сервер недоступен — экран показывает состояние ошибки с «Повторить».
@@ -12,21 +12,60 @@ class OfflineException implements Exception {
 
 /// Ошибка API (Error.error.code из контракта) с текстом для пользователя.
 class ApiException implements Exception {
-  const ApiException(this.code, this.message);
+  const ApiException(this.code, this.message, {this.retryAfter});
 
   final String code;
   final String message;
+
+  /// 429: через сколько можно повторить (заголовок Retry-After).
+  final Duration? retryAfter;
 
   @override
   String toString() => message;
 }
 
+/// Страница коллекции (PaginationMeta).
+class Page<T> {
+  const Page({required this.items, required this.page, required this.totalPages});
+
+  final List<T> items;
+  final int page;
+  final int totalPages;
+
+  bool get hasMore => page < totalPages;
+}
+
+/// UserPublic — то, что клиент видит о себе в профиле.
+class Profile {
+  const Profile({required this.phone});
+
+  final String? phone;
+}
+
 abstract class ClientRepository {
+  /// Вложения тикета: в HTTP-режиме — глава 20 (presign → S3), до неё кнопки вложений скрыты.
+  bool get supportsAttachments;
+
+  /// Сервер завершил сессию (refresh отклонён) — приложение возвращается к онбордингу.
+  set onSessionEnded(void Function()? callback);
+
+  /// Есть сохранённая сессия (refresh-токен) — вход без SMS-кода.
+  Future<bool> restoreSession();
+
   /// POST /auth/phone/request-code → ttl_seconds.
   Future<int> requestCode(String phone);
 
   /// POST /auth/phone/verify-code; pdPolicyVersion — согласие на обработку ПД (99-З).
   Future<void> verifyCode(String phone, String code, {String? pdPolicyVersion});
+
+  /// GET /me.
+  Future<Profile> me();
+
+  /// POST /auth/logout — выход с устройства; токен на устройстве стирается и без сети.
+  Future<void> signOut();
+
+  /// DELETE /auth/pd-consent — отзыв согласия на обработку ПД (99-З, ст. 10) завершает все сессии.
+  Future<void> withdrawPdConsent();
 
   /// GET /vehicle-models.
   Future<List<VehicleModel>> vehicleModels();
@@ -37,10 +76,16 @@ abstract class ClientRepository {
   /// POST /vehicles; без vehicleModelId модель определяет VIN-декодер (422 VIN_DECODE_FAILED).
   Future<Vehicle> addVehicle(String vin, {int? vehicleModelId});
 
+  /// PATCH /vehicles/{id}/mileage — только вверх (409 MILEAGE_DECREASE).
+  Future<Vehicle> updateMileage(int vehicleId, int mileage);
+
   /// GET /vehicles/{id}/aggregate-statuses.
   Future<List<AggregateStatusItem>> aggregateStatuses(int vehicleId);
 
-  /// GET /vehicles/{id}/maintenance-records.
+  /// GET /vehicles/{id}/maintenance-records — страница истории работ (новые сверху).
+  Future<Page<MaintenanceRecord>> maintenanceRecordsPage(int vehicleId, {int page = 1, int pageSize = 20});
+
+  /// Вся история работ (все страницы) — карточка агрегата фильтрует её по агрегату.
   Future<List<MaintenanceRecord>> maintenanceRecords(int vehicleId);
 
   /// GET /knowledge-articles?vehicle_model_id=&article_type=.

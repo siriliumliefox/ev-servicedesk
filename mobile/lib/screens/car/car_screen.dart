@@ -10,7 +10,9 @@ import '../../ui/demo_panel.dart';
 import '../../ui/format.dart';
 import '../../ui/states.dart';
 import 'aggregate_scheme.dart';
+import '../profile/profile_screen.dart';
 import 'aggregate_sheet.dart';
+import 'vehicle_card_screen.dart';
 import 'vehicle_switcher.dart';
 
 class CarScreen extends StatelessWidget {
@@ -24,7 +26,15 @@ class CarScreen extends StatelessWidget {
       appBar: AppBar(
         titleSpacing: EvSpace.s2,
         title: vehicle == null ? const Text('Мой авто') : VehicleSwitcher(vehicle: vehicle),
-        actions: const [DemoButton()],
+        actions: [
+          IconButton(
+            key: const Key('open-profile'),
+            tooltip: 'Профиль',
+            icon: const Icon(Icons.account_circle_outlined),
+            onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const ProfileScreen())),
+          ),
+          const DemoButton(),
+        ],
       ),
       body: _body(context, app, vehicle),
     );
@@ -127,23 +137,37 @@ class _Summary extends StatelessWidget {
     final c = context.evColors;
     final text = Theme.of(context).textTheme;
     final (headline, hint) = aggregateSummary(statuses);
+    // Карточка авто (пробег, история ТО) — 1 тап по сводке.
     return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(EvSpace.s4),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              [
-                'Пробег ${formatKm(vehicle.mileage)}',
-                if (vehicle.currentFirmwareVersion != null) 'прошивка ${vehicle.currentFirmwareVersion}',
-              ].join(' · '),
-              style: text.bodyMedium?.copyWith(color: c.fgMuted),
-            ),
-            const SizedBox(height: EvSpace.s1),
-            Text(headline, key: const Key('summary'), style: text.titleMedium),
-            if (hint != null) Text(hint, style: text.bodyMedium?.copyWith(color: c.fgMuted)),
-          ],
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        key: const Key('open-vehicle-card'),
+        onTap: () => Navigator.of(context)
+            .push(MaterialPageRoute<void>(builder: (_) => VehicleCardScreen(vehicleId: vehicle.id))),
+        child: Padding(
+          padding: const EdgeInsets.all(EvSpace.s4),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      [
+                        'Пробег ${formatKm(vehicle.mileage)}',
+                        if (vehicle.currentFirmwareVersion != null) 'прошивка ${vehicle.currentFirmwareVersion}',
+                      ].join(' · '),
+                      style: text.bodyMedium?.copyWith(color: c.fgMuted),
+                    ),
+                    const SizedBox(height: EvSpace.s1),
+                    Text(headline, key: const Key('summary'), style: text.titleMedium),
+                    if (hint != null) Text(hint, style: text.bodyMedium?.copyWith(color: c.fgMuted)),
+                  ],
+                ),
+              ),
+              Icon(Icons.chevron_right, color: c.fgMuted),
+            ],
+          ),
         ),
       ),
     );

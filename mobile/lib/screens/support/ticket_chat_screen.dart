@@ -157,14 +157,16 @@ class _ChatState extends State<_Chat> {
                       ),
                     Row(
                       children: [
-                        IconButton(
-                          tooltip: 'Прикрепить фото',
-                          icon: const Icon(Icons.attach_file),
-                          onPressed: () => setState(() => _attachments.add(TicketAttachment(
-                                fileName: 'Фото ${_attachments.length + 1}.jpg',
-                                fileType: AttachmentType.photo,
-                              ))),
-                        ),
+                        // Вложения в HTTP-режиме — глава 20 (presign → S3, ADR 0022 п. 5).
+                        if (AppScope.of(context).repository.supportsAttachments)
+                          IconButton(
+                            tooltip: 'Прикрепить фото',
+                            icon: const Icon(Icons.attach_file),
+                            onPressed: () => setState(() => _attachments.add(TicketAttachment(
+                                  fileName: 'Фото ${_attachments.length + 1}.jpg',
+                                  fileType: AttachmentType.photo,
+                                ))),
+                          ),
                         Expanded(
                           child: TextField(
                             key: const Key('message'),

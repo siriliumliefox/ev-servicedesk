@@ -145,7 +145,7 @@ void main() {
       await tester.enterText(find.byKey(const Key('vin')), PrototypeRepository.takenVin);
       await tester.tap(find.text('Добавить'));
       await tester.pumpAndSettle();
-      expect(find.text('Этот VIN уже привязан к другому аккаунту'), findsOneWidget);
+      expect(find.textContaining('Этот VIN уже привязан к другому аккаунту'), findsOneWidget);
 
       await tester.enterText(find.byKey(const Key('vin')), 'WVWZZZ1KZ8W000001');
       await tester.tap(find.text('Добавить'));

@@ -248,23 +248,26 @@ class _TicketCreateScreenState extends State<TicketCreateScreen> {
                 errorText: _descriptionError,
               ),
             ),
-            const SizedBox(height: EvSpace.s4),
-            Wrap(
-              spacing: EvSpace.s2,
-              runSpacing: EvSpace.s2,
-              children: [
-                OutlinedButton.icon(
-                  onPressed: () => _attach(AttachmentType.photo),
-                  icon: const Icon(Icons.photo_camera_outlined),
-                  label: const Text('Фото'),
-                ),
-                OutlinedButton.icon(
-                  onPressed: () => _attach(AttachmentType.video),
-                  icon: const Icon(Icons.videocam_outlined),
-                  label: const Text('Видео'),
-                ),
-              ],
-            ),
+            // Вложения в HTTP-режиме — глава 20 (presign → S3, ADR 0022 п. 5).
+            if (AppScope.of(context).repository.supportsAttachments) ...[
+              const SizedBox(height: EvSpace.s4),
+              Wrap(
+                spacing: EvSpace.s2,
+                runSpacing: EvSpace.s2,
+                children: [
+                  OutlinedButton.icon(
+                    onPressed: () => _attach(AttachmentType.photo),
+                    icon: const Icon(Icons.photo_camera_outlined),
+                    label: const Text('Фото'),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: () => _attach(AttachmentType.video),
+                    icon: const Icon(Icons.videocam_outlined),
+                    label: const Text('Видео'),
+                  ),
+                ],
+              ),
+            ],
             if (_attachments.isNotEmpty) ...[
               const SizedBox(height: EvSpace.s3),
               Wrap(

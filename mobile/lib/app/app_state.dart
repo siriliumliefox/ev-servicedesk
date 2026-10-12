@@ -2,12 +2,15 @@
 // Без внешних пакетов: ChangeNotifier + InheritedNotifier (AppScope).
 import 'package:flutter/material.dart';
 
+import '../data/api/error_text.dart';
 import '../data/models.dart';
 import '../data/prototype_repository.dart';
 import '../data/repository.dart';
 
 class AppState extends ChangeNotifier {
-  AppState(this.repository, {bool signedIn = false}) : _signedIn = signedIn;
+  AppState(this.repository, {bool signedIn = false}) : _signedIn = signedIn {
+    repository.onSessionEnded = _sessionEnded;
+  }
 
   final ClientRepository repository;
 
@@ -45,15 +48,59 @@ class AppState extends ChangeNotifier {
   bool _loadingVehicles = false;
   bool get loadingVehicles => _loadingVehicles;
 
+  /// Проверка сохранённой сессии при запуске — на это время экран загрузки вместо онбординга.
+  bool _restoring = false;
+  bool get restoring => _restoring;
+
+  /// Сообщение на экране входа (сессия завершена сервером); показывается один раз.
+  String? _notice;
+  String? takeNotice() {
+    final notice = _notice;
+    _notice = null;
+    return notice;
+  }
+
+  /// Сохранённая сессия — сразу главный экран; без сети он покажет «Нет подключения» (ADR 0022 п. 10).
+  Future<void> restoreSession() async {
+    _restoring = true;
+    notifyListeners();
+    final restored = await repository.restoreSession();
+    _restoring = false;
+    if (restored) {
+      await signIn();
+    } else {
+      notifyListeners();
+    }
+  }
+
   Future<void> signIn() async {
     _signedIn = true;
     await refresh();
   }
 
-  void signOut() {
+  /// Выход с устройства.
+  Future<void> signOut() async {
+    await repository.signOut();
+    _clearSession();
+  }
+
+  /// Отзыв согласия на обработку ПД: завершает все сессии пользователя.
+  Future<void> withdrawPdConsent() async {
+    await repository.withdrawPdConsent();
+    _clearSession();
+  }
+
+  void _sessionEnded() {
+    _notice = sessionEndedText;
+    _clearSession();
+  }
+
+  void _clearSession() {
     _signedIn = false;
     _vehicles = const [];
     _selectedVehicleId = null;
+    _vehiclesError = null;
+    _unread = 0;
     _bump();
   }
 
@@ -65,7 +112,8 @@ class AppState extends ChangeNotifier {
       _vehicles = await repository.vehicles();
       await refreshUnread();
     } on Exception catch (e) {
-      _vehiclesError = e;
+      // Сессия завершена во время загрузки — экран входа, а не ошибка главного экрана.
+      if (_signedIn) _vehiclesError = e;
     }
     _loadingVehicles = false;
     _bump();
@@ -83,6 +131,11 @@ class AppState extends ChangeNotifier {
 
   void selectVehicle(int vehicleId) {
     _selectedVehicleId = vehicleId;
+    _bump();
+  }
+
+  void vehicleUpdated(Vehicle v) {
+    _vehicles = [for (final old in _vehicles) old.id == v.id ? v : old];
     _bump();
   }
 
