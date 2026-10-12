@@ -22,7 +22,7 @@ REDIS_URL="${SMOKE_REDIS_URL:-redis://host.docker.internal:6379/14}"
 HOST_GW=(--add-host=host.docker.internal:host-gateway)
 PHONE="+375290000001"
 # Тот же закреплённый образ, что в docker-compose.yml и backend-ci.yml (ADR 0017).
-MINIO_IMAGE="${SMOKE_MINIO_IMAGE:-pgsty/minio:RELEASE.2026-08-04T00-00-00Z}"
+MINIO_IMAGE="${SMOKE_MINIO_IMAGE:-pgsty/minio:RELEASE.2026-08-04T00-00-00Z@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372}"
 S3_BUCKET="ev-servicedesk-smoke"
 FORGED='eyJhbGciOiJub25lIn0.eyJzdWIiOiIxIn0.'  # alg=none, без подписи
 

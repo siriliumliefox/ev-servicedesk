@@ -39,7 +39,7 @@ jobs:
       REQUIRE_REDIS: "1"
       # MinIO (шаг «Start MinIO»): эфемерный контейнер задания, ключи — не секреты, как trust
       # у Postgres. Тестовый бакет создаёт фикстура s3_session (tests/conftest.py).
-      MINIO_IMAGE: pgsty/minio:RELEASE.2026-08-04T00-00-00Z
+      MINIO_IMAGE: pgsty/minio:RELEASE.2026-08-04T00-00-00Z@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372
       TEST_S3_ENDPOINT: http://localhost:9000
       TEST_S3_BUCKET: ev-servicedesk-test
       TEST_S3_ACCESS_KEY: ev_ci

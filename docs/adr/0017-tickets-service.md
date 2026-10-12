@@ -129,8 +129,9 @@
   `pg_advisory_xact_lock`; после commit исходный объект в `uploads/` удаляется. Пустой объект
   (0 байт) — `ATTACHMENT_NOT_FOUND` (загрузка не завершена).
 - **Образ MinIO:** официальные `minio/minio` и `minio/mc` больше не публикуются (Docker Hub —
-  «repository does not exist»); для local/CI используется сборка `pgsty/minio` с закреплённым
-  тегом. Только среда разработки и CI; провайдер staging/production — глава 26.
+  «repository does not exist»); для local/CI используется сборка `pgsty/minio`, закреплённая
+  по тегу и digest (решение владельца 2026-10-12). Только среда разработки и CI; провайдер
+  staging/production — глава 26.
 
 ## Последствия
 - Миграция `0008` (`ticket_sla_policy`), экспорт DDL/ERD; зависимость S3-клиента в backend.
