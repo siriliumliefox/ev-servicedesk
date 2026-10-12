@@ -27,7 +27,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_sms_provider
 from app.core.config import Settings, get_settings
 from app.core.db import get_db, get_session_scope
-from app.core.redis import PubSubHub, get_pubsub_hub, get_redis
+from app.core.redis import get_redis
 from app.core.security import hash_password
 from app.core.storage import ObjectStorage, get_storage
 from app.domain.auth.sms import FakeSmsProvider
@@ -53,15 +53,10 @@ def api_settings(**overrides: Any) -> Settings:
         "jwt_secret": "api-test-secret-" + "q" * 32,
         "sms_code_secret": "api-test-sms-secret-" + "w" * 32,
         "sms_provider": "fake",
+        "redis_url": _test_redis_url(),  # подписка WebSocket (lifespan) — на тестовом Redis
         "redis_channel_prefix": RUN_CHANNEL_PREFIX,
     }
     return Settings(_env_file=None, **(values | overrides))
-
-
-@pytest.fixture(autouse=True)
-def _run_channel_prefix(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Каналы событий тикетов (events.channel) — с префиксом прогона."""
-    monkeypatch.setattr(get_settings(), "redis_channel_prefix", RUN_CHANNEL_PREFIX)
 
 
 @pytest.fixture
@@ -92,11 +87,6 @@ def storage(fake_storage: FakeObjectStorage) -> ObjectStorage:
     return fake_storage
 
 
-def pubsub_hub(settings: Settings) -> PubSubHub:
-    """Общая подписка WebSocket — на тестовом Redis (как в app.main, но с TEST_REDIS_URL)."""
-    return PubSubHub.from_settings(settings, url=_test_redis_url())
-
-
 @pytest.fixture
 def app(
     settings: Settings,
@@ -106,9 +96,9 @@ def app(
     storage: ObjectStorage,
 ) -> FastAPI:
     application = create_app(settings)
-    # Одна сессия теста на одном соединении: запросы REST и обработчики WebSocket (у каждого
-    # подключения — свой поток) обращаются к ней по очереди. В приложении у каждого запроса
-    # и каждого обращения WebSocket — своя сессия.
+    # Одна сессия теста на одном соединении: запросы REST и обращения WebSocket к БД (в пуле
+    # потоков) идут к ней по очереди. В приложении у каждого запроса и каждого обращения
+    # WebSocket — своя сессия.
     lock = threading.Lock()
 
     def shared_db() -> Iterator[Session]:
@@ -124,16 +114,18 @@ def app(
     application.dependency_overrides[get_db] = shared_db
     application.dependency_overrides[get_session_scope] = lambda: session_scope
     application.dependency_overrides[get_redis] = lambda: real_redis
-    hub = pubsub_hub(settings)
-    application.dependency_overrides[get_pubsub_hub] = lambda: hub
     application.dependency_overrides[get_sms_provider] = lambda: sms
     application.dependency_overrides[get_storage] = lambda: storage
     return application
 
 
 @pytest.fixture
-def client(app: FastAPI) -> TestClient:
-    return TestClient(app)
+def client(app: FastAPI) -> Iterator[TestClient]:
+    """Запущенное приложение (lifespan): запросы и WebSocket — в одном цикле событий, как в
+    процессе uvicorn; общая подписка pub/sub — `app.state.pubsub_hub`.
+    """
+    with TestClient(app) as running:
+        yield running
 
 
 def code_from(sms: FakeSmsProvider, phone: str) -> str:

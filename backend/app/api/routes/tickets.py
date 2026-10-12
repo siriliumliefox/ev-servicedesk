@@ -15,6 +15,7 @@ from app.api.deps import (
     RedisDep,
     SettingsDep,
     StorageDep,
+    TicketEventsDep,
     rbac,
 )
 from app.api.pagination import PageDep, paginate
@@ -113,10 +114,10 @@ def update_ticket_status(
     body: TicketStatusUpdateRequest,
     user: CurrentUser,
     db: DbDep,
-    redis: RedisDep,
+    events: TicketEventsDep,
     presign: PresignDep,
 ) -> TicketDetailOut:
-    card = service.change_status(db, redis, user, ticket_id, body.status)
+    card = service.change_status(db, events, user, ticket_id, body.status)
     return ticket_detail_out(card, presign)
 
 
@@ -125,10 +126,10 @@ def claim_ticket(
     ticket_id: TicketId,
     user: CurrentUser,
     db: DbDep,
-    redis: RedisDep,
+    events: TicketEventsDep,
     presign: PresignDep,
 ) -> TicketDetailOut:
-    card = service.claim_ticket(db, redis, user, ticket_id)
+    card = service.claim_ticket(db, events, user, ticket_id)
     return ticket_detail_out(card, presign)
 
 
@@ -138,10 +139,10 @@ def assign_ticket(
     body: TicketAssignRequest,
     user: CurrentUser,
     db: DbDep,
-    redis: RedisDep,
+    events: TicketEventsDep,
     presign: PresignDep,
 ) -> TicketDetailOut:
-    card = service.assign_ticket(db, redis, user, ticket_id, body.assigned_engineer_id)
+    card = service.assign_ticket(db, events, user, ticket_id, body.assigned_engineer_id)
     return ticket_detail_out(card, presign)
 
 
@@ -170,6 +171,7 @@ def create_ticket_message(
     user: CurrentUser,
     db: DbDep,
     redis: RedisDep,
+    events: TicketEventsDep,
     settings: SettingsDep,
     storage: StorageDep,
     presign: PresignDep,
@@ -177,6 +179,7 @@ def create_ticket_message(
     message = service.create_message(
         db,
         redis,
+        events,
         settings,
         storage,
         user,

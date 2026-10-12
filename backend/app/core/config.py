@@ -97,7 +97,7 @@ class Settings(BaseSettings):
     # Каналы Redis pub/sub не зависят от номера БД Redis: стенды на одном сервере Redis
     # разделяются префиксом каналов. Пусто — `ev-servicedesk:<environment>`.
     redis_channel_prefix: str = ""
-    # Подключения процесса к Redis pub/sub — одно общее соединение (app.core.redis.PubSubHub).
+    # Подключения процесса к Redis pub/sub — одно общее соединение (app.core.pubsub.PubSubHub).
     # Тишина дольше интервала — PING; нет ответа за тот же срок — связь потеряна, подключения
     # закрываются 1011 (клиент переподключается и догружает пропущенное).
     redis_pubsub_ping_seconds: float = Field(10, gt=0, le=60)

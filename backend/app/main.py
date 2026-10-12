@@ -16,7 +16,7 @@ from app.api.routes import (
 )
 from app.core.config import SAFE_ENVIRONMENTS, Settings, get_settings
 from app.core.errors import install_error_handlers
-from app.core.redis import PubSubHub
+from app.core.pubsub import PubSubHub
 from app.core.storage import get_storage
 
 API_PREFIX = "/v1"  # servers в docs/openapi.yaml: http://localhost:8000/v1

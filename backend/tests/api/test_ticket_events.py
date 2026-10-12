@@ -2,15 +2,13 @@
 
 Подключение — Starlette TestClient; события идут через настоящий Redis pub/sub (тестовый
 сервер). Кадры событий сверяются со схемами docs/openapi.yaml (`TicketMessage`, `Ticket`).
-TestClient без `with` даёт каждому подключению свой цикл событий, а значит и своё соединение
-подписки; общее соединение процесса проверяется на `with TestClient(app)` (один цикл).
+Приложение запущено (`with TestClient(app)`): все подключения работают в одном цикле событий
+и делят одно соединение подписки, как в процессе uvicorn.
 """
 
 import json
 import logging
 import time
-from collections.abc import Iterator
-from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -26,12 +24,15 @@ from sqlalchemy.exc import OperationalError
 from starlette.testclient import WebSocketTestSession
 from starlette.websockets import WebSocketDisconnect
 
+from app.api.deps import get_ticket_events
 from app.api.routes import ticket_events
 from app.core import rate_limit
 from app.core.config import Settings
-from app.core.redis import PubSubHub, get_pubsub_hub, get_redis
+from app.core.pubsub import PubSubHub, get_pubsub_hub
+from app.core.redis import get_redis
 from app.core.security import create_access_token
 from app.domain.tickets import events
+from app.domain.tickets.events import TicketEvents
 from app.main import create_app
 from app.models import AppUser
 from app.models.enums import UserRole
@@ -123,8 +124,13 @@ def close_code(ws: WebSocketTestSession) -> int:
     return info.value.code
 
 
+def run_events(redis: Redis) -> TicketEvents:
+    """События тикетов в каналах прогона — как у приложения с `api_settings`."""
+    return TicketEvents(redis, RUN_CHANNEL_PREFIX)
+
+
 def numsub(redis: Redis, ticket_id: int) -> int:
-    channel = events.channel(ticket_id)
+    channel = run_events(redis).channel(ticket_id)
     return dict(redis.pubsub_numsub(channel)).get(channel, 0)
 
 
@@ -143,14 +149,8 @@ def connect(client: TestClient, ticket_id: int | str):
 
 
 def hub_of(app: FastAPI) -> PubSubHub:
-    return app.dependency_overrides[get_pubsub_hub]()
-
-
-@contextmanager
-def shared_loop(app: FastAPI) -> Iterator[TestClient]:
-    """Все подключения — в одном цикле событий, как в процессе uvicorn."""
-    with TestClient(app) as running:
-        yield running
+    """Общая подписка запущенного приложения (lifespan, app.main)."""
+    return app.state.pubsub_hub
 
 
 # ---------- Авторизация ----------
@@ -277,7 +277,7 @@ def test_message_created_is_rendered_per_recipient(
         for ws in (client_ws, eng_ws, admin_ws):
             ticket = assert_frame(receive_event(ws), "ticket.updated", "Ticket")
             assert ticket["status"] == "waiting_vendor"
-    assert numsub(real_redis, ticket_id) == 0, "подписки закрыты вместе с подключениями"
+    wait_until(lambda: numsub(real_redis, ticket_id) == 0, "подписки не закрыты с подключениями")
 
 
 def test_reassignment_closes_lost_subscribers_4403(
@@ -322,8 +322,8 @@ def test_publish_failure_does_not_fail_request(client, ticket_id, owner, app, mo
 
 
 def test_event_parse_rejects_foreign_payloads():
-    assert events.parse('{"type": "ticket.updated", "ticket_id": 5}') == events.TicketEvent(
-        events.EventType.TICKET_UPDATED, 5
+    assert events.parse('{"type": "ticket.updated", "ticket_id": 5}') == events.TicketUpdated(
+        ticket_id=5
     )
     for raw in (
         "x",
@@ -347,14 +347,16 @@ def test_ready_is_sent_once_after_subscription(client, ticket_id, owner, real_re
     with connect(client, ticket_id) as ws:
         ws.send_json({"type": "auth", "access_token": owner[1]})
         assert json.loads(receive(ws)["text"]) == READY
-        assert real_redis.publish(events.channel(ticket_id), ticket_updated_payload(ticket_id))
+        assert real_redis.publish(
+            run_events(real_redis).channel(ticket_id), ticket_updated_payload(ticket_id)
+        )
         assert_frame(json.loads(receive(ws)["text"]), "ticket.updated", "Ticket")
         assert_quiet(ws)
 
 
-def test_channel_prefix_defaults_to_environment(monkeypatch):
+def test_channel_prefix_defaults_to_environment(monkeypatch, settings, real_redis):
     monkeypatch.delenv("REDIS_CHANNEL_PREFIX", raising=False)
-    assert events.channel(7) == f"{RUN_CHANNEL_PREFIX}:ticket:7"
+    assert get_ticket_events(real_redis, settings).channel(7) == f"{RUN_CHANNEL_PREFIX}:ticket:7"
     assert Settings(_env_file=None).redis_channel_prefix == "ev-servicedesk:local"
     assert (
         Settings(_env_file=None, environment="test").redis_channel_prefix == "ev-servicedesk:test"
@@ -384,7 +386,7 @@ def wait_until(predicate, what: str) -> None:
         time.sleep(0.01)
 
 
-def test_one_pubsub_connection_per_process(app, client, ticket_id, owner, engineer, real_redis):
+def test_one_pubsub_connection_per_process(client, ticket_id, owner, engineer, real_redis):
     """Подключения процесса делят одно соединение: SUBSCRIBE на первом, UNSUBSCRIBE на последнем."""
     vehicle_id = client.get(f"{API}/tickets/{ticket_id}", headers=owner[0]).json()["vehicle_id"]
     r = client.post(
@@ -395,43 +397,37 @@ def test_one_pubsub_connection_per_process(app, client, ticket_id, owner, engine
     assert r.status_code == 201, r.text
     other_id = r.json()["id"]
 
-    with shared_loop(app) as shared:
-        with connect(shared, ticket_id) as first, connect(shared, ticket_id) as second:
-            auth(first, owner[1])
-            auth(second, owner[1])
-            with connect(shared, other_id) as other:
-                auth(other, owner[1])
-                assert (numsub(real_redis, ticket_id), numsub(real_redis, other_id)) == (1, 1)
-            wait_until(lambda: numsub(real_redis, other_id) == 0, "нет UNSUBSCRIBE")
-            assert numsub(real_redis, ticket_id) == 1
+    with connect(client, ticket_id) as first, connect(client, ticket_id) as second:
+        auth(first, owner[1])
+        auth(second, owner[1])
+        with connect(client, other_id) as other:
+            auth(other, owner[1])
+            assert (numsub(real_redis, ticket_id), numsub(real_redis, other_id)) == (1, 1)
+        wait_until(lambda: numsub(real_redis, other_id) == 0, "нет UNSUBSCRIBE")
+        assert numsub(real_redis, ticket_id) == 1
 
-            r = shared.post(f"{API}/tickets/{ticket_id}/claim", headers=engineer[0])
-            assert r.status_code == 200, r.text
-            for ws in (first, second):
-                assert assert_frame(receive_event(ws), "ticket.updated", "Ticket")["status"] == (
-                    "in_progress"
-                )
-        wait_until(lambda: numsub(real_redis, ticket_id) == 0, "соединение подписки не закрыто")
+        r = client.post(f"{API}/tickets/{ticket_id}/claim", headers=engineer[0])
+        assert r.status_code == 200, r.text
+        for ws in (first, second):
+            assert assert_frame(receive_event(ws), "ticket.updated", "Ticket")["status"] == (
+                "in_progress"
+            )
+    wait_until(lambda: numsub(real_redis, ticket_id) == 0, "соединение подписки не закрыто")
 
 
-def test_lifespan_creates_process_hub(app, settings, ticket_id, owner, monkeypatch):
+def test_lifespan_creates_process_hub(app, client, ticket_id, owner):
     """Без подмены зависимости: подписка процесса из lifespan (app.main), закрытие при остановке."""
-    monkeypatch.setattr(settings, "redis_url", hub_of(app).url)
-    del app.dependency_overrides[get_pubsub_hub]
-    with shared_loop(app) as running:
-        assert isinstance(app.state.pubsub_hub, PubSubHub)
-        with connect(running, ticket_id) as ws:
-            auth(ws, owner[1])
+    assert isinstance(app.state.pubsub_hub, PubSubHub)
+    with connect(client, ticket_id) as ws:
+        auth(ws, owner[1])
 
 
-def test_apps_in_one_process_each_deliver(app, settings, ticket_id, owner, engineer):
-    other_app = create_app(settings)
+def test_apps_in_one_process_each_deliver(app, client, settings, ticket_id, owner, engineer):
+    other_app = create_app(settings)  # своя общая подписка — из своего lifespan
     other_app.dependency_overrides.update(app.dependency_overrides)
-    other_hub = PubSubHub.from_settings(settings, url=hub_of(app).url)
-    other_app.dependency_overrides[get_pubsub_hub] = lambda: other_hub
 
-    with shared_loop(app) as first, shared_loop(other_app) as second:
-        with connect(first, ticket_id) as one, connect(second, ticket_id) as two:
+    with TestClient(other_app) as second:
+        with connect(client, ticket_id) as one, connect(second, ticket_id) as two:
             auth(one, owner[1])
             auth(two, owner[1])
             r = second.post(f"{API}/tickets/{ticket_id}/claim", headers=engineer[0])
@@ -474,7 +470,9 @@ def test_slow_consumer_closes_1013(app, client, ticket_id, owner, real_redis, mo
     with connect(client, ticket_id) as ws:
         auth(ws, owner[1])
         for _ in range(5):
-            real_redis.publish(events.channel(ticket_id), ticket_updated_payload(ticket_id))
+            real_redis.publish(
+                run_events(real_redis).channel(ticket_id), ticket_updated_payload(ticket_id)
+            )
         frames = 0
         with pytest.raises(WebSocketDisconnect) as info:
             while True:
@@ -502,7 +500,7 @@ def test_unanswered_ping_closes_1011(app, client, ticket_id, owner, monkeypatch)
         assert close_code(ws) == 1011
 
 
-def test_link_loss_closes_sockets_1011_and_recovers(app, ticket_id, owner, monkeypatch):
+def test_link_loss_closes_sockets_1011_and_recovers(app, client, ticket_id, owner, monkeypatch):
     monkeypatch.setattr(hub_of(app), "ping_seconds", 0.2)  # чтение не дольше 0,2 с
     broken = {"now": False}
     get_message = PubSub.get_message
@@ -513,15 +511,14 @@ def test_link_loss_closes_sockets_1011_and_recovers(app, ticket_id, owner, monke
         return await get_message(self, *args, **kwargs)
 
     monkeypatch.setattr(PubSub, "get_message", flaky)
-    with shared_loop(app) as shared:
-        with connect(shared, ticket_id) as first, connect(shared, ticket_id) as second:
-            auth(first, owner[1])
-            auth(second, owner[1])
-            broken["now"] = True
-            assert (close_code(first), close_code(second)) == (1011, 1011)
-        broken["now"] = False
-        with connect(shared, ticket_id) as again:  # новое соединение подписки
-            auth(again, owner[1])
+    with connect(client, ticket_id) as first, connect(client, ticket_id) as second:
+        auth(first, owner[1])
+        auth(second, owner[1])
+        broken["now"] = True
+        assert (close_code(first), close_code(second)) == (1011, 1011)
+    broken["now"] = False
+    with connect(client, ticket_id) as again:  # новое соединение подписки
+        auth(again, owner[1])
 
 
 def error_logged_with_traceback(caplog: pytest.LogCaptureFixture) -> bool:
@@ -570,6 +567,8 @@ def test_render_failure_closes_1011_with_traceback(
     monkeypatch.setattr(ticket_events, "_render", broken)
     with caplog.at_level(logging.ERROR), connect(client, ticket_id) as ws:
         auth(ws, owner[1])
-        real_redis.publish(events.channel(ticket_id), ticket_updated_payload(ticket_id))
+        real_redis.publish(
+            run_events(real_redis).channel(ticket_id), ticket_updated_payload(ticket_id)
+        )
         assert close_code(ws) == 1011
     assert error_logged_with_traceback(caplog)

@@ -46,7 +46,6 @@ from app.core import storage as storage_module
 from app.core.config import Settings
 from app.core.security import create_access_token
 from app.core.storage import ObjectStorage, S3ObjectStorage, StorageUnavailable, get_storage
-from app.domain.tickets import events
 from app.models import AppUser, TicketAttachment
 from app.models.enums import UserRole
 from tests.api.conftest import (
@@ -68,6 +67,7 @@ from tests.api.test_ticket_events import (
     connect,
     receive,
     receive_event,
+    run_events,
 )
 from tests.support.storage import FakeObjectStorage, put_object
 
@@ -281,7 +281,7 @@ def ws_outcome(
                 return message.get("code", 1000)
             # Первый кадр открытого подключения — `ready`: подписка подтверждена Redis.
             assert json.loads(message["text"]) == READY, message
-            events.ticket_updated(redis, ticket_id)
+            run_events(redis).ticket_updated(ticket_id)
             frame = receive_event(ws)
             assert frame["type"] == "ticket.updated", frame
             assert frame["data"]["id"] == ticket_id, frame

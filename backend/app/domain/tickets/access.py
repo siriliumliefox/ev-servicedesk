@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.sql.base import ExecutableOption
 
 from app.core.db import is_db_id
-from app.core.errors import ApiError, forbidden
+from app.core.errors import ApiError, forbidden, unauthorized
 from app.models import AppUser, Ticket, Vehicle
 from app.models.enums import TicketStatus, UserRole
 
@@ -89,11 +89,11 @@ def for_update(db: Session, user: AppUser, ticket_id: int) -> Ticket:
     return ticket
 
 
-def is_visible(db: Session, user: AppUser, ticket_id: int) -> bool:
-    """Для WebSocket: доступ при подключении и повторная проверка на каждом событии."""
-    if not is_db_id(ticket_id):
-        return False
-    return db.scalar(select(Ticket.id).where(Ticket.id == ticket_id, visible(user))) is not None
+def ensure_visible(db: Session, user: AppUser, ticket_id: int) -> None:
+    """Тикет виден `user`, иначе 404 — без загрузки тикета (проверка доступа WebSocket)."""
+    found = select(Ticket.id).where(Ticket.id == ticket_id, visible(user))
+    if not is_db_id(ticket_id) or db.scalar(found) is None:
+        raise not_found()
 
 
 def ensure_can_change_status(user: AppUser, ticket: Ticket) -> None:
@@ -115,7 +115,12 @@ def hides_staff_contacts(viewer: AppUser, author: AppUser) -> bool:
     return viewer.role is UserRole.CLIENT and author.role is not UserRole.CLIENT
 
 
-def active_user(db: Session, user_id: int) -> AppUser | None:
-    """Пользователь токена — как в `get_current_user`: роль и активность из БД."""
+def subscriber(db: Session, user_id: int) -> AppUser:
+    """Пользователь токена WebSocket — как в `get_current_user`: роль и активность из БД.
+
+    Проверяется при подключении и заново на каждом событии: деактивированный — 401.
+    """
     user = db.get(AppUser, user_id, populate_existing=True)
-    return user if user is not None and user.is_available else None
+    if user is None or not user.is_available:
+        raise unauthorized("Учётная запись недоступна")
+    return user

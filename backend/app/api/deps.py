@@ -9,10 +9,11 @@ OpenAPI. Тест `tests/api/test_rbac_contract.py` требует роли у �
 from collections.abc import Callable
 from typing import Annotated, Any
 
-from fastapi import Depends, Request
+from fastapi import Depends
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from redis import Redis
 from sqlalchemy.orm import Session
+from starlette.requests import HTTPConnection
 
 from app.api.schemas.tickets import Presign
 from app.core.config import Settings, get_settings
@@ -22,6 +23,7 @@ from app.core.redis import get_redis
 from app.core.security import InvalidTokenError, decode_access_token
 from app.core.storage import ObjectStorage, get_storage
 from app.domain.auth.sms import SmsProvider, get_sms_provider_for
+from app.domain.tickets.events import TicketEvents
 from app.domain.vehicles.vin import MockVinDecoder, VinDecoder
 from app.models import AppUser
 from app.models.enums import UserRole
@@ -57,6 +59,14 @@ def get_presign(storage: StorageDep, settings: SettingsDep) -> Presign:
 PresignDep = Annotated[Presign, Depends(get_presign)]
 
 
+def get_ticket_events(redis: RedisDep, settings: SettingsDep) -> TicketEvents:
+    """События тикетов (ADR 0017 п. 9): каналы — с префиксом из настроек приложения."""
+    return TicketEvents(redis, settings.redis_channel_prefix)
+
+
+TicketEventsDep = Annotated[TicketEvents, Depends(get_ticket_events)]
+
+
 def get_vin_decoder() -> VinDecoder:
     """Seam декодера: внешний API (X-05) подключается здесь, тесты подменяют зависимость."""
     return MockVinDecoder()
@@ -65,11 +75,12 @@ def get_vin_decoder() -> VinDecoder:
 VinDecoderDep = Annotated[VinDecoder, Depends(get_vin_decoder)]
 
 
-def client_ip(request: Request) -> str:
+def client_ip(connection: HTTPConnection) -> str:
+    """IP клиента запроса или WebSocket-подключения — для лимитов по IP."""
     # За обратным прокси uvicorn нужен --forwarded-allow-ips=<IP/CIDR прокси> (или
     # FORWARDED_ALLOW_IPS): иначе X-Forwarded-For игнорируется и лимит по IP считается
     # по адресу прокси. '*' — только если приложение недоступно напрямую (Глава 26).
-    return request.client.host if request.client else "unknown"
+    return connection.client.host if connection.client else "unknown"
 
 
 def get_current_user(

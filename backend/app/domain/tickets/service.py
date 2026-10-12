@@ -18,9 +18,10 @@ from app.core.db import get_by_id, is_db_id
 from app.core.errors import ApiError
 from app.core.storage import ObjectStorage
 from app.domain.aggregates.service import current_statuses
-from app.domain.tickets import access, attachments, events, sla
+from app.domain.tickets import access, attachments, sla
 from app.domain.tickets.attachments import AttachmentInput
 from app.domain.tickets.card import TicketCard
+from app.domain.tickets.events import TicketEvents
 from app.domain.tickets.status import InvalidTransition, after_assignment, transition
 from app.domain.vehicles import access as vehicle_access
 from app.models import (
@@ -47,7 +48,7 @@ def _card(db: Session, ticket_id: int) -> TicketCard:
     return TicketCard(ticket, current_statuses(db, ticket.vehicle))
 
 
-def _finish(db: Session, redis: Redis, ticket_id: int, *, changed: bool) -> TicketCard:
+def _finish(db: Session, events: TicketEvents, ticket_id: int, *, changed: bool) -> TicketCard:
     """Конец записи тикета: commit → карточка → событие, если тикет изменился.
 
     Commit и без изменений — снимает блокировку строки. Событие — после COMMIT и после
@@ -56,7 +57,7 @@ def _finish(db: Session, redis: Redis, ticket_id: int, *, changed: bool) -> Tick
     db.commit()
     card = _card(db, ticket_id)
     if changed:
-        events.ticket_updated(redis, ticket_id)
+        events.ticket_updated(ticket_id)
     return card
 
 
@@ -195,7 +196,7 @@ def create_ticket(
 
 
 def change_status(
-    db: Session, redis: Redis, user: AppUser, ticket_id: int, target: TicketStatus
+    db: Session, events: TicketEvents, user: AppUser, ticket_id: int, target: TicketStatus
 ) -> TicketCard:
     """PATCH /tickets/{id}/status (engineer/admin) по графу `status.TRANSITIONS`."""
     ticket = access.for_update(db, user, ticket_id)
@@ -215,10 +216,10 @@ def change_status(
             details={"from": exc.current, "to": exc.target},
         ) from exc
     # Присвоение равного значения изменением не считается: запрошен текущий статус — без события.
-    return _finish(db, redis, ticket.id, changed=db.is_modified(ticket))
+    return _finish(db, events, ticket.id, changed=db.is_modified(ticket))
 
 
-def claim_ticket(db: Session, redis: Redis, user: AppUser, ticket_id: int) -> TicketCard:
+def claim_ticket(db: Session, events: TicketEvents, user: AppUser, ticket_id: int) -> TicketCard:
     """POST /tickets/{id}/claim (engineer): атомарное самоназначение из очереди (ADR 0017 п. 5).
 
     UPDATE с условием «в очереди» — проигравший гонку не перезапишет победителя: строка
@@ -241,7 +242,7 @@ def claim_ticket(db: Session, redis: Redis, user: AppUser, ticket_id: int) -> Ti
             # Контракт claimTicket: «уже у другого инженера» — 409, а не 404 (ADR 0017 п. 5).
             raise ApiError(409, "TICKET_ALREADY_CLAIMED", "Тикет уже взят другим инженером")
     # Уже свой — повтор без изменений: UPDATE ничего не записал, commit только завершает чтение.
-    return _finish(db, redis, ticket_id, changed=claimed is not None)
+    return _finish(db, events, ticket_id, changed=claimed is not None)
 
 
 def _assignee(db: Session, engineer_id: int) -> AppUser:
@@ -257,7 +258,7 @@ def _assignee(db: Session, engineer_id: int) -> AppUser:
 
 
 def assign_ticket(
-    db: Session, redis: Redis, user: AppUser, ticket_id: int, engineer_id: int | None
+    db: Session, events: TicketEvents, user: AppUser, ticket_id: int, engineer_id: int | None
 ) -> TicketCard:
     """PATCH /tickets/{id}/assign (admin): назначение, переназначение, снятие (ADR 0017 п. 5)."""
     ticket = access.for_update(db, user, ticket_id)
@@ -268,7 +269,7 @@ def assign_ticket(
     ticket.status = after_assignment(ticket.status, engineer_id)
     ticket.assigned_engineer_id = engineer_id
     # Подключения WebSocket, потерявшие доступ, закроются 4403 при обработке события.
-    return _finish(db, redis, ticket.id, changed=db.is_modified(ticket))
+    return _finish(db, events, ticket.id, changed=db.is_modified(ticket))
 
 
 # ---------- Чат ----------
@@ -300,6 +301,7 @@ def get_message(db: Session, ticket_id: int, message_id: int) -> TicketMessage |
 def create_message(
     db: Session,
     redis: Redis,
+    events: TicketEvents,
     settings: Settings,
     storage: ObjectStorage,
     user: AppUser,
@@ -344,5 +346,5 @@ def create_message(
                     .execution_options(synchronize_session=False)
                 )
     message = db.get_one(TicketMessage, message.id, options=MESSAGE_OUT, populate_existing=True)
-    events.message_created(redis, message.ticket_id, message.id)
+    events.message_created(message.ticket_id, message.id)
     return message

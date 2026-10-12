@@ -8,68 +8,62 @@
 сбой публикации не отменяет записанное — клиент догружает через `after_id`.
 
 Каналы pub/sub общие для всего сервера Redis (номер БД не учитывается), поэтому имя канала
-начинается с `redis_channel_prefix` (по умолчанию — окружение): стенды и параллельные прогоны
-тестов на одном Redis не получают чужих событий.
+начинается с `redis_channel_prefix` из настроек приложения (по умолчанию — окружение):
+стенды и параллельные прогоны тестов на одном Redis не получают чужих событий.
 """
 
-import json
 import logging
 from dataclasses import dataclass
-from enum import StrEnum
+from typing import Annotated, Literal
 
+from pydantic import BaseModel, Field, StrictInt, TypeAdapter, ValidationError
 from redis import Redis
 from redis.exceptions import RedisError
-
-from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
 
 
-class EventType(StrEnum):
-    MESSAGE_CREATED = "message.created"
-    TICKET_UPDATED = "ticket.updated"
+class MessageCreated(BaseModel, frozen=True):
+    type: Literal["message.created"] = "message.created"
+    ticket_id: StrictInt
+    message_id: StrictInt
+
+
+class TicketUpdated(BaseModel, frozen=True):
+    type: Literal["ticket.updated"] = "ticket.updated"
+    ticket_id: StrictInt
+
+
+TicketEvent = Annotated[MessageCreated | TicketUpdated, Field(discriminator="type")]
+_EVENT: TypeAdapter[TicketEvent] = TypeAdapter(TicketEvent)
 
 
 @dataclass(frozen=True)
-class TicketEvent:
-    type: EventType
-    ticket_id: int
-    message_id: int | None = None
+class TicketEvents:
+    """Публикация событий тикетов; Redis и префикс каналов — из зависимостей приложения."""
+
+    redis: Redis
+    prefix: str
+
+    def channel(self, ticket_id: int) -> str:
+        return f"{self.prefix}:ticket:{ticket_id}"
+
+    def message_created(self, ticket_id: int, message_id: int) -> None:
+        self._publish(MessageCreated(ticket_id=ticket_id, message_id=message_id))
+
+    def ticket_updated(self, ticket_id: int) -> None:
+        self._publish(TicketUpdated(ticket_id=ticket_id))
+
+    def _publish(self, event: MessageCreated | TicketUpdated) -> None:
+        try:
+            self.redis.publish(self.channel(event.ticket_id), event.model_dump_json())
+        except RedisError as exc:
+            logger.warning("Событие тикета не опубликовано: %s", type(exc).__name__)
 
 
-def channel(ticket_id: int) -> str:
-    return f"{get_settings().redis_channel_prefix}:ticket:{ticket_id}"
-
-
-def publish(redis: Redis, event: TicketEvent) -> None:
-    payload = {"type": event.type.value, "ticket_id": event.ticket_id}
-    if event.message_id is not None:
-        payload["message_id"] = event.message_id
-    try:
-        redis.publish(channel(event.ticket_id), json.dumps(payload))
-    except RedisError as exc:
-        logger.warning("Событие тикета не опубликовано: %s", type(exc).__name__)
-
-
-def message_created(redis: Redis, ticket_id: int, message_id: int) -> None:
-    publish(redis, TicketEvent(EventType.MESSAGE_CREATED, ticket_id, message_id))
-
-
-def ticket_updated(redis: Redis, ticket_id: int) -> None:
-    publish(redis, TicketEvent(EventType.TICKET_UPDATED, ticket_id))
-
-
-def parse(raw: str | bytes) -> TicketEvent | None:
+def parse(raw: str | bytes) -> MessageCreated | TicketUpdated | None:
     """Событие из канала; чужой или повреждённый формат — None (пропускается)."""
     try:
-        data = json.loads(raw)
-        event_type = EventType(data["type"])
-        ticket_id = data["ticket_id"]
-        message_id = data.get("message_id")
-    except (ValueError, TypeError, KeyError):
+        return _EVENT.validate_json(raw)
+    except ValidationError:
         return None
-    if not isinstance(ticket_id, int) or not (message_id is None or isinstance(message_id, int)):
-        return None
-    if event_type is EventType.MESSAGE_CREATED and message_id is None:
-        return None
-    return TicketEvent(event_type, ticket_id, message_id)
