@@ -12,22 +12,13 @@
 
 from typing import NamedTuple
 
-from sqlalchemy import (
-    ColumnElement,
-    ScalarSelect,
-    and_,
-    exists,
-    false,
-    null,
-    or_,
-    select,
-    true,
-)
+from sqlalchemy import ColumnElement, ScalarSelect, and_, exists, false, null, select, true
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.base import ExecutableOption
 
-from app.core.db import BIGINT_MAX
+from app.core.db import is_db_id
 from app.core.errors import ApiError, forbidden
+from app.domain.tickets import access as ticket_access
 from app.models import AppUser, Ticket, Vehicle
 from app.models.enums import TicketStatus, UserRole
 
@@ -44,7 +35,7 @@ def not_found() -> ApiError:
 
 
 def _check_id(vehicle_id: int) -> None:
-    if not 1 <= vehicle_id <= BIGINT_MAX:
+    if not is_db_id(vehicle_id):
         raise not_found()  # вне BIGINT такого id нет; без проверки — ошибка драйвера и 500
 
 
@@ -55,9 +46,8 @@ def _visible(user: AppUser) -> ColumnElement[bool]:
     if user.role is UserRole.CLIENT:
         return and_(Vehicle.user_id == user.id, Vehicle.deleted_at.is_(None))
     if user.role is UserRole.ENGINEER:
-        mine = Ticket.assigned_engineer_id == user.id
-        queue = and_(Ticket.assigned_engineer_id.is_(None), Ticket.status == TicketStatus.NEW)
-        return exists().where(Ticket.vehicle_id == Vehicle.id, or_(mine, queue))
+        # Авто, по которому есть видимый инженеру тикет: свой или из очереди.
+        return exists().where(Ticket.vehicle_id == Vehicle.id, ticket_access.visible(user))
     return false()  # неизвестная роль — deny by default
 
 

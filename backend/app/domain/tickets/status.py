@@ -3,7 +3,6 @@
 Чистые функции: без БД, HTTP и системных часов (`now` передаётся параметром).
 """
 
-from dataclasses import dataclass
 from datetime import datetime
 
 from app.models.enums import TicketStatus
@@ -35,30 +34,24 @@ class InvalidTransition(Exception):
         self.target = target
 
 
-@dataclass(frozen=True)
-class StatusChange:
-    status: TicketStatus
-    resolved_at: datetime | None
-
-
 def transition(
     current: TicketStatus,
     target: TicketStatus,
     resolved_at: datetime | None,
     now: datetime,
-) -> StatusChange | None:
-    """Новое состояние после смены статуса; None — запрошен текущий статус (без изменений).
+) -> tuple[TicketStatus, datetime | None]:
+    """(статус, resolved_at) после смены статуса; запрошен текущий — прежняя пара.
 
     resolved_at заполнен тогда и только тогда, когда статус resolved (A-05): решение ставит
     `now`, переоткрытие очищает.
     """
     if target == current:
-        return None
+        return current, resolved_at
     if (current, target) not in TRANSITIONS:
         raise InvalidTransition(current, target)
     if target is RESOLVED:
-        return StatusChange(target, now)
-    return StatusChange(target, None if current is RESOLVED else resolved_at)
+        return target, now
+    return target, None if current is RESOLVED else resolved_at
 
 
 def after_assignment(current: TicketStatus, assignee_id: int | None) -> TicketStatus:

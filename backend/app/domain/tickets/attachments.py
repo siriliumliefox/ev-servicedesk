@@ -4,14 +4,17 @@
 только расширение (имя может содержать ПД и не хранится). Привязка к тикету или сообщению:
 1. `check_uploads` — без блокировок: ключ — среди загрузок текущего пользователя, MIME,
    размер и ETag — из HEAD (со слов S3, а не клиента);
-2. `copy_uploads` — тоже до блокировки строки тикета (сетевой ввод-вывод S3 не держит
-   блокировок БД): копия ровно проверенной версии (ETag) с проверенным MIME в ключ,
-   уникальный для попытки, — `tickets/{ticket_id}/{новый uuid}{расширение}`;
-3. `add_rows` — под блокировкой, в транзакции записи: UNIQUE по имени загрузки
-   (`upload_name`) — одна загрузка становится ровно одним вложением.
-При ошибке транзакция откатывается и копии этой попытки удаляются (`binding`): ключи
-уникальны, поэтому удаление не заденет объект другой транзакции. После commit исходный
-объект удаляется; «сиротские» загрузки удаляет правило жизненного цикла бакета (24 ч).
+2. `bind` — транзакция записи целиком. При входе копирует загрузки — до блокировки строки
+   тикета (сетевой ввод-вывод S3 не держит блокировок БД): копия ровно проверенной версии
+   (ETag) с проверенным MIME в ключ, уникальный для попытки, —
+   `tickets/{ticket_id}/{новый uuid}{расширение}`. Внутри блока сценарий берёт блокировки,
+   пишет тикет или сообщение и вызывает `attach` — строки вложений: UNIQUE по имени загрузки
+   (`upload_name`) — одна загрузка становится ровно одним вложением. Commit выполняет `bind`
+   при выходе из блока (сервисы глав 11–12 делают commit сами — здесь иначе, чтобы порядок
+   «копии → строки → commit → удаление исходников» держала структура, а не договорённость).
+При ошибке транзакция откатывается и копии этой попытки удаляются: ключи уникальны, поэтому
+удаление не заденет объект другой транзакции. После commit исходный объект удаляется;
+«сиротские» загрузки удаляет правило жизненного цикла бакета (24 ч).
 Ключи объектов и имена файлов в логи не пишутся.
 """
 
@@ -33,7 +36,7 @@ from sqlalchemy.orm import Session
 from app.core import rate_limit
 from app.core.config import Settings
 from app.core.errors import ApiError
-from app.core.storage import ObjectChanged, ObjectNotFound, ObjectStorage, StorageError
+from app.core.storage import CopySourceChanged, ObjectStorage, StorageError
 from app.models import AppUser, TicketAttachment
 from app.models.enums import AttachmentType
 
@@ -48,8 +51,6 @@ _UUID = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 _UPLOAD_KEY = re.compile(
     rf"uploads/(?P<user_id>[1-9][0-9]{{0,18}})/(?P<name>{_UUID}(?:\.[a-z0-9]{{1,5}})?)"
 )
-
-Presign = Callable[[TicketAttachment], str]
 
 
 class AttachmentInput(Protocol):
@@ -76,18 +77,6 @@ class Upload:
     mime_type: str
     size_bytes: int
     etag: str
-
-
-def presigner(storage: ObjectStorage, settings: Settings) -> Presign:
-    """file_url вложения при чтении — presigned GET на 15 минут (ADR 0017 п. 10).
-
-    Content-Type ответа — проверенный MIME из БД (входит в подпись), а не метаданные объекта.
-    """
-    return lambda attachment: storage.presign_get(
-        attachment.object_key,
-        settings.presign_get_ttl_seconds,
-        content_type=attachment.mime_type,
-    )
 
 
 def upload_key(user_id: int, file_name: str, file_type: AttachmentType) -> str:
@@ -153,7 +142,7 @@ def check_uploads(
     """Проверка вложений запроса до записи в БД и без блокировок; ошибки — 422 с индексом.
 
     Уже привязанная загрузка отклоняется здесь заранее, без HEAD и копирования; окончательно
-    повторную привязку исключает UNIQUE при вставке (`add_rows`).
+    повторную привязку исключает UNIQUE при вставке (`attach` в `bind`).
     """
     if len(inputs) > settings.max_attachments:
         raise ApiError(
@@ -203,55 +192,85 @@ def check_uploads(
     return uploads
 
 
-@contextmanager
-def binding(db: Session, storage: ObjectStorage) -> Iterator[list[str]]:
-    """Транзакция привязки: при ошибке — откат БД и удаление копий этой попытки.
+# Записывает строки вложений: attach(created_at=…, ticket_message_id=…).
+Attach = Callable[..., None]
 
-    Блок должен завершаться commit; ключи копий накапливаются в отдаваемом списке. Ключи
-    уникальны для попытки, поэтому удаление после отката (блокировки уже сняты) не заденет
-    объект другой транзакции.
+
+@contextmanager
+def bind(
+    db: Session,
+    storage: ObjectStorage,
+    user: AppUser,
+    uploads: Sequence[Upload],
+    *,
+    ticket_id: int,
+) -> Iterator[Attach]:
+    """Транзакция привязки: копии → блок сценария с `attach` → commit → удаление исходников.
+
+    Commit — при нормальном выходе из блока; блок без вызова `attach` при непустых `uploads`
+    — ошибка программы (вложения иначе пропали бы молча). При любой ошибке, в т. ч. в
+    commit, — откат БД и удаление копий этой попытки: ключи уникальны для попытки, поэтому
+    удаление после отката (блокировки уже сняты) не заденет объект другой транзакции.
     """
     copied: list[str] = []
+    attached = False
+
+    def attach(*, created_at: datetime, ticket_message_id: int | None = None) -> None:
+        nonlocal attached
+        pairs = list(zip(uploads, copied, strict=True))
+        _insert_rows(
+            db,
+            user,
+            pairs,
+            ticket_id=ticket_id,
+            created_at=created_at,
+            ticket_message_id=ticket_message_id,
+        )
+        attached = True
+
     try:
-        yield copied
+        _copy_uploads(storage, uploads, copied, ticket_id=ticket_id)
+        yield attach
+        if uploads and not attached:
+            raise RuntimeError("attachments.bind: вложения не записаны (attach не вызван)")
+        db.commit()
     except BaseException:
         db.rollback()
         _delete_quietly(storage, copied)
         raise
+    # После commit: исходные объекты в uploads/ больше не нужны (иначе их удалит lifecycle).
+    _delete_quietly(storage, [u.key for u in uploads])
 
 
-def copy_uploads(
+def _copy_uploads(
     storage: ObjectStorage, uploads: Sequence[Upload], copied: list[str], *, ticket_id: int
-) -> list[str]:
-    """Копирует загрузки в хранилище тикета — до блокировок БД; возвращает ключи копий.
+) -> None:
+    """Копирует загрузки в хранилище тикета — до блокировок БД; ключи копий — в `copied`.
 
-    Копируется ровно проверенная версия (ETag из HEAD) с проверенным MIME: перезаписанная
-    после HEAD загрузка — 422 ATTACHMENT_NOT_FOUND, а не копия непроверенного файла.
+    Копируется ровно проверенная версия (ETag из HEAD) с проверенным MIME: удалённая или
+    перезаписанная после HEAD загрузка — 422 ATTACHMENT_NOT_FOUND, а не копия
+    непроверенного файла.
     """
-    keys: list[str] = []
     for index, upload in enumerate(uploads):
         key = f"tickets/{ticket_id}/{uuid.uuid4()}{PurePosixPath(upload.name).suffix}"
         # До вызова: S3 мог выполнить копирование и ответить ошибкой (таймаут ответа).
         copied.append(key)
         try:
             storage.copy(upload.key, key, etag=upload.etag, content_type=upload.mime_type)
-        except (ObjectNotFound, ObjectChanged):  # удалён или перезаписан после HEAD
+        except CopySourceChanged:
             raise _not_found(index) from None
-        keys.append(key)
-    return keys
 
 
-def add_rows(
+def _insert_rows(
     db: Session,
     user: AppUser,
-    uploads: Sequence[Upload],
-    keys: Sequence[str],
+    pairs: Sequence[tuple[Upload, str]],
     *,
     ticket_id: int,
     created_at: datetime,
-    ticket_message_id: int | None = None,
+    ticket_message_id: int | None,
 ) -> None:
-    """Строки ticket_attachment (без commit); загрузка, уже ставшая вложением, — 422.
+    """Строки ticket_attachment (загрузка, ключ копии), без commit; уже вложение — 422.
 
     created_at — момент записи тикета или сообщения (одно значение у строк одной записи).
 
@@ -260,15 +279,13 @@ def add_rows(
     имён загрузок (один порядок ожиданий во всех транзакциях — без взаимоблокировок), а id
     выдаются заранее в порядке запроса: порядок вложений в ответе — как в запросе.
     """
-    if not uploads:
+    if not pairs:
         return
     sequence = func.pg_get_serial_sequence(TicketAttachment.__tablename__, "id")
-    series = func.generate_series(1, len(uploads))
+    series = func.generate_series(1, len(pairs))
     ids = sorted(db.scalars(select(func.nextval(sequence)).select_from(series)))
-    rows = sorted(
-        zip(range(len(uploads)), ids, uploads, keys, strict=True), key=lambda row: row[2].name
-    )
-    for index, attachment_id, upload, key in rows:
+    rows = sorted(zip(range(len(pairs)), ids, pairs, strict=True), key=lambda row: row[2][0].name)
+    for index, attachment_id, (upload, key) in rows:
         inserted = db.scalar(
             insert(TicketAttachment)
             .values(
@@ -288,11 +305,6 @@ def add_rows(
         )
         if inserted is None:
             raise _already_used(index)
-
-
-def discard_uploads(storage: ObjectStorage, uploads: Sequence[Upload]) -> None:
-    """После commit: исходные объекты в uploads/ больше не нужны (иначе их удалит lifecycle)."""
-    _delete_quietly(storage, [u.key for u in uploads])
 
 
 def _delete_quietly(storage: ObjectStorage, keys: Sequence[str]) -> None:

@@ -14,6 +14,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from redis import Redis
 from sqlalchemy.orm import Session
 
+from app.api.schemas.tickets import Presign
 from app.core.config import Settings, get_settings
 from app.core.db import SessionScope, get_db, get_session_scope
 from app.core.errors import forbidden, unauthorized
@@ -39,6 +40,21 @@ def get_sms_provider(settings: SettingsDep) -> SmsProvider:
 
 
 SmsDep = Annotated[SmsProvider, Depends(get_sms_provider)]
+
+
+def get_presign(storage: StorageDep, settings: SettingsDep) -> Presign:
+    """file_url вложения при чтении — presigned GET на 15 минут (ADR 0017 п. 10).
+
+    Content-Type ответа — проверенный MIME из БД (входит в подпись), а не метаданные объекта.
+    """
+    return lambda attachment: storage.presign_get(
+        attachment.object_key,
+        settings.presign_get_ttl_seconds,
+        content_type=attachment.mime_type,
+    )
+
+
+PresignDep = Annotated[Presign, Depends(get_presign)]
 
 
 def get_vin_decoder() -> VinDecoder:
@@ -69,7 +85,7 @@ def get_current_user(
     except InvalidTokenError as exc:
         raise unauthorized("Недействительный или просроченный токен") from exc
     user = db.get(AppUser, claims.user_id)
-    if user is None or not user.is_active or user.anonymized_at is not None:
+    if user is None or not user.is_available:
         raise unauthorized("Учётная запись недоступна")
     return user
 

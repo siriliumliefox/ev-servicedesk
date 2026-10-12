@@ -29,12 +29,13 @@ from app.core.config import Settings, get_settings
 from app.core.db import get_db, get_session_scope
 from app.core.redis import PubSubHub, get_pubsub_hub, get_redis
 from app.core.security import hash_password
-from app.core.storage import FakeObjectStorage, ObjectStorage, get_storage
+from app.core.storage import ObjectStorage, get_storage
 from app.domain.auth.sms import FakeSmsProvider
 from app.main import create_app
 from app.models import AppUser, PdConsent, Ticket
 from app.models.enums import TicketCategory, TicketStatus, UserRole
 from tests.conftest import _test_redis_url
+from tests.support.storage import FakeObjectStorage
 
 DOCS = Path(__file__).resolve().parents[3] / "docs"
 API = "/v1"

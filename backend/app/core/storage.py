@@ -1,17 +1,14 @@
 """Объектное хранилище вложений: S3 API (ADR 0004, ADR 0017 п. 10–11).
 
 Модуль скрывает boto3: домен работает с ключами объектов, presigned URL и метаданными из HEAD.
-Реализации: S3ObjectStorage (MinIO локально и в CI, провайдер staging/production — глава 26)
-и FakeObjectStorage — в памяти процесса, для unit-тестов. Клиент синхронный, как и сессии
-SQLAlchemy: синхронные маршруты FastAPI выполняются в пуле потоков, клиент boto3 потокобезопасен.
+Реализация — S3ObjectStorage (MinIO локально и в CI, провайдер staging/production — глава 26);
+тестовый двойник в памяти — в tests/. Клиент синхронный, как и сессии SQLAlchemy: синхронные
+маршруты FastAPI выполняются в пуле потоков, клиент boto3 потокобезопасен.
 Ключи доступа и ключи объектов в тексты ошибок и цепочку их причин не попадают.
 """
 
-import hashlib
-import threading
 from functools import lru_cache
 from typing import Any, NamedTuple, Protocol
-from urllib.parse import quote
 
 import boto3
 from botocore.config import Config
@@ -28,12 +25,11 @@ class StorageUnavailable(StorageError):
     """Бакет недоступен: нет связи, неверные ключи или бакета нет."""
 
 
-class ObjectNotFound(StorageError):
-    """Исходного объекта нет (копирование)."""
+class CopySourceChanged(Exception):
+    """Проверенной версии src больше нет (удалён или перезаписан после HEAD) — копии нет.
 
-
-class ObjectChanged(StorageError):
-    """Исходный объект перезаписан после HEAD (ETag другой) — копирование не выполнено."""
+    Не StorageError: причина — действия клиента с загрузкой, а не сбой хранилища.
+    """
 
 
 class ObjectInfo(NamedTuple):
@@ -52,7 +48,7 @@ class ObjectStorage(Protocol):
         """URL для загрузки клиентом (PUT); MIME к подписи не привязан (ADR 0017 п. 10)."""
         ...
 
-    def presign_get(self, key: str, ttl_seconds: int, *, content_type: str | None = None) -> str:
+    def presign_get(self, key: str, ttl_seconds: int, *, content_type: str) -> str:
         """URL для скачивания (GET); публичных ссылок нет (ADR 0004).
 
         content_type — Content-Type ответа по подписи (проверенный MIME), а не сохранённый
@@ -67,8 +63,8 @@ class ObjectStorage(Protocol):
     def copy(self, src: str, dst: str, *, etag: str, content_type: str) -> None:
         """Копия внутри бакета версии `etag` объекта src с MIME `content_type`.
 
-        Нет src — ObjectNotFound; src перезаписан после HEAD — ObjectChanged: между
-        проверкой и копированием клиент мог загрузить в тот же ключ другой файл.
+        Нет src или он перезаписан после HEAD — CopySourceChanged: между проверкой и
+        копированием клиент мог удалить загрузку или загрузить в тот же ключ другой файл.
         """
         ...
 
@@ -93,6 +89,11 @@ _BOTO_CONFIG = Config(
     request_checksum_calculation="when_required",
     response_checksum_validation="when_required",
 )
+
+
+class _Missing(StorageError):
+    """Ответ 404 на операцию с объектом: HEAD переводит его в None, копирование — в
+    CopySourceChanged; у удаления (S3 отвечает 204) — обычная ошибка хранилища."""
 
 
 def _http_status(exc: ClientError) -> int | None:
@@ -156,10 +157,9 @@ class S3ObjectStorage:
     def presign_put(self, key: str, ttl_seconds: int) -> str:
         return self._presign("put_object", key, ttl_seconds)
 
-    def presign_get(self, key: str, ttl_seconds: int, *, content_type: str | None = None) -> str:
+    def presign_get(self, key: str, ttl_seconds: int, *, content_type: str) -> str:
         # response-content-type входит в подпись: заменить его в URL нельзя.
-        params = {"ResponseContentType": content_type} if content_type else {}
-        return self._presign("get_object", key, ttl_seconds, **params)
+        return self._presign("get_object", key, ttl_seconds, ResponseContentType=content_type)
 
     def _call(self, operation: str, **params: Any) -> dict[str, Any]:
         # Исключения boto3 — `from None`: в их тексте URL запроса с ключом объекта, а цепочка
@@ -172,9 +172,9 @@ class S3ObjectStorage:
             # У HEAD нет тела ответа: «нет объекта» и «нет бакета» различимы только по коду
             # ошибки других операций; бакет проверяется при старте (check_bucket).
             if _http_status(exc) == 404:
-                raise ObjectNotFound(f"S3 {operation}: объект не найден") from None
+                raise _Missing(f"S3 {operation}: объект не найден") from None
             if _http_status(exc) == 412:  # CopySourceIfMatch не выполнен
-                raise ObjectChanged(f"S3 {operation}: объект изменён") from None
+                raise CopySourceChanged(f"S3 {operation}: объект изменён") from None
             raise StorageError(f"S3 {operation}: {_describe(exc)}") from None
         except BotoCoreError as exc:
             raise StorageUnavailable(f"S3 {operation}: {_describe(exc)}") from None
@@ -184,7 +184,7 @@ class S3ObjectStorage:
         # ключам backend это право нужно (глава 26).
         try:
             response = self._call("head_object", Key=key)
-        except ObjectNotFound:
+        except _Missing:
             return None
         return ObjectInfo(
             size=int(response["ContentLength"]),
@@ -193,16 +193,19 @@ class S3ObjectStorage:
         )
 
     def copy(self, src: str, dst: str, *, etag: str, content_type: str) -> None:
-        # CopySourceIfMatch: S3 копирует только версию с этим ETag, иначе 412 (ObjectChanged).
+        # CopySourceIfMatch: S3 копирует только версию с этим ETag, иначе 412.
         # MetadataDirective=REPLACE: MIME копии — проверенный, а не тот, что прислал клиент.
-        self._call(
-            "copy_object",
-            Key=dst,
-            CopySource={"Bucket": self.bucket, "Key": src},
-            CopySourceIfMatch=etag,
-            MetadataDirective="REPLACE",
-            ContentType=content_type,
-        )
+        try:
+            self._call(
+                "copy_object",
+                Key=dst,
+                CopySource={"Bucket": self.bucket, "Key": src},
+                CopySourceIfMatch=etag,
+                MetadataDirective="REPLACE",
+                ContentType=content_type,
+            )
+        except _Missing:
+            raise CopySourceChanged("S3 copy_object: объект не найден") from None
 
     def delete(self, key: str) -> None:
         self._call("delete_object", Key=key)
@@ -217,75 +220,11 @@ class S3ObjectStorage:
             ) from None
 
 
-class FakeObjectStorage:
-    """Хранилище в памяти процесса — для unit-тестов домена и API.
-
-    Загрузку клиентом по presigned PUT имитирует put(); available=False — хранилище «упало»:
-    HEAD, копирование, удаление и проверка бакета отвечают StorageUnavailable. ETag — MD5
-    содержимого в кавычках, как у S3 для загрузки одним PUT.
-    """
-
-    BASE_URL = "http://fake-storage.invalid/bucket"
-
-    def __init__(self, *, available: bool = True) -> None:
-        self._lock = threading.Lock()
-        self.objects: dict[str, tuple[bytes, str]] = {}
-        self.available = available
-
-    def put(self, key: str, data: bytes, content_type: str) -> None:
-        with self._lock:
-            self.objects[key] = (data, content_type)
-
-    def _ensure_available(self) -> None:
-        if not self.available:
-            raise StorageUnavailable("Фейковое хранилище недоступно")
-
-    def _url(self, method: str, key: str, ttl_seconds: int) -> str:
-        return f"{self.BASE_URL}/{quote(key)}?X-Fake-Method={method}&X-Fake-Expires={ttl_seconds}"
-
-    def presign_put(self, key: str, ttl_seconds: int) -> str:
-        return self._url("PUT", key, ttl_seconds)
-
-    def presign_get(self, key: str, ttl_seconds: int, *, content_type: str | None = None) -> str:
-        url = self._url("GET", key, ttl_seconds)
-        return f"{url}&X-Fake-Content-Type={quote(content_type, safe='')}" if content_type else url
-
-    @staticmethod
-    def etag(data: bytes) -> str:
-        return f'"{hashlib.md5(data, usedforsecurity=False).hexdigest()}"'
-
-    def head(self, key: str) -> ObjectInfo | None:
-        self._ensure_available()
-        with self._lock:
-            stored = self.objects.get(key)
-        if stored is None:
-            return None
-        return ObjectInfo(len(stored[0]), stored[1], self.etag(stored[0]))
-
-    def copy(self, src: str, dst: str, *, etag: str, content_type: str) -> None:
-        self._ensure_available()
-        with self._lock:
-            if src not in self.objects:
-                raise ObjectNotFound("Фейковое хранилище: объект не найден")
-            data = self.objects[src][0]
-            if self.etag(data) != etag:
-                raise ObjectChanged("Фейковое хранилище: объект изменён")
-            self.objects[dst] = (data, content_type)
-
-    def delete(self, key: str) -> None:
-        self._ensure_available()
-        with self._lock:
-            self.objects.pop(key, None)
-
-    def check_bucket(self) -> None:
-        self._ensure_available()
-
-
 @lru_cache
 def _s3_storage() -> S3ObjectStorage:
     return S3ObjectStorage.from_settings(get_settings())
 
 
 def get_storage() -> ObjectStorage:
-    """Зависимость FastAPI; в тестах подменяется (FakeObjectStorage или MinIO)."""
+    """Зависимость FastAPI; в тестах подменяется (хранилище в памяти или MinIO)."""
     return _s3_storage()

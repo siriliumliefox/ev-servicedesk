@@ -8,7 +8,6 @@ import pytest
 from app.domain.tickets.status import (
     TRANSITIONS,
     InvalidTransition,
-    StatusChange,
     after_assignment,
     transition,
 )
@@ -37,7 +36,7 @@ def test_graph_is_exactly_adr_0017():
 @pytest.mark.parametrize("current", list(TicketStatus))
 def test_same_status_is_noop(current):
     resolved_at = EARLIER if current is RESOLVED else None
-    assert transition(current, current, resolved_at, NOW) is None
+    assert transition(current, current, resolved_at, NOW) == (current, resolved_at)
 
 
 @pytest.mark.parametrize(
@@ -57,16 +56,16 @@ def test_new_to_in_progress_only_via_claim_or_assign():
 
 @pytest.mark.parametrize("current", [IN_PROGRESS, WAITING])
 def test_resolve_sets_resolved_at(current):
-    assert transition(current, RESOLVED, None, NOW) == StatusChange(RESOLVED, NOW)
+    assert transition(current, RESOLVED, None, NOW) == (RESOLVED, NOW)
 
 
 def test_reopen_clears_resolved_at():
-    assert transition(RESOLVED, IN_PROGRESS, EARLIER, NOW) == StatusChange(IN_PROGRESS, None)
+    assert transition(RESOLVED, IN_PROGRESS, EARLIER, NOW) == (IN_PROGRESS, None)
 
 
 def test_waiting_vendor_round_trip_keeps_resolved_at_empty():
-    assert transition(IN_PROGRESS, WAITING, None, NOW) == StatusChange(WAITING, None)
-    assert transition(WAITING, IN_PROGRESS, None, NOW) == StatusChange(IN_PROGRESS, None)
+    assert transition(IN_PROGRESS, WAITING, None, NOW) == (WAITING, None)
+    assert transition(WAITING, IN_PROGRESS, None, NOW) == (IN_PROGRESS, None)
 
 
 @pytest.mark.parametrize(

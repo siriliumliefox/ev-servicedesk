@@ -405,7 +405,7 @@ def test_second_binding_of_upload_waits_for_first(
     attachments_in = [{"file_url": file_url, "file_type": "photo"}]
 
     inserted, release = threading.Event(), threading.Event()
-    original = attachments.add_rows
+    original = attachments._insert_rows
 
     def paused_add_rows(*args: Any, **kwargs: Any) -> None:
         original(*args, **kwargs)
@@ -415,7 +415,7 @@ def test_second_binding_of_upload_waits_for_first(
             if not first_commits:
                 raise access.ticket_resolved()  # отказ после вставки: откат транзакции
 
-    monkeypatch.setattr(attachments, "add_rows", paused_add_rows)
+    monkeypatch.setattr(attachments, "_insert_rows", paused_add_rows)
     outcome: dict[int, httpx.Response] = {}
 
     def send(ticket_id: int) -> None:
@@ -466,13 +466,13 @@ def test_reversed_attachment_lists_do_not_deadlock(
     tickets = [open_ticket(db, owner.vehicle_id) for _ in range(2)]
     x, y = upload(client, owner.headers), upload(client, owner.headers)
     barrier = threading.Barrier(2, timeout=5)
-    original = attachments.add_rows
+    original = attachments._insert_rows
 
     def together(*args: Any, **kwargs: Any) -> None:
         barrier.wait()
         original(*args, **kwargs)
 
-    monkeypatch.setattr(attachments, "add_rows", together)
+    monkeypatch.setattr(attachments, "_insert_rows", together)
     jobs = iter(zip(tickets, ([x, y], [y, x]), strict=True))
 
     def send() -> httpx.Response:
@@ -554,14 +554,14 @@ def test_vehicle_deleted_before_ticket_write_is_404(
 ):
     """Авто удалено, пока создание работало с S3 (до записи) — 404, тикета нет."""
     copying, release = threading.Event(), threading.Event()
-    original = attachments.copy_uploads
+    original = attachments._copy_uploads
 
-    def paused_copy_uploads(*args: Any, **kwargs: Any) -> list[str]:
+    def paused_copy_uploads(*args: Any, **kwargs: Any) -> None:
         copying.set()
         release.wait(5)
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(attachments, "copy_uploads", paused_copy_uploads)
+    monkeypatch.setattr(attachments, "_copy_uploads", paused_copy_uploads)
     outcome: dict[str, httpx.Response] = {}
     creator = threading.Thread(target=lambda: outcome.update(create=create_ticket(http, owner)))
     creator.start()

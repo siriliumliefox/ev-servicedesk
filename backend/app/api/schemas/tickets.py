@@ -7,6 +7,7 @@
 """
 
 import re
+from collections.abc import Callable
 from datetime import datetime
 from typing import Annotated
 
@@ -18,9 +19,8 @@ from app.api.schemas.auth import UserPublic
 from app.api.schemas.vehicles import VehicleModelInfo, VehicleOut
 from app.core.db import BIGINT_MAX
 from app.domain.tickets import access
-from app.domain.tickets.attachments import Presign
-from app.domain.tickets.service import TicketCard
-from app.models import AppUser, Ticket, TicketAttachment, TicketMessage
+from app.domain.tickets.card import TicketCard
+from app.models import AppUser, TicketAttachment, TicketMessage
 from app.models.enums import AttachmentType, TicketCategory, TicketStatus
 
 TEXT_MAX_LENGTH = 4000  # description и body: после обрезки пробелов (ADR 0017 п. 7–8, 13)
@@ -131,19 +131,18 @@ class TicketMessageList(BaseModel):
 
 # ---------- Сборка ответов для получателя ----------
 
+# file_url вложения при чтении: presigned GET (зависимость `PresignDep`, ADR 0017 п. 10).
+Presign = Callable[[TicketAttachment], str]
+
 
 def _attachments(items: list[TicketAttachment], presign: Presign) -> list[TicketAttachmentOut]:
     return [TicketAttachmentOut(file_url=presign(a), file_type=a.file_type) for a in items]
 
 
-def ticket_out(ticket: Ticket) -> TicketOut:
-    return TicketOut.model_validate(ticket)
-
-
 def ticket_detail_out(card: TicketCard, presign: Presign) -> TicketDetailOut:
     ticket = card.ticket
     return TicketDetailOut(
-        **dict(ticket_out(ticket)),
+        **dict(TicketOut.model_validate(ticket)),
         description=ticket.description,
         firmware_version_at_creation=ticket.firmware_version_at_creation,
         attachments=_attachments(ticket.attachments, presign),

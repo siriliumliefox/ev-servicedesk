@@ -26,7 +26,8 @@ from sqlalchemy.pool import NullPool
 from alembic import command
 from alembic.config import Config
 from app.core.config import DEFAULT_S3_ACCESS_KEY, DEFAULT_S3_SECRET_KEY, settings
-from app.core.storage import FakeObjectStorage, S3ObjectStorage
+from app.core.storage import S3ObjectStorage
+from tests.support.storage import FakeObjectStorage
 
 BACKEND = Path(__file__).resolve().parents[1]
 

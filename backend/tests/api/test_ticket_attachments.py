@@ -16,10 +16,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.core.storage import FakeObjectStorage, S3ObjectStorage, StorageUnavailable, get_storage
+from app.core.storage import S3ObjectStorage, StorageUnavailable, get_storage
 from app.models import Ticket, TicketAttachment, TicketMessage
 from app.models.enums import UserRole
 from tests.api.conftest import API, add_vehicle, api_settings, assert_contract
+from tests.support.storage import FakeObjectStorage
 
 Headers = dict[str, str]
 JPEG = b"\xff\xd8\xff\xe0" + b"0" * 64

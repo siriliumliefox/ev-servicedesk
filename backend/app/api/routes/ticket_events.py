@@ -35,8 +35,8 @@ from redis.exceptions import RedisError
 from sqlalchemy.exc import SQLAlchemyError
 from starlette.concurrency import run_in_threadpool
 
-from app.api.deps import RedisDep, SessionScopeDep, SettingsDep, StorageDep
-from app.api.schemas.tickets import message_out, ticket_out
+from app.api.deps import RedisDep, SessionScopeDep, SettingsDep, StorageDep, get_presign
+from app.api.schemas.tickets import Presign, TicketOut, message_out
 from app.core import rate_limit
 from app.core.config import Settings
 from app.core.db import SessionScope
@@ -45,7 +45,6 @@ from app.core.redis import Listener, PubSubHub, SlowSubscriberError, get_pubsub_
 from app.core.security import AccessClaims, InvalidTokenError, decode_access_token
 from app.core.storage import ObjectStorage
 from app.domain.tickets import access, events, service
-from app.domain.tickets.attachments import Presign, presigner
 from app.domain.tickets.events import EventType, TicketEvent
 
 logger = logging.getLogger(__name__)
@@ -169,7 +168,7 @@ def _render(
                 ticket = access.get_ticket(db, user, event.ticket_id, *service.TICKET_OUT)
             except ApiError:
                 return CLOSE_FORBIDDEN
-            data = ticket_out(ticket)
+            data = TicketOut.model_validate(ticket)
         else:
             if not access.is_visible(db, user, event.ticket_id):
                 return CLOSE_FORBIDDEN
@@ -315,7 +314,7 @@ async def _serve(
             logger.error("Подписка на события тикета не удалась", exc_info=True)
             return CLOSE_INTERNAL
         try:
-            presign = presigner(storage, settings)
+            presign = get_presign(storage, settings)
             return await _relay(websocket, listener, scope, claims, ticket_id, presign)
         finally:
             hub.unsubscribe(listener)

@@ -21,7 +21,6 @@ import json
 import logging
 import re
 import time
-import urllib.request
 import uuid
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
@@ -46,13 +45,7 @@ from app.api.pagination import PAGE_MAX, PAGE_SIZE_MAX
 from app.core import storage as storage_module
 from app.core.config import Settings
 from app.core.security import create_access_token
-from app.core.storage import (
-    FakeObjectStorage,
-    ObjectStorage,
-    S3ObjectStorage,
-    StorageUnavailable,
-    get_storage,
-)
+from app.core.storage import ObjectStorage, S3ObjectStorage, StorageUnavailable, get_storage
 from app.domain.tickets import events
 from app.models import AppUser, TicketAttachment
 from app.models.enums import UserRole
@@ -76,6 +69,7 @@ from tests.api.test_ticket_events import (
     receive,
     receive_event,
 )
+from tests.support.storage import FakeObjectStorage, put_object
 
 Headers = dict[str, str]
 
@@ -797,19 +791,6 @@ def attachment_storage(request, app: FastAPI, storage: ObjectStorage) -> ObjectS
     return s3
 
 
-def put_object(storage: ObjectStorage, upload: dict, data: bytes, mime: str) -> None:
-    """Загрузка клиентом по presigned PUT."""
-    if isinstance(storage, FakeObjectStorage):
-        storage.put(upload["file_url"], data, mime)
-        return
-    # urllib, а не httpx: httpx сам пишет URL запроса (с ключом) в лог — это лог теста.
-    request = urllib.request.Request(
-        upload["upload_url"], data=data, method="PUT", headers={"Content-Type": mime}
-    )
-    with urllib.request.urlopen(request, timeout=10) as response:
-        assert response.status == 200
-
-
 def test_logs_have_no_texts_file_names_or_object_keys(
     client, world, attachment_storage, db, caplog
 ):
@@ -819,7 +800,7 @@ def test_logs_have_no_texts_file_names_or_object_keys(
     def attach(actor: str) -> dict[str, str]:
         file_name, file_type, mime, data = SECRET_FILES[actor]
         upload = presigned_upload(client, world.headers(actor), file_name, file_type)
-        put_object(attachment_storage, upload, data, mime)
+        put_object(attachment_storage, upload["file_url"], data, mime, upload["upload_url"])
         uploaded.append(upload["file_url"])
         return {"file_url": upload["file_url"], "file_type": file_type}
 

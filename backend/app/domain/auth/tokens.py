@@ -82,7 +82,7 @@ def rotate(db: Session, refresh_token: str, settings: Settings) -> TokenPair:
         raise unauthorized("Refresh-токен истёк")
 
     user = db.get(AppUser, row.user_id)
-    if user is None or not user.is_active or user.anonymized_at is not None:
+    if user is None or not user.is_available:
         raise unauthorized("Учётная запись недоступна")
 
     row.revoked_at = now

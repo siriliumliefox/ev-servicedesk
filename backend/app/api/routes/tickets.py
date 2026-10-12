@@ -11,6 +11,7 @@ from app.api.deps import (
     ALL_ROLES,
     CurrentUser,
     DbDep,
+    PresignDep,
     RedisDep,
     SettingsDep,
     StorageDep,
@@ -25,14 +26,13 @@ from app.api.schemas.tickets import (
     TicketMessageCreateRequest,
     TicketMessageList,
     TicketMessageOut,
+    TicketOut,
     TicketStatusUpdateRequest,
     message_out,
     ticket_detail_out,
-    ticket_out,
 )
 from app.core.db import BIGINT_MAX
 from app.domain.tickets import service
-from app.domain.tickets.attachments import presigner
 from app.models.enums import TicketCategory, TicketStatus, UserRole
 
 router = APIRouter(tags=["Tickets"])
@@ -62,7 +62,7 @@ def list_tickets(
         overdue=overdue,
     )
     items, meta = paginate(db, stmt, page)
-    return TicketList(items=[ticket_out(t) for t in items], meta=meta)
+    return TicketList(items=[TicketOut.model_validate(t) for t in items], meta=meta)
 
 
 @router.post(
@@ -78,6 +78,7 @@ def create_ticket(
     redis: RedisDep,
     settings: SettingsDep,
     storage: StorageDep,
+    presign: PresignDep,
 ) -> TicketDetailOut:
     card = service.create_ticket(
         db,
@@ -92,7 +93,7 @@ def create_ticket(
         source_node_id=body.source_node_id,
         attachment_inputs=body.attachments,
     )
-    return ticket_detail_out(card, presigner(storage, settings))
+    return ticket_detail_out(card, presign)
 
 
 @router.get("/tickets/{ticketId}", operation_id="getTicket", **rbac(*ALL_ROLES))
@@ -100,11 +101,10 @@ def get_ticket(
     ticket_id: TicketId,
     user: CurrentUser,
     db: DbDep,
-    settings: SettingsDep,
-    storage: StorageDep,
+    presign: PresignDep,
 ) -> TicketDetailOut:
     card = service.get_ticket(db, user, ticket_id)
-    return ticket_detail_out(card, presigner(storage, settings))
+    return ticket_detail_out(card, presign)
 
 
 @router.patch("/tickets/{ticketId}/status", operation_id="updateTicketStatus", **rbac(*STAFF))
@@ -114,11 +114,10 @@ def update_ticket_status(
     user: CurrentUser,
     db: DbDep,
     redis: RedisDep,
-    settings: SettingsDep,
-    storage: StorageDep,
+    presign: PresignDep,
 ) -> TicketDetailOut:
     card = service.change_status(db, redis, user, ticket_id, body.status)
-    return ticket_detail_out(card, presigner(storage, settings))
+    return ticket_detail_out(card, presign)
 
 
 @router.post("/tickets/{ticketId}/claim", operation_id="claimTicket", **rbac(UserRole.ENGINEER))
@@ -127,11 +126,10 @@ def claim_ticket(
     user: CurrentUser,
     db: DbDep,
     redis: RedisDep,
-    settings: SettingsDep,
-    storage: StorageDep,
+    presign: PresignDep,
 ) -> TicketDetailOut:
     card = service.claim_ticket(db, redis, user, ticket_id)
-    return ticket_detail_out(card, presigner(storage, settings))
+    return ticket_detail_out(card, presign)
 
 
 @router.patch("/tickets/{ticketId}/assign", operation_id="assignTicket", **rbac(UserRole.ADMIN))
@@ -141,11 +139,10 @@ def assign_ticket(
     user: CurrentUser,
     db: DbDep,
     redis: RedisDep,
-    settings: SettingsDep,
-    storage: StorageDep,
+    presign: PresignDep,
 ) -> TicketDetailOut:
     card = service.assign_ticket(db, redis, user, ticket_id, body.assigned_engineer_id)
-    return ticket_detail_out(card, presigner(storage, settings))
+    return ticket_detail_out(card, presign)
 
 
 @router.get("/tickets/{ticketId}/messages", operation_id="listTicketMessages", **rbac(*ALL_ROLES))
@@ -154,12 +151,10 @@ def list_ticket_messages(
     user: CurrentUser,
     db: DbDep,
     page: PageDep,
-    settings: SettingsDep,
-    storage: StorageDep,
+    presign: PresignDep,
     after_id: Annotated[int | None, Query(ge=0, le=BIGINT_MAX)] = None,
 ) -> TicketMessageList:
     items, meta = paginate(db, service.list_messages_stmt(db, user, ticket_id, after_id), page)
-    presign = presigner(storage, settings)
     return TicketMessageList(items=[message_out(m, user, presign) for m in items], meta=meta)
 
 
@@ -177,6 +172,7 @@ def create_ticket_message(
     redis: RedisDep,
     settings: SettingsDep,
     storage: StorageDep,
+    presign: PresignDep,
 ) -> TicketMessageOut:
     message = service.create_message(
         db,
@@ -188,4 +184,4 @@ def create_ticket_message(
         body=body.body,
         attachment_inputs=body.attachments,
     )
-    return message_out(message, user, presigner(storage, settings))
+    return message_out(message, user, presign)

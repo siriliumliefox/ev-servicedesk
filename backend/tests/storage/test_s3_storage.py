@@ -1,7 +1,8 @@
 """S3ObjectStorage на настоящем S3 API — MinIO (Глава 13, ADR 0004, ADR 0017 п. 10–11).
 
 Путь вложения: presigned PUT → загрузка клиентом → HEAD (размер и MIME — со слов S3) →
-копия в хранилище тикета → presigned GET → те же байты.
+копия в хранилище тикета → presigned GET → те же байты. Общий с хранилищем в памяти
+контракт — test_object_storage_contract.py; здесь — только особенности S3.
 """
 
 import uuid
@@ -10,13 +11,7 @@ from urllib.parse import urlsplit, urlunsplit
 import httpx
 import pytest
 
-from app.core.storage import (
-    ObjectChanged,
-    ObjectInfo,
-    ObjectNotFound,
-    S3ObjectStorage,
-    StorageUnavailable,
-)
+from app.core.storage import CopySourceChanged, ObjectInfo, S3ObjectStorage, StorageUnavailable
 
 TTL = 15 * 60
 PHOTO = b"\xff\xd8\xff\xe0" + bytes(range(256)) * 64  # «JPEG» 16 КБ
@@ -41,7 +36,7 @@ def test_presigned_upload_head_copy_download(s3_storage: S3ObjectStorage) -> Non
     s3_storage.copy(upload, attachment, etag=info.etag, content_type="image/jpeg")
     assert s3_storage.head(attachment) == ObjectInfo(len(PHOTO), "image/jpeg", info.etag)
 
-    r = httpx.get(s3_storage.presign_get(attachment, TTL))
+    r = httpx.get(s3_storage.presign_get(attachment, TTL, content_type="image/jpeg"))
     assert r.status_code == 200
     assert r.content == PHOTO
     assert r.headers["content-type"] == "image/jpeg"
@@ -61,7 +56,7 @@ def test_copy_pins_checked_version_and_mime(s3_storage: S3ObjectStorage) -> None
     html = b"<html><script>alert(1)</script></html>" * 100
     assert httpx.put(url, content=html, headers={"Content-Type": "text/html"}).is_success
     swapped = _key("tickets/7")
-    with pytest.raises(ObjectChanged) as exc_info:
+    with pytest.raises(CopySourceChanged) as exc_info:
         s3_storage.copy(upload, swapped, etag=checked.etag, content_type="image/jpeg")
     assert exc_info.value.__cause__ is None and exc_info.value.__suppress_context__
     assert s3_storage.head(swapped) is None
@@ -84,27 +79,16 @@ def test_mime_is_not_bound_to_signature(s3_storage: S3ObjectStorage) -> None:
     assert info is not None and (info.size, info.content_type) == (5, "video/quicktime")
 
 
-def test_head_missing_object_is_none(s3_storage: S3ObjectStorage) -> None:
-    assert s3_storage.head(_key("uploads/1")) is None
-
-
 def test_copy_missing_object_raises(s3_storage: S3ObjectStorage) -> None:
-    with pytest.raises(ObjectNotFound) as exc_info:
+    with pytest.raises(CopySourceChanged) as exc_info:
         s3_storage.copy(_key("uploads/1"), _key("tickets/1"), etag='"0"', content_type="image/jpeg")
     # Причина (ClientError с ключом объекта в тексте) не попадает в трассировку журнала.
     assert exc_info.value.__cause__ is None and exc_info.value.__suppress_context__
 
 
-def test_delete_removes_object_and_is_idempotent(s3_storage: S3ObjectStorage) -> None:
-    key = _key("uploads/1")
-    assert httpx.put(s3_storage.presign_put(key, TTL), content=b"x").is_success
-    s3_storage.delete(key)
-    assert s3_storage.head(key) is None
-    s3_storage.delete(key)
-
-
 def test_presigned_get_of_missing_object_is_404(s3_storage: S3ObjectStorage) -> None:
-    assert httpx.get(s3_storage.presign_get(_key("tickets/1"), TTL)).status_code == 404
+    url = s3_storage.presign_get(_key("tickets/1"), TTL, content_type="image/jpeg")
+    assert httpx.get(url).status_code == 404
 
 
 def test_tampered_presigned_url_is_rejected(s3_storage: S3ObjectStorage) -> None:
@@ -138,7 +122,7 @@ def test_presigned_urls_are_signed_for_public_endpoint(
     assert httpx.put(url, content=b"x").is_success
     info = storage.head(key)  # HEAD — по внутреннему адресу
     assert info is not None and info.size == 1
-    assert httpx.get(storage.presign_get(key, TTL)).content == b"x"
+    assert httpx.get(storage.presign_get(key, TTL, content_type="image/jpeg")).content == b"x"
 
     # Тот же URL с внутренним хостом не принимается: подпись привязана к хосту.
     internal_url = url.replace(urlsplit(public).netloc, urlsplit(s3_config["endpoint"]).netloc, 1)

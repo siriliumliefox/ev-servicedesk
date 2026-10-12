@@ -15,7 +15,7 @@ from sqlalchemy import ColumnElement, and_, false, or_, select, true
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.base import ExecutableOption
 
-from app.core.db import BIGINT_MAX
+from app.core.db import is_db_id
 from app.core.errors import ApiError, forbidden
 from app.models import AppUser, Ticket, Vehicle
 from app.models.enums import TicketStatus, UserRole
@@ -31,9 +31,9 @@ def ticket_resolved() -> ApiError:
     )
 
 
-def in_range(ticket_id: int) -> bool:
-    """Вне BIGINT такого id нет; без проверки — ошибка драйвера и 500 вместо 404."""
-    return 1 <= ticket_id <= BIGINT_MAX
+def in_queue() -> ColumnElement[bool]:
+    """Условие на `Ticket`: тикет в очереди — `new` без исполнителя (ADR 0017 п. 5)."""
+    return and_(Ticket.assigned_engineer_id.is_(None), Ticket.status == TicketStatus.NEW)
 
 
 def visible(user: AppUser) -> ColumnElement[bool]:
@@ -44,25 +44,34 @@ def visible(user: AppUser) -> ColumnElement[bool]:
         own = select(Vehicle.id).where(Vehicle.user_id == user.id, Vehicle.deleted_at.is_(None))
         return Ticket.vehicle_id.in_(own)
     if user.role is UserRole.ENGINEER:
-        queue = and_(Ticket.assigned_engineer_id.is_(None), Ticket.status == TicketStatus.NEW)
-        return or_(Ticket.assigned_engineer_id == user.id, queue)
+        return or_(Ticket.assigned_engineer_id == user.id, in_queue())
     return false()  # неизвестная роль — deny by default
 
 
-def get_ticket(db: Session, user: AppUser, ticket_id: int, *options: ExecutableOption) -> Ticket:
-    """Тикет, видимый `user`, иначе 404. `options` — загрузка связей для ответа.
+def find(
+    db: Session, user: AppUser, ticket_id: int, *options: ExecutableOption, lock: bool = False
+) -> Ticket | None:
+    """Тикет, видимый `user`, или None. `options` — связи для ответа; lock — FOR UPDATE.
 
     populate_existing: claim и первичный ответ меняют строку UPDATE-ом в обход ORM — объект
     из identity map сессии не должен отдавать прежнее состояние.
     """
-    if not in_range(ticket_id):
-        raise not_found()
-    ticket = db.scalars(
+    if not is_db_id(ticket_id):
+        return None
+    stmt = (
         select(Ticket)
         .where(Ticket.id == ticket_id, visible(user))
         .options(*options)
         .execution_options(populate_existing=True)
-    ).one_or_none()
+    )
+    if lock:
+        stmt = stmt.with_for_update(of=Ticket)
+    return db.scalars(stmt).one_or_none()
+
+
+def get_ticket(db: Session, user: AppUser, ticket_id: int, *options: ExecutableOption) -> Ticket:
+    """Тикет, видимый `user`, иначе 404. `options` — загрузка связей для ответа."""
+    ticket = find(db, user, ticket_id, *options)
     if ticket is None:
         raise not_found()
     return ticket
@@ -74,14 +83,7 @@ def for_update(db: Session, user: AppUser, ticket_id: int) -> Ticket:
     Блокировка упорядочивает сообщения со сменой статуса: «решён» не проскочит между
     проверкой и вставкой сообщения.
     """
-    if not in_range(ticket_id):
-        raise not_found()
-    ticket = db.scalars(
-        select(Ticket)
-        .where(Ticket.id == ticket_id, visible(user))
-        .with_for_update(of=Ticket)
-        .execution_options(populate_existing=True)
-    ).one_or_none()
+    ticket = find(db, user, ticket_id, lock=True)
     if ticket is None:
         raise not_found()
     return ticket
@@ -89,7 +91,7 @@ def for_update(db: Session, user: AppUser, ticket_id: int) -> Ticket:
 
 def is_visible(db: Session, user: AppUser, ticket_id: int) -> bool:
     """Для WebSocket: доступ при подключении и повторная проверка на каждом событии."""
-    if not in_range(ticket_id):
+    if not is_db_id(ticket_id):
         return False
     return db.scalar(select(Ticket.id).where(Ticket.id == ticket_id, visible(user))) is not None
 
@@ -116,6 +118,4 @@ def hides_staff_contacts(viewer: AppUser, author: AppUser) -> bool:
 def active_user(db: Session, user_id: int) -> AppUser | None:
     """Пользователь токена — как в `get_current_user`: роль и активность из БД."""
     user = db.get(AppUser, user_id, populate_existing=True)
-    if user is None or not user.is_active or user.anonymized_at is not None:
-        return None
-    return user
+    return user if user is not None and user.is_available else None

@@ -7,14 +7,9 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from app.core.config import DEFAULT_S3_ACCESS_KEY, DEFAULT_S3_SECRET_KEY, Settings
-from app.core.storage import (
-    FakeObjectStorage,
-    ObjectStorage,
-    S3ObjectStorage,
-    StorageUnavailable,
-    get_storage,
-)
+from app.core.storage import ObjectStorage, S3ObjectStorage, StorageUnavailable, get_storage
 from app.main import create_app
+from tests.support.storage import FakeObjectStorage
 
 STRONG = "z" * 40
 S3_REAL = {"s3_access_key": "staging-access-key", "s3_secret_key": "staging-secret-" + "k" * 24}

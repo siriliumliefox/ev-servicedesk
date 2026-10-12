@@ -14,9 +14,9 @@ from redis import Redis
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core import rate_limit
 from app.core.config import get_settings
 from app.core.errors import ApiError
-from app.domain.tickets import service
 from app.models import (
     AppUser,
     DecisionTreeNode,
@@ -343,7 +343,7 @@ def test_rejected_attempt_is_returned_to_window(real_redis: Redis):
     """
 
     def counted() -> AbstractContextManager[None]:
-        return service._counted(real_redis, "ticket-create:test-429", 3600, 2, "Лимит")
+        return rate_limit.reserve(real_redis, "ticket-create:test-429", 3600, 2, "Лимит")
 
     with counted():
         pass
