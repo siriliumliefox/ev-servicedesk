@@ -31,15 +31,17 @@ E2E на Detox/Appium и тест на соединении 2G; DoD — «соб
 - **Конфигурация:** только HTTP / прототип без `API_BASE_URL`, HTTP — с ним.
 
 ## Решение
-1. **Платформы (Q1).** Добавлена платформа Android (`com.etsavtogomel.evServicedesk`, minSdk 23).
+1. **Платформы (Q1).** Добавлена платформа Android (`com.etsavtogomel.evServicedesk`, minSdk — по умолчанию Flutter, не ниже 23 для `flutter_secure_storage`).
    CI собирает `flutter build apk --debug` (ubuntu) и `flutter build ios --no-codesign`
    (macos-latest) при изменениях `mobile/`. Реальное устройство — iPhone; Android проверяется
    только сборкой (устройства нет). macOS остаётся платформой разработки вне DoD.
 2. **E2E (Q2, Q14).** Два уровня вместо Detox/Appium:
    - `api_e2e` — Dart-тест настоящего `HttpClientRepository` против стека `compose --profile full`
      из образа-кандидата (как ADR 0021): регистрация по SMS (`SMS_TEST_PHONES`) → согласие ПД →
-     авто по VIN → список → карточка → пробег → история работ → refresh → выход. Job
-     `mobile / api-e2e` в `mobile-ci.yml`, при изменениях `mobile/` или `backend/`, входит в `ci-gate`;
+     авто по VIN → список → карточка → пробег → история работ → refresh → выход → отзыв согласия.
+     Workflow `mobile-e2e.yml` (job `mobile-e2e` в `ci.yml`) при изменениях `mobile/` или `backend/`,
+     входит в `ci-gate`; стек — `scripts/integration_stack.sh <образ> -- <команда>` со своим тестовым
+     номером (сценарий backend блокирует своего клиента);
    - UI E2E — `integration_test` в iOS Simulator против локального стека
      (`mobile/scripts/e2e_ui.sh`), результат — в отчёте главы: на macOS-раннерах GitHub нет Docker.
 3. **Плохая сеть (Q3).** Автотесты с подменённым транспортом (задержка, обрыв, тайм-аут, 5xx):
