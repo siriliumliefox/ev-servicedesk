@@ -106,7 +106,10 @@ jobs:
           --cov=app/domain/aggregates --cov-report=term-missing --cov-fail-under=90
 
   # Образ проверяется уже на PR (как в cd-staging, но без публикации): fail closed без
-  # ENVIRONMENT, Auth Service в режиме staging (ADR 0013).
+  # ENVIRONMENT и без бакета S3, режим staging — Auth, Vehicle, Aggregates, Tickets/Uploads,
+  # WebSocket (ADR 0013, 0017). Redis — service container; MinIO-сайдкар во внутренней
+  # docker-сети поднимает и удаляет сам скрипт (ключи — одноразовые, service container не
+  # подходит: образу MinIO нужна команда `server /data`).
   image-smoke:
     runs-on: ubuntu-latest
     services:
