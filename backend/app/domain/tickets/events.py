@@ -1,4 +1,4 @@
-"""События тикета в Redis pub/sub, канал `ticket:{id}` (ADR 0017 п. 9, docs/asyncapi.yaml).
+"""События тикета в Redis pub/sub, канал `{prefix}:ticket:{id}` (ADR 0017 п. 9, docs/asyncapi.yaml).
 
 Публикуются после COMMIT и содержат только идентификаторы: `{"type", "ticket_id",
 "message_id"?}`. Данные события каждое WebSocket-подключение читает из БД и формирует для
@@ -6,6 +6,10 @@
 вложений) — так ПД не попадают в Redis, а доступ проверяется заново на каждом событии.
 Те же события может слушать push (глава 15) без изменений Tickets. Доставка at-most-once:
 сбой публикации не отменяет записанное — клиент догружает через `after_id`.
+
+Каналы pub/sub общие для всего сервера Redis (номер БД не учитывается), поэтому имя канала
+начинается с `redis_channel_prefix` (по умолчанию — окружение): стенды и параллельные прогоны
+тестов на одном Redis не получают чужих событий.
 """
 
 import json
@@ -15,6 +19,8 @@ from enum import StrEnum
 
 from redis import Redis
 from redis.exceptions import RedisError
+
+from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +38,7 @@ class TicketEvent:
 
 
 def channel(ticket_id: int) -> str:
-    return f"ticket:{ticket_id}"
+    return f"{get_settings().redis_channel_prefix}:ticket:{ticket_id}"
 
 
 def publish(redis: Redis, event: TicketEvent) -> None:

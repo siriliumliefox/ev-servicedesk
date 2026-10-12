@@ -10,7 +10,13 @@ from urllib.parse import urlsplit, urlunsplit
 import httpx
 import pytest
 
-from app.core.storage import ObjectInfo, ObjectNotFound, S3ObjectStorage, StorageUnavailable
+from app.core.storage import (
+    ObjectChanged,
+    ObjectInfo,
+    ObjectNotFound,
+    S3ObjectStorage,
+    StorageUnavailable,
+)
 
 TTL = 15 * 60
 PHOTO = b"\xff\xd8\xff\xe0" + bytes(range(256)) * 64  # «JPEG» 16 КБ
@@ -27,11 +33,13 @@ def test_presigned_upload_head_copy_download(s3_storage: S3ObjectStorage) -> Non
     )
     assert r.status_code == 200, r.text
 
-    assert s3_storage.head(upload) == ObjectInfo(size=len(PHOTO), content_type="image/jpeg")
+    info = s3_storage.head(upload)
+    assert info == ObjectInfo(size=len(PHOTO), content_type="image/jpeg", etag=info.etag)
+    assert info.etag.startswith('"') and len(info.etag) > 2
 
     attachment = _key("tickets/7")
-    s3_storage.copy(upload, attachment)
-    assert s3_storage.head(attachment) == ObjectInfo(len(PHOTO), "image/jpeg")
+    s3_storage.copy(upload, attachment, etag=info.etag, content_type="image/jpeg")
+    assert s3_storage.head(attachment) == ObjectInfo(len(PHOTO), "image/jpeg", info.etag)
 
     r = httpx.get(s3_storage.presign_get(attachment, TTL))
     assert r.status_code == 200
@@ -39,12 +47,41 @@ def test_presigned_upload_head_copy_download(s3_storage: S3ObjectStorage) -> Non
     assert r.headers["content-type"] == "image/jpeg"
 
 
+def test_copy_pins_checked_version_and_mime(s3_storage: S3ObjectStorage) -> None:
+    """Клиент перезаписал загрузку после HEAD тем же presigned PUT — копии нет (412).
+
+    MIME копии — переданный (проверенный), presigned GET отдаёт его же, а не сохранённый.
+    """
+    upload = _key("uploads/1")
+    url = s3_storage.presign_put(upload, TTL)
+    assert httpx.put(url, content=PHOTO, headers={"Content-Type": "image/jpeg"}).is_success
+    checked = s3_storage.head(upload)
+    assert checked is not None
+
+    html = b"<html><script>alert(1)</script></html>" * 100
+    assert httpx.put(url, content=html, headers={"Content-Type": "text/html"}).is_success
+    swapped = _key("tickets/7")
+    with pytest.raises(ObjectChanged) as exc_info:
+        s3_storage.copy(upload, swapped, etag=checked.etag, content_type="image/jpeg")
+    assert exc_info.value.__cause__ is None and exc_info.value.__suppress_context__
+    assert s3_storage.head(swapped) is None
+
+    current = s3_storage.head(upload)
+    assert current is not None and current.content_type == "text/html"
+    copied = _key("tickets/7")
+    s3_storage.copy(upload, copied, etag=current.etag, content_type="image/png")
+    assert s3_storage.head(copied) == ObjectInfo(len(html), "image/png", current.etag)
+    r = httpx.get(s3_storage.presign_get(copied, TTL, content_type="image/png"))
+    assert r.status_code == 200 and r.headers["content-type"] == "image/png"
+
+
 def test_mime_is_not_bound_to_signature(s3_storage: S3ObjectStorage) -> None:
     """MIME к подписи не привязан (ADR 0017 п. 10): его сообщает HEAD, а проверяет домен."""
     key = _key("uploads/1", ".mov")
     url = s3_storage.presign_put(key, TTL)
     assert httpx.put(url, content=b"video", headers={"Content-Type": "video/quicktime"}).is_success
-    assert s3_storage.head(key) == ObjectInfo(5, "video/quicktime")
+    info = s3_storage.head(key)
+    assert info is not None and (info.size, info.content_type) == (5, "video/quicktime")
 
 
 def test_head_missing_object_is_none(s3_storage: S3ObjectStorage) -> None:
@@ -52,8 +89,10 @@ def test_head_missing_object_is_none(s3_storage: S3ObjectStorage) -> None:
 
 
 def test_copy_missing_object_raises(s3_storage: S3ObjectStorage) -> None:
-    with pytest.raises(ObjectNotFound):
-        s3_storage.copy(_key("uploads/1"), _key("tickets/1"))
+    with pytest.raises(ObjectNotFound) as exc_info:
+        s3_storage.copy(_key("uploads/1"), _key("tickets/1"), etag='"0"', content_type="image/jpeg")
+    # Причина (ClientError с ключом объекта в тексте) не попадает в трассировку журнала.
+    assert exc_info.value.__cause__ is None and exc_info.value.__suppress_context__
 
 
 def test_delete_removes_object_and_is_idempotent(s3_storage: S3ObjectStorage) -> None:
@@ -119,6 +158,7 @@ def test_check_bucket_wrong_credentials(
         storage.check_bucket()
     assert secret not in str(exc_info.value)
     assert "403" in str(exc_info.value)
+    assert exc_info.value.__cause__ is None and exc_info.value.__suppress_context__
 
 
 def test_check_bucket_missing_bucket(

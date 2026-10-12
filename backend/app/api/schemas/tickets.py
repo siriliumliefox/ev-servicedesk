@@ -24,8 +24,9 @@ from app.models import AppUser, Ticket, TicketAttachment, TicketMessage
 from app.models.enums import AttachmentType, TicketCategory, TicketStatus
 
 TEXT_MAX_LENGTH = 4000  # description и body: после обрезки пробелов (ADR 0017 п. 7–8, 13)
-# Управляющие символы, кроме табуляции и переводов строк: NUL PostgreSQL в text не хранит.
-_CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+# Управляющие символы (Unicode Cc: C0, DEL и C1), кроме табуляции и переводов строк:
+# NUL PostgreSQL в text не хранит, C1 (например, CSI U+009B) управляет терминалами.
+_CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
 
 
 def _text(value: str) -> str:
@@ -132,9 +133,7 @@ class TicketMessageList(BaseModel):
 
 
 def _attachments(items: list[TicketAttachment], presign: Presign) -> list[TicketAttachmentOut]:
-    return [
-        TicketAttachmentOut(file_url=presign(a.object_key), file_type=a.file_type) for a in items
-    ]
+    return [TicketAttachmentOut(file_url=presign(a), file_type=a.file_type) for a in items]
 
 
 def ticket_out(ticket: Ticket) -> TicketOut:

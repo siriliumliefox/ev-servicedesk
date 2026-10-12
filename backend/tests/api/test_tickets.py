@@ -5,14 +5,18 @@
 tests/api/test_ticket_attachments.py. Каждый ответ сверяется с docs/openapi.yaml.
 """
 
+from contextlib import AbstractContextManager
 from datetime import UTC, date, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
+from redis import Redis
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
+from app.core.errors import ApiError
+from app.domain.tickets import service
 from app.models import (
     AppUser,
     DecisionTreeNode,
@@ -273,14 +277,16 @@ def test_description_limit_is_after_trimming(client, owner, vehicle):
 
 
 def test_source_reference_validation(client, owner, vehicle, db: Session):
-    article, other = (
-        KnowledgeArticle(article_type=KbArticleType.TROUBLESHOOTING, title=t) for t in "AB"
+    article, other, draft = (
+        KnowledgeArticle(article_type=KbArticleType.TROUBLESHOOTING, title=t, is_published=t != "C")
+        for t in "ABC"
     )
-    db.add_all([article, other])
+    db.add_all([article, other, draft])
     db.flush()
     node = DecisionTreeNode(article_id=article.id, question_text="Перезагрузили?", is_root=True)
     foreign = DecisionTreeNode(article_id=other.id, question_text="Есть сеть?", is_root=True)
-    db.add_all([node, foreign])
+    draft_node = DecisionTreeNode(article_id=draft.id, question_text="Черновик?", is_root=True)
+    db.add_all([node, foreign, draft_node])
     db.commit()
 
     ticket = create(
@@ -289,12 +295,16 @@ def test_source_reference_validation(client, owner, vehicle, db: Session):
     assert db.get(Ticket, ticket["id"]).source_node_id == node.id
     create(client, owner, vehicle["id"], source_article_id=article.id)
 
+    bodies = []
     for refs in (
         {"source_node_id": node.id},  # узел без статьи
         {"source_article_id": 10**9},
         {"source_article_id": 2**63},
         {"source_article_id": article.id, "source_node_id": foreign.id},
         {"source_article_id": article.id, "source_node_id": 10**9},
+        # Черновик для клиента не существует: тот же 422, что и отсутствующая статья.
+        {"source_article_id": draft.id},
+        {"source_article_id": draft.id, "source_node_id": draft_node.id},
     ):
         r = client.post(
             f"{API}/tickets",
@@ -304,6 +314,9 @@ def test_source_reference_validation(client, owner, vehicle, db: Session):
         assert r.status_code == 422, refs
         assert_contract(r, "createTicket")
         assert error_code(r) == "INVALID_SOURCE_REFERENCE"
+        bodies.append(r.json())
+    # Ответ на черновик неотличим от ответа на отсутствующую статью (не раскрывает черновики).
+    assert bodies[-2] == bodies[1]
 
 
 def test_create_rate_limit(client, app, owner, vehicle):
@@ -319,6 +332,29 @@ def test_create_rate_limit(client, app, owner, vehicle):
     assert r.status_code == 429
     assert_contract(r, "createTicket")
     assert int(r.headers["Retry-After"]) >= 1
+
+
+def test_rejected_attempt_is_returned_to_window(real_redis: Redis):
+    """Отказ 429 тоже возвращает свою попытку: счётчик = успешные + выполняющиеся.
+
+    Лимит 2: одно создание прошло, попытка A выполняется, B получает 429, A падает с 422 —
+    создано одно, поэтому следующая попытка проходит (ADR 0017, «Уточнения»: лимит — на
+    успешные создания).
+    """
+
+    def counted() -> AbstractContextManager[None]:
+        return service._counted(real_redis, "ticket-create:test-429", 3600, 2, "Лимит")
+
+    with counted():
+        pass
+    with pytest.raises(ApiError) as failed, counted():
+        with pytest.raises(ApiError) as rejected, counted():
+            pass
+        assert rejected.value.status_code == 429
+        raise ApiError(422, "ATTACHMENT_NOT_FOUND", "Файл не найден")
+    assert failed.value.status_code == 422
+    with counted():
+        pass
 
 
 # ---------- Видимость (RBAC-04) ----------

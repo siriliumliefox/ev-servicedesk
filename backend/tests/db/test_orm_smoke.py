@@ -61,6 +61,7 @@ def test_orm_roundtrip(conn: Connection) -> None:
                 ticket_id=ticket.id,
                 ticket_message_id=message.id,
                 object_key=f"tickets/{ticket.id}/screen.png",
+                upload_name="screen.png",
                 file_type=AttachmentType.PHOTO,
                 mime_type="image/png",
                 size_bytes=2048,

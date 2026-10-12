@@ -2,8 +2,15 @@
 
 Загрузка: presigned PUT в `uploads/{user_id}/{uuid}{расширение}` — из имени файла берётся
 только расширение (имя может содержать ПД и не хранится). Привязка к тикету или сообщению:
-ключ — среди загрузок текущего пользователя, MIME и размер — из HEAD (со слов S3, а не
-клиента), затем копия в `tickets/{ticket_id}/{uuid}{расширение}`. После commit исходный
+1. `check_uploads` — без блокировок: ключ — среди загрузок текущего пользователя, MIME,
+   размер и ETag — из HEAD (со слов S3, а не клиента);
+2. `copy_uploads` — тоже до блокировки строки тикета (сетевой ввод-вывод S3 не держит
+   блокировок БД): копия ровно проверенной версии (ETag) с проверенным MIME в ключ,
+   уникальный для попытки, — `tickets/{ticket_id}/{новый uuid}{расширение}`;
+3. `add_rows` — под блокировкой, в транзакции записи: UNIQUE по имени загрузки
+   (`upload_name`) — одна загрузка становится ровно одним вложением.
+При ошибке транзакция откатывается и копии этой попытки удаляются (`binding`): ключи
+уникальны, поэтому удаление не заденет объект другой транзакции. После commit исходный
 объект удаляется; «сиротские» загрузки удаляет правило жизненного цикла бакета (24 ч).
 Ключи объектов и имена файлов в логи не пишутся.
 """
@@ -19,13 +26,14 @@ from pathlib import PurePosixPath
 from typing import Protocol
 
 from redis import Redis
-from sqlalchemy import exists, func, select
+from sqlalchemy import func, select
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from app.core import rate_limit
 from app.core.config import Settings
 from app.core.errors import ApiError
-from app.core.storage import ObjectNotFound, ObjectStorage, StorageError
+from app.core.storage import ObjectChanged, ObjectNotFound, ObjectStorage, StorageError
 from app.models import AppUser, TicketAttachment
 from app.models.enums import AttachmentType
 
@@ -41,7 +49,7 @@ _UPLOAD_KEY = re.compile(
     rf"uploads/(?P<user_id>[1-9][0-9]{{0,18}})/(?P<name>{_UUID}(?:\.[a-z0-9]{{1,5}})?)"
 )
 
-Presign = Callable[[str], str]
+Presign = Callable[[TicketAttachment], str]
 
 
 class AttachmentInput(Protocol):
@@ -67,11 +75,19 @@ class Upload:
     file_type: AttachmentType
     mime_type: str
     size_bytes: int
+    etag: str
 
 
 def presigner(storage: ObjectStorage, settings: Settings) -> Presign:
-    """file_url вложения при чтении — presigned GET на 15 минут (ADR 0017 п. 10)."""
-    return lambda key: storage.presign_get(key, settings.presign_get_ttl_seconds)
+    """file_url вложения при чтении — presigned GET на 15 минут (ADR 0017 п. 10).
+
+    Content-Type ответа — проверенный MIME из БД (входит в подпись), а не метаданные объекта.
+    """
+    return lambda attachment: storage.presign_get(
+        attachment.object_key,
+        settings.presign_get_ttl_seconds,
+        content_type=attachment.mime_type,
+    )
 
 
 def upload_key(user_id: int, file_name: str, file_type: AttachmentType) -> str:
@@ -119,14 +135,12 @@ def _allowed(settings: Settings, file_type: AttachmentType) -> tuple[tuple[str, 
     return settings.attachment_video_mime_types, settings.attachment_video_max_bytes
 
 
-def _already_used(db: Session, name: str) -> bool:
-    """Объект уже привязан: имя {uuid}{расширение} уникально, ключ привязки — tickets/{id}/{имя}.
+def _not_found(index: int) -> ApiError:
+    return _error(index, "ATTACHMENT_NOT_FOUND", "Файл не найден среди ваших загрузок")
 
-    Транзакционная advisory-блокировка по имени упорядочивает одновременные привязки одной
-    загрузки: вторая ждёт commit первой и видит её строку.
-    """
-    db.execute(select(func.pg_advisory_xact_lock(func.hashtextextended(name, 0))))
-    return bool(db.scalar(select(exists().where(TicketAttachment.object_key.endswith(f"/{name}")))))
+
+def _already_used(index: int) -> ApiError:
+    return _error(index, "ATTACHMENT_ALREADY_USED", "Файл уже прикреплён")
 
 
 def check_uploads(
@@ -136,7 +150,11 @@ def check_uploads(
     user: AppUser,
     inputs: Sequence[AttachmentInput],
 ) -> list[Upload]:
-    """Проверка вложений запроса до записи в БД; ошибки — 422 с индексом вложения."""
+    """Проверка вложений запроса до записи в БД и без блокировок; ошибки — 422 с индексом.
+
+    Уже привязанная загрузка отклоняется здесь заранее, без HEAD и копирования; окончательно
+    повторную привязку исключает UNIQUE при вставке (`add_rows`).
+    """
     if len(inputs) > settings.max_attachments:
         raise ApiError(
             422,
@@ -144,19 +162,29 @@ def check_uploads(
             f"Не больше {settings.max_attachments} вложений",
             details={"fields": [{"loc": ["body", "attachments"]}]},
         )
-    uploads: list[Upload] = []
-    seen: set[str] = set()
+    names: list[str] = []
     for index, item in enumerate(inputs):
         match = _UPLOAD_KEY.fullmatch(item.file_url)
         if match is None or int(match["user_id"]) != user.id:
-            raise _error(index, "ATTACHMENT_NOT_FOUND", "Файл не найден среди ваших загрузок")
-        name = match["name"]
-        if name in seen or _already_used(db, name):
-            raise _error(index, "ATTACHMENT_ALREADY_USED", "Файл уже прикреплён")
-        seen.add(name)
+            raise _not_found(index)
+        if match["name"] in names:
+            raise _already_used(index)
+        names.append(match["name"])
+    if names:
+        used = set(
+            db.scalars(
+                select(TicketAttachment.upload_name).where(TicketAttachment.upload_name.in_(names))
+            )
+        )
+        for index, name in enumerate(names):
+            if name in used:
+                raise _already_used(index)
+
+    uploads: list[Upload] = []
+    for index, (item, name) in enumerate(zip(inputs, names, strict=True)):
         info = storage.head(item.file_url)
         if info is None or info.size == 0:  # пустой объект — загрузка не состоялась
-            raise _error(index, "ATTACHMENT_NOT_FOUND", "Файл не найден среди ваших загрузок")
+            raise _not_found(index)
         mime_types, max_bytes = _allowed(settings, item.file_type)
         mime_type = _media_type(info.content_type)
         if mime_type not in mime_types:
@@ -171,15 +199,17 @@ def check_uploads(
                 "ATTACHMENT_TOO_LARGE",
                 f"Файл больше {max_bytes // (1024 * 1024)} МБ",
             )
-        uploads.append(Upload(item.file_url, name, item.file_type, mime_type, info.size))
+        uploads.append(Upload(item.file_url, name, item.file_type, mime_type, info.size, info.etag))
     return uploads
 
 
 @contextmanager
 def binding(db: Session, storage: ObjectStorage) -> Iterator[list[str]]:
-    """Транзакция привязки: при ошибке — откат БД и удаление уже скопированных объектов.
+    """Транзакция привязки: при ошибке — откат БД и удаление копий этой попытки.
 
-    Блок должен завершаться commit; скопированные ключи накапливаются в отдаваемом списке.
+    Блок должен завершаться commit; ключи копий накапливаются в отдаваемом списке. Ключи
+    уникальны для попытки, поэтому удаление после отката (блокировки уже сняты) не заденет
+    объект другой транзакции.
     """
     copied: list[str] = []
     try:
@@ -190,38 +220,74 @@ def binding(db: Session, storage: ObjectStorage) -> Iterator[list[str]]:
         raise
 
 
-def bind(
+def copy_uploads(
+    storage: ObjectStorage, uploads: Sequence[Upload], copied: list[str], *, ticket_id: int
+) -> list[str]:
+    """Копирует загрузки в хранилище тикета — до блокировок БД; возвращает ключи копий.
+
+    Копируется ровно проверенная версия (ETag из HEAD) с проверенным MIME: перезаписанная
+    после HEAD загрузка — 422 ATTACHMENT_NOT_FOUND, а не копия непроверенного файла.
+    """
+    keys: list[str] = []
+    for index, upload in enumerate(uploads):
+        key = f"tickets/{ticket_id}/{uuid.uuid4()}{PurePosixPath(upload.name).suffix}"
+        # До вызова: S3 мог выполнить копирование и ответить ошибкой (таймаут ответа).
+        copied.append(key)
+        try:
+            storage.copy(upload.key, key, etag=upload.etag, content_type=upload.mime_type)
+        except (ObjectNotFound, ObjectChanged):  # удалён или перезаписан после HEAD
+            raise _not_found(index) from None
+        keys.append(key)
+    return keys
+
+
+def add_rows(
     db: Session,
-    storage: ObjectStorage,
     user: AppUser,
     uploads: Sequence[Upload],
-    copied: list[str],
+    keys: Sequence[str],
     *,
     ticket_id: int,
+    created_at: datetime,
     ticket_message_id: int | None = None,
 ) -> None:
-    """Копирует загрузки в хранилище тикета и добавляет строки ticket_attachment (без commit)."""
-    for index, upload in enumerate(uploads):
-        key = f"tickets/{ticket_id}/{upload.name}"
-        try:
-            storage.copy(upload.key, key)
-        except ObjectNotFound as exc:  # удалён между HEAD и копированием
-            raise _error(
-                index, "ATTACHMENT_NOT_FOUND", "Файл не найден среди ваших загрузок"
-            ) from exc
-        copied.append(key)
-        db.add(
-            TicketAttachment(
+    """Строки ticket_attachment (без commit); загрузка, уже ставшая вложением, — 422.
+
+    created_at — момент записи тикета или сообщения (одно значение у строк одной записи).
+
+    INSERT ... ON CONFLICT (upload_name) DO NOTHING: одновременная привязка той же загрузки
+    ждёт commit или отката первой и только тогда вставляет или отказывает. Вставка — в порядке
+    имён загрузок (один порядок ожиданий во всех транзакциях — без взаимоблокировок), а id
+    выдаются заранее в порядке запроса: порядок вложений в ответе — как в запросе.
+    """
+    if not uploads:
+        return
+    sequence = func.pg_get_serial_sequence(TicketAttachment.__tablename__, "id")
+    series = func.generate_series(1, len(uploads))
+    ids = sorted(db.scalars(select(func.nextval(sequence)).select_from(series)))
+    rows = sorted(
+        zip(range(len(uploads)), ids, uploads, keys, strict=True), key=lambda row: row[2].name
+    )
+    for index, attachment_id, upload, key in rows:
+        inserted = db.scalar(
+            insert(TicketAttachment)
+            .values(
+                id=attachment_id,
                 ticket_id=ticket_id,
                 ticket_message_id=ticket_message_id,
                 object_key=key,
+                upload_name=upload.name,
                 file_type=upload.file_type,
                 mime_type=upload.mime_type,
                 size_bytes=upload.size_bytes,
                 uploaded_by_user_id=user.id,
+                created_at=created_at,
             )
+            .on_conflict_do_nothing(index_elements=[TicketAttachment.upload_name])
+            .returning(TicketAttachment.id)
         )
-    db.flush()
+        if inserted is None:
+            raise _already_used(index)
 
 
 def discard_uploads(storage: ObjectStorage, uploads: Sequence[Upload]) -> None:

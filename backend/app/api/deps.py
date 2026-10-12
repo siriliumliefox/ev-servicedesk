@@ -12,13 +12,12 @@ from typing import Annotated, Any
 from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from redis import Redis
-from redis.asyncio import Redis as AsyncRedis
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
 from app.core.db import SessionScope, get_db, get_session_scope
 from app.core.errors import forbidden, unauthorized
-from app.core.redis import get_pubsub_redis, get_redis
+from app.core.redis import get_redis
 from app.core.security import InvalidTokenError, decode_access_token
 from app.core.storage import ObjectStorage, get_storage
 from app.domain.auth.sms import SmsProvider, get_sms_provider_for
@@ -32,7 +31,6 @@ SettingsDep = Annotated[Settings, Depends(get_settings)]
 DbDep = Annotated[Session, Depends(get_db)]
 SessionScopeDep = Annotated[SessionScope, Depends(get_session_scope)]
 RedisDep = Annotated[Redis, Depends(get_redis)]
-PubSubRedisDep = Annotated[AsyncRedis, Depends(get_pubsub_redis)]
 StorageDep = Annotated[ObjectStorage, Depends(get_storage)]
 
 

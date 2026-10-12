@@ -38,10 +38,11 @@ from botocore.config import Config as BotoConfig
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from redis import Redis
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 from starlette.testclient import WebSocketTestSession
-from starlette.websockets import WebSocketDisconnect
 
+from app.api.pagination import PAGE_MAX, PAGE_SIZE_MAX
 from app.core import storage as storage_module
 from app.core.config import Settings
 from app.core.security import create_access_token
@@ -53,7 +54,7 @@ from app.core.storage import (
     get_storage,
 )
 from app.domain.tickets import events
-from app.models import AppUser
+from app.models import AppUser, TicketAttachment
 from app.models.enums import UserRole
 from tests.api.conftest import (
     API,
@@ -66,13 +67,14 @@ from tests.api.conftest import (
     contract_operation,
 )
 from tests.api.test_ticket_events import (
+    READY,
     RECEIVE_TIMEOUT,
     assert_frame,
+    auth,
     close_code,
     connect,
     receive,
     receive_event,
-    wait_subscribers,
 )
 
 Headers = dict[str, str]
@@ -264,29 +266,32 @@ def _poll(ws: WebSocketTestSession) -> dict[str, Any] | None:
         return None
 
 
-def ws_outcome(client: TestClient, redis: Redis, ticket_id: int, token: str | None) -> int | str:
+def ws_outcome(
+    client: TestClient, redis: Redis, ticket_id: int | str, token: str | None
+) -> int | str:
     """OPEN — подключение подписано и получает события тикета; иначе — код закрытия.
 
     token=None — сообщение auth не отправляется (сервер ждёт его ws_auth_timeout_seconds).
-    Доступ проверяется до подписки: отказ — закрытие без подписки на канал.
+    Доступ проверяется до подписки: отказ — закрытие без кадра `ready`.
     """
-    channel = events.channel(ticket_id)
     with connect(client, ticket_id) as ws:
         if token is not None:
             ws.send_json({"type": "auth", "access_token": token})
         deadline = time.monotonic() + RECEIVE_TIMEOUT
         while time.monotonic() < deadline:
             message = ws.portal.call(_poll, ws)
-            if message is not None:
-                assert message["type"] == "websocket.close", message
+            if message is None:
+                time.sleep(0.01)
+                continue
+            if message["type"] == "websocket.close":
                 return message.get("code", 1000)
-            if dict(redis.pubsub_numsub(channel)).get(channel, 0) >= 1:
-                events.ticket_updated(redis, ticket_id)
-                frame = receive_event(ws)
-                assert frame["type"] == "ticket.updated", frame
-                assert frame["data"]["id"] == ticket_id, frame
-                return OPEN
-            time.sleep(0.01)
+            # Первый кадр открытого подключения — `ready`: подписка подтверждена Redis.
+            assert json.loads(message["text"]) == READY, message
+            events.ticket_updated(redis, ticket_id)
+            frame = receive_event(ws)
+            assert frame["type"] == "ticket.updated", frame
+            assert frame["data"]["id"] == ticket_id, frame
+            return OPEN
     raise AssertionError(f"WebSocket тикета {ticket_id}: нет ни закрытия, ни подписки")
 
 
@@ -592,10 +597,8 @@ def test_out_of_range_ticket_id_is_404_not_500(app, world, op_id):
 def test_ws_out_of_range_ticket_id(client, world, real_redis):
     for tid in (*OUT_OF_RANGE_IDS, GHOST_ID):
         assert ws_outcome(client, real_redis, tid, world.tokens[ADMIN]) == 4403, tid
-    for tid in NOT_INTEGER_IDS:  # ошибка валидации пути — закрытие до accept
-        with pytest.raises(WebSocketDisconnect) as info, connect(client, tid):
-            pass
-        assert info.value.code == 1008, tid
+    for tid in NOT_INTEGER_IDS:  # не id тикета — как тикета нет (AsyncAPI: 4403)
+        assert ws_outcome(client, real_redis, tid, world.tokens[ADMIN]) == 4403, tid
 
 
 @pytest.mark.parametrize(
@@ -608,28 +611,11 @@ def test_ws_out_of_range_ticket_id(client, world, real_redis):
         ("listTicketMessages", {"after_id": -1}),
         ("listTicketMessages", {"after_id": 2**63}),
         ("listTicketMessages", {"page": -1}),
-        pytest.param(
-            "listTickets",
-            {"assigned_engineer_id": -(2**63) - 1},
-            marks=pytest.mark.xfail(
-                strict=True,
-                reason="BUG: assigned_engineer_id без нижней границы — ниже BIGINT → 500",
-            ),
-        ),
-        pytest.param(
-            "listTickets",
-            {"page": 2**62},
-            marks=pytest.mark.xfail(
-                strict=True, reason="BUG: page без верхней границы — OFFSET вне BIGINT → 500"
-            ),
-        ),
-        pytest.param(
-            "listTicketMessages",
-            {"page": 2**63},
-            marks=pytest.mark.xfail(
-                strict=True, reason="BUG: page без верхней границы — OFFSET вне BIGINT → 500"
-            ),
-        ),
+        ("listTickets", {"assigned_engineer_id": -(2**63) - 1}),
+        # OFFSET = (page - 1) * page_size вне BIGINT.
+        ("listTickets", {"page": 2**62}),
+        ("listTickets", {"page": PAGE_MAX + 1}),
+        ("listTicketMessages", {"page": 2**63}),
     ],
     ids=lambda v: v if isinstance(v, str) else ",".join(f"{k}={v[k]}" for k in v),
 )
@@ -641,6 +627,17 @@ def test_out_of_range_query_is_not_500(app, world, op_id, params):
     assert_contract(r, op_id)
     if r.status_code == 200:
         assert r.json()["items"] == []
+
+
+@pytest.mark.parametrize("op_id", ["listTickets", "listTicketMessages"])
+def test_last_page_within_bigint_offset(app, world, op_id):
+    """Наибольшая допустимая страница при наибольшем page_size — OFFSET в BIGINT: 200, пусто."""
+    client = TestClient(app, raise_server_exceptions=False)
+    params = {"page": PAGE_MAX, "page_size": PAGE_SIZE_MAX}
+    r = call(client, world, op_id, world.headers(ADMIN), params=params)
+    assert r.status_code == 200, r.text
+    assert_contract(r, op_id)
+    assert r.json()["items"] == [] and r.json()["meta"]["page"] == PAGE_MAX
 
 
 # ---------- ПД: контакты сотрудника скрыты от клиента (п. 12) ----------
@@ -728,15 +725,13 @@ def test_ws_frames_hide_staff_contacts_per_recipient(
     ):
         sockets = {OWNER: owner_ws, ENGINEER: engineer_ws, ADMIN: admin_ws}
         for actor, ws in sockets.items():
-            ws.send_json({"type": "auth", "access_token": world.tokens[actor]})
-        wait_subscribers(real_redis, tid, len(sockets))
+            auth(ws, world.tokens[actor])
 
         for author in (OWNER, ENGINEER, ADMIN):
             body: dict[str, Any] = {"body": f"Сообщение: {author}"}
-            if author != ADMIN:  # presign админу недоступен (x-required-roles)
-                upload = presigned_upload(client, world.headers(author), "фото.jpg")
-                storage.put(upload["file_url"], JPEG, "image/jpeg")
-                body["attachments"] = [{"file_url": upload["file_url"], "file_type": "photo"}]
+            upload = presigned_upload(client, world.headers(author), "фото.jpg")
+            storage.put(upload["file_url"], JPEG, "image/jpeg")
+            body["attachments"] = [{"file_url": upload["file_url"], "file_type": "photo"}]
             r = client.post(
                 f"{API}/tickets/{tid}/messages", json=body, headers=world.headers(author)
             )
@@ -754,6 +749,7 @@ def test_ws_frames_hide_staff_contacts_per_recipient(
                     url = unquote(attachment["file_url"])
                     assert f"/tickets/{tid}/" in url and "/uploads/" not in url
                     assert "X-Fake-Method=GET" in url and f"X-Fake-Expires={get_ttl}" in url
+                    assert "X-Fake-Content-Type=image/jpeg" in url, "Content-Type ответа — из БД"
 
 
 # ---------- ПД: тексты, имена файлов и ключи объектов не пишутся в логи ----------
@@ -814,7 +810,9 @@ def put_object(storage: ObjectStorage, upload: dict, data: bytes, mime: str) -> 
         assert response.status == 200
 
 
-def test_logs_have_no_texts_file_names_or_object_keys(client, world, attachment_storage, caplog):
+def test_logs_have_no_texts_file_names_or_object_keys(
+    client, world, attachment_storage, db, caplog
+):
     caplog.set_level(logging.DEBUG)
     uploaded: list[str] = []
 
@@ -862,14 +860,17 @@ def test_logs_have_no_texts_file_names_or_object_keys(client, world, attachment_
         assert r.status_code == 422, r.text
 
     names = [key.rsplit("/", 1)[1] for key in uploaded]
+    copies = list(db.scalars(select(TicketAttachment.object_key)))
+    assert len(copies) == len(uploaded)
     secrets = [
         SECRET_DESCRIPTION,
         *SECRET_BODIES.values(),
         *(file_name for file_name, *_ in SECRET_FILES.values()),
         *SECRET_FRAGMENTS,
         *uploaded,
-        *(f"tickets/{tid}/{name}" for name in names),
         *names,
+        *copies,
+        *(key.rsplit("/", 1)[1] for key in copies),
     ]
     skip = () if isinstance(attachment_storage, FakeObjectStorage) else S3_TRANSPORT_LOGGERS
     assert caplog.records, "логи перехватываются"
@@ -902,10 +903,6 @@ def test_failed_cleanup_is_logged_without_object_key(client, world, storage, mon
     assert not leaks(caplog.records, [upload["file_url"], name, "Иванова", SECRET_DESCRIPTION])
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="BUG: 500 при недоступном S3 пишет в лог трассировку botocore с URL ключа объекта",
-)
 def test_s3_outage_error_log_has_no_object_key(app, world, storage, monkeypatch, caplog):
     client = TestClient(app, raise_server_exceptions=False)
     upload = presigned_upload(client, world.headers(OWNER), "Паспорт-Иванова-q7z.jpg")
@@ -1011,12 +1008,22 @@ def public_s3(s3_storage: S3ObjectStorage, s3_config: dict[str, str], app: FastA
     return public
 
 
-def assert_presigned(url: str, path: str, ttl: int) -> datetime:
-    """Presigned URL SigV4 для публичного адреса S3 на `ttl` секунд; возвращает время подписи."""
+def assert_presigned(
+    url: str, path: str | re.Pattern[str], ttl: int, content_type: str | None = None
+) -> datetime:
+    """Presigned URL SigV4 для публичного адреса S3 на `ttl` секунд; возвращает время подписи.
+
+    content_type — Content-Type ответа GET (response-content-type входит в подпись).
+    """
     parts = urlsplit(url)
     assert f"{parts.scheme}://{parts.netloc}" == PUBLIC_S3, url
-    assert unquote(parts.path) == path, url
+    if isinstance(path, re.Pattern):
+        assert path.fullmatch(unquote(parts.path)), url
+    else:
+        assert unquote(parts.path) == path, url
     query = {k: v[0] for k, v in parse_qs(parts.query).items()}
+    if content_type is not None:
+        assert query.pop("response-content-type") == content_type, url
     assert set(query) == SIGV4_PARAMS, url
     assert query["X-Amz-Algorithm"] == "AWS4-HMAC-SHA256"
     assert query["X-Amz-Expires"] == str(ttl)
@@ -1080,8 +1087,10 @@ def test_presigned_urls_signed_for_public_endpoint_and_expire(
     )
     assert r.status_code == 201, r.text
     tid = r.json()["id"]
-    photo_path = f"/{bucket}/tickets/{tid}/{photo['file_url'].rsplit('/', 1)[1]}"
     read_urls = [r.json()["attachments"][0]["file_url"]]
+    # Ключ копии — новый uuid в tickets/{tid}/ (уникален для попытки привязки).
+    photo_path = unquote(urlsplit(read_urls[0]).path)
+    assert re.fullmatch(rf"/{bucket}/tickets/{tid}/[0-9a-f-]{{36}}\.jpg", photo_path), photo_path
     r = client.post(f"{API}/tickets/{tid}/claim", headers=world.headers(ENGINEER))
     assert r.status_code == 200, r.text
 
@@ -1091,10 +1100,8 @@ def test_presigned_urls_signed_for_public_endpoint_and_expire(
         clip["upload_url"], s3_config, "PUT", content=MP4, headers={"Content-Type": "video/mp4"}
     )
     assert r.status_code == 200, r.text
-    clip_path = f"/{bucket}/tickets/{tid}/{clip['file_url'].rsplit('/', 1)[1]}"
     with connect(client, tid) as ws:
-        ws.send_json({"type": "auth", "access_token": world.tokens[OWNER]})
-        wait_subscribers(real_redis, tid, 1)
+        auth(ws, world.tokens[OWNER])
         r = client.post(
             f"{API}/tickets/{tid}/messages",
             json={
@@ -1105,6 +1112,8 @@ def test_presigned_urls_signed_for_public_endpoint_and_expire(
         )
         assert r.status_code == 201, r.text
         clip_urls = [r.json()["attachments"][0]["file_url"]]
+        clip_path = unquote(urlsplit(clip_urls[0]).path)
+        assert re.fullmatch(rf"/{bucket}/tickets/{tid}/[0-9a-f-]{{36}}\.mp4", clip_path)
         frame = assert_frame(receive_event(ws), "message.created", "TicketMessage")
         clip_urls.append(frame["attachments"][0]["file_url"])
 
@@ -1118,21 +1127,25 @@ def test_presigned_urls_signed_for_public_endpoint_and_expire(
 
     # Фото: ответ createTicket и карточка трём ролям; видео: ответ POST, кадр WebSocket и
     # история трём ролям.
-    for urls, path, content, count in (
-        (read_urls, photo_path, JPEG, 4),
-        (clip_urls, clip_path, MP4, 5),
+    for urls, path, content, mime, count in (
+        (read_urls, photo_path, JPEG, "image/jpeg", 4),
+        (clip_urls, clip_path, MP4, "video/mp4", 5),
     ):
         assert len(urls) == count
         for url in urls:
-            assert abs(now - assert_presigned(url, path, get_ttl)) < timedelta(minutes=2)
+            signed_at = assert_presigned(url, path, get_ttl, mime)
+            assert abs(now - signed_at) < timedelta(minutes=2)
             got = send(url, s3_config)
             assert got.status_code == 200 and got.content == content, got.text
+            assert got.headers["content-type"] == mime
 
     url = read_urls[-1]
     assert send(url, s3_config, host="").status_code == 403, "подпись — для публичного адреса"
     assert send(url, s3_config, "PUT", content=b"x").status_code == 403, "GET не даёт записи"
     longer = with_query(url, **{"X-Amz-Expires": str(7 * 24 * 3600)})
     assert send(longer, s3_config).status_code == 403, "срок входит в подпись"
+    html = with_query(url, **{"response-content-type": "text/html"})
+    assert send(html, s3_config).status_code == 403, "Content-Type ответа входит в подпись"
     unsigned = urlunsplit(urlsplit(url)._replace(query=""))
     assert send(unsigned, s3_config).status_code == 403, "публичного доступа к объектам нет"
 
@@ -1147,7 +1160,7 @@ def test_presigned_urls_signed_for_public_endpoint_and_expire(
         )
         r = client.get(f"{API}/tickets/{tid}", headers=world.headers(OWNER))
     stale = r.json()["attachments"][0]["file_url"]
-    signed_at = assert_presigned(stale, photo_path, get_ttl)
+    signed_at = assert_presigned(stale, photo_path, get_ttl, "image/jpeg")
     assert datetime.now(UTC) - signed_at > timedelta(seconds=get_ttl)
     expired = send(stale, s3_config)
     assert expired.status_code == 403 and "expired" in expired.text.lower(), expired.text

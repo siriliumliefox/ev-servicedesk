@@ -779,7 +779,7 @@ paths:
       tags: [Uploads]
       summary: Получить presigned URL для прямой загрузки файла в S3
       operationId: createPresignedUpload
-      x-required-roles: [client, engineer]
+      x-required-roles: [client, engineer, admin]
       x-rbac-action: ["Создание тикета", "Сообщения в чате тикета"]
       description: >
         Клиент загружает файл напрямую в S3 по upload_url, минуя API-сервер
@@ -787,18 +787,22 @@ paths:
         в теле создания тикета/сообщения как ссылка на вложение.
         Уточнено в 1.4.0 (ADR 0017): upload_url — presigned PUT на 15 минут (expires_at) в
         uploads/{user_id}/{uuid}{расширение}; из file_name берётся только расширение (имя может
-        содержать ПД и не хранится); MIME к подписи не привязан. При привязке к тикету или
+        содержать ПД и не хранится); MIME к подписи не привязан. admin загружает вложения для
+        сообщений в чате любого тикета (RBAC-04). При привязке к тикету или
         сообщению backend проверяет объект в S3 (HEAD): загружен текущим пользователем, MIME и
-        размер — из S3, а не со слов клиента; затем копирует его в хранилище тикета. Допустимо:
+        размер — из S3, а не со слов клиента; затем копирует в хранилище тикета ровно
+        проверенную версию объекта (ETag) с проверенным MIME. Допустимо:
         photo — image/jpeg, image/png, image/heic, image/webp до 20 МБ; video — video/mp4,
         video/quicktime до 200 МБ; до 10 вложений на тикет или сообщение. Ошибки привязки (422
         у createTicket и createTicketMessage): ATTACHMENT_NOT_FOUND — объект не найден среди
-        загрузок текущего пользователя; ATTACHMENT_ALREADY_USED — объект уже привязан;
+        загрузок текущего пользователя или перезаписан после проверки; ATTACHMENT_ALREADY_USED —
+        объект уже привязан (одновременный запрос, проигравший привязку, получает этот код или
+        ATTACHMENT_NOT_FOUND, если исходный объект уже удалён после привязки);
         ATTACHMENT_TYPE_NOT_ALLOWED — MIME не из списка или не соответствует file_type;
         ATTACHMENT_TOO_LARGE — размер больше лимита; TOO_MANY_ATTACHMENTS — больше 10 вложений.
         Непривязанные загрузки удаляются через 24 ч. При чтении file_url вложения — presigned GET
-        на 15 минут. 429 RATE_LIMITED — больше 60 запросов в час на пользователя, заголовок
-        Retry-After.
+        на 15 минут; Content-Type ответа — проверенный MIME вложения (входит в подпись).
+        429 RATE_LIMITED — больше 60 запросов в час на пользователя, заголовок Retry-After.
       requestBody:
         required: true
         content:

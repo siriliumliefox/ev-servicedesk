@@ -82,7 +82,7 @@ class Ticket(IdMixin, TimestampMixin, Base):
         lazy="raise",
     )
     # Просрочка вычисляется при чтении (ADR 0017 п. 3): поле ответа и фильтр `overdue` —
-    # одно выражение SQL. now() — время начала транзакции, как у created_at.
+    # одно выражение SQL. now() — время начала читающей транзакции: одно для всей выборки.
     is_overdue: Mapped[bool] = column_property(
         and_(func.now() > sla_due_at, status != TicketStatus.RESOLVED)
     )
@@ -131,7 +131,12 @@ class TicketMessage(IdMixin, CreatedAtMixin, Base):
 
 
 class TicketAttachment(IdMixin, CreatedAtMixin, Base):
-    """Хранится ключ объекта S3, а не URL (ADR 0004); URL выдаётся presigned при чтении."""
+    """Хранится ключ объекта S3, а не URL (ADR 0004); URL выдаётся presigned при чтении.
+
+    upload_name — имя исходной загрузки ({uuid}{расширение}, ADR 0017 п. 10): UNIQUE —
+    одна загрузка становится ровно одним вложением и при одновременных привязках. Ключ копии
+    (object_key) уникален для каждой попытки привязки, а не выводится из имени загрузки.
+    """
 
     __tablename__ = "ticket_attachment"
     __table_args__ = (
@@ -155,6 +160,7 @@ class TicketAttachment(IdMixin, CreatedAtMixin, Base):
     # NULL = вложение создано вместе с тикетом.
     ticket_message_id: Mapped[int | None] = mapped_column(BigInteger, index=True)
     object_key: Mapped[str] = mapped_column(String(500), unique=True, nullable=False)
+    upload_name: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     file_type: Mapped[AttachmentType] = mapped_column(
         pg_enum(AttachmentType, "attachment_type"), nullable=False
     )

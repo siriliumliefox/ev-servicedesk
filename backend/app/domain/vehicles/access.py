@@ -96,6 +96,25 @@ def get_vehicle(db: Session, user: AppUser, vehicle_id: int, *options: Executabl
     return vehicle
 
 
+def for_new_ticket(db: Session, user: AppUser, vehicle_id: int) -> Vehicle:
+    """Активное видимое авто под SELECT ... FOR SHARE — запись нового тикета, иначе 404.
+
+    Тикет создаётся только на активное авто (ADR 0017 п. 6): удаление и передача авто
+    (soft-delete под FOR UPDATE, ADR 0003) ждут commit тикета, а создание, дождавшись
+    удаления, видит deleted_at — 404.
+    """
+    _check_id(vehicle_id)
+    vehicle = db.scalars(
+        select(Vehicle)
+        .where(Vehicle.id == vehicle_id, Vehicle.deleted_at.is_(None), _visible(user))
+        .with_for_update(read=True, of=Vehicle)
+        .execution_options(populate_existing=True)
+    ).one_or_none()
+    if vehicle is None:
+        raise not_found()
+    return vehicle
+
+
 def for_change(db: Session, user: AppUser, vehicle_id: int) -> Change:
     """Авто под SELECT ... FOR UPDATE, которое `user` может изменить, иначе 404/403.
 

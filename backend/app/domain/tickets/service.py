@@ -64,8 +64,13 @@ def _counted(
 
     Попытка учитывается сразу (параллельные запросы не обойдут лимит), а отказ — ошибка
     проверки или сбой — возвращает её в окно: исправленный запрос клиент повторит без 429.
+    Отказ 429 тоже возвращает свою попытку: счётчик = успешные + выполняющиеся.
     """
-    rate_limit.enforce(redis, key, window_seconds, limit, message)
+    try:
+        rate_limit.enforce(redis, key, window_seconds, limit, message)
+    except ApiError:
+        rate_limit.undo_hit(redis, key)
+        raise
     try:
         yield
     except BaseException:
@@ -126,12 +131,17 @@ def _source_error(message: str) -> ApiError:
 
 
 def _check_source(db: Session, article_id: int | None, node_id: int | None) -> None:
-    """Эскалация из дерева решений: статья существует, узел — её (ADR 0017 п. 7)."""
+    """Эскалация из дерева решений: статья опубликована, узел — её (ADR 0017 п. 7).
+
+    Тикет создаёт клиент, а черновик для клиента не существует (listArticles): черновик —
+    тот же 422, что и отсутствующая статья, — ответ не раскрывает id черновиков.
+    """
     if article_id is None:
         if node_id is not None:
             raise _source_error("Узел дерева решений указан без статьи")
         return
-    if not 1 <= article_id <= BIGINT_MAX or db.get(KnowledgeArticle, article_id) is None:
+    article = db.get(KnowledgeArticle, article_id) if 1 <= article_id <= BIGINT_MAX else None
+    if article is None or not article.is_published:
         raise _source_error("Статья базы знаний не найдена")
     if node_id is None:
         return
@@ -194,34 +204,43 @@ def _create_ticket(
     source_node_id: int | None,
     attachment_inputs: Sequence[AttachmentInput],
 ) -> int:
-    vehicle = vehicle_access.get_vehicle(db, user, vehicle_id)  # чужое или удалённое — 404
+    # Проверки до работы с S3; авто ещё раз — под блокировкой перед записью.
+    vehicle_access.get_vehicle(db, user, vehicle_id)  # чужое или удалённое — 404
     _check_source(db, source_article_id, source_node_id)
     uploads = attachments.check_uploads(db, storage, settings, user, attachment_inputs)
+    # id тикета выдаётся заранее: вложения копируются в tickets/{id}/ до записи и блокировок.
+    ticket_id = db.scalar(select(func.nextval(func.pg_get_serial_sequence("ticket", "id"))))
 
-    # Срок SLA — от того же момента, что created_at: время начала транзакции БД.
-    now, minutes = db.execute(
-        select(func.now(), TicketSlaPolicy.resolution_minutes).where(
-            TicketSlaPolicy.category == category
-        )
-    ).one()
-    ticket = Ticket(
-        vehicle_id=vehicle.id,
-        category=category,
-        status=TicketStatus.NEW,
-        description=description,
-        created_at=now,
-        sla_due_at=sla.due_at(now, minutes),
-        firmware_release_id=vehicle.current_firmware_release_id,  # снимок (N-09)
-        source_article_id=source_article_id,
-        source_node_id=source_node_id,
-    )
     with attachments.binding(db, storage) as copied:
-        db.add(ticket)
+        keys = attachments.copy_uploads(storage, uploads, copied, ticket_id=ticket_id)
+        vehicle = vehicle_access.for_new_ticket(db, user, vehicle_id)
+        # created_at — момент записи (после блокировки авто), а не начало транзакции запроса;
+        # срок SLA, updated_at и created_at вложений — от того же значения.
+        now, minutes = db.execute(
+            select(func.clock_timestamp(), TicketSlaPolicy.resolution_minutes).where(
+                TicketSlaPolicy.category == category
+            )
+        ).one()
+        db.add(
+            Ticket(
+                id=ticket_id,
+                vehicle_id=vehicle.id,
+                category=category,
+                status=TicketStatus.NEW,
+                description=description,
+                created_at=now,
+                updated_at=now,
+                sla_due_at=sla.due_at(now, minutes),
+                firmware_release_id=vehicle.current_firmware_release_id,  # снимок (N-09)
+                source_article_id=source_article_id,
+                source_node_id=source_node_id,
+            )
+        )
         db.flush()
-        attachments.bind(db, storage, user, uploads, copied, ticket_id=ticket.id)
+        attachments.add_rows(db, user, uploads, keys, ticket_id=ticket_id, created_at=now)
         db.commit()
     attachments.discard_uploads(storage, uploads)
-    return ticket.id
+    return ticket_id
 
 
 # ---------- Статус, claim, назначение ----------
@@ -233,10 +252,11 @@ def change_status(
     """PATCH /tickets/{id}/status (engineer/admin) по графу `status.TRANSITIONS`."""
     ticket = access.for_update(db, user, ticket_id)
     access.ensure_can_change_status(user, ticket)
+    # Момент записи под блокировкой (clock_timestamp), а не начало транзакции запроса (now()):
+    # сообщение, принятое до решения, не окажется датировано позже resolved_at.
+    now = db.scalar(select(func.clock_timestamp()))
     try:
-        change = transition(
-            ticket.status, target, ticket.resolved_at, db.scalar(select(func.now()))
-        )
+        change = transition(ticket.status, target, ticket.resolved_at, now)
     except InvalidTransition as exc:
         raise ApiError(
             409,
@@ -391,23 +411,37 @@ def _create_message(
     body: str,
     attachment_inputs: Sequence[AttachmentInput],
 ) -> int:
-    ticket = access.for_update(db, user, ticket_id)
+    # Проверки до работы с S3 — без блокировки; под блокировкой строки тикета они повторяются,
+    # а сетевой ввод-вывод S3 (HEAD, копирование) её не держит.
+    ticket = access.get_ticket(db, user, ticket_id)
     access.ensure_can_write_message(user, ticket)
     uploads = attachments.check_uploads(db, storage, settings, user, attachment_inputs)
 
-    message = TicketMessage(ticket_id=ticket.id, author_id=user.id, body=body)
     with attachments.binding(db, storage) as copied:
+        keys = attachments.copy_uploads(storage, uploads, copied, ticket_id=ticket.id)
+        ticket = access.for_update(db, user, ticket_id)
+        access.ensure_can_write_message(user, ticket)
+        # Момент записи под блокировкой: в чате тикета created_at растёт вместе с id и не
+        # позже resolved_at (решение ждёт ту же блокировку).
+        now = db.scalar(select(func.clock_timestamp()))
+        message = TicketMessage(ticket_id=ticket.id, author_id=user.id, body=body, created_at=now)
         db.add(message)
         db.flush()
-        attachments.bind(
-            db, storage, user, uploads, copied, ticket_id=ticket.id, ticket_message_id=message.id
+        attachments.add_rows(
+            db,
+            user,
+            uploads,
+            keys,
+            ticket_id=ticket.id,
+            created_at=now,
+            ticket_message_id=message.id,
         )
         if user.role in STAFF:
             # Первичный ответ — однократно (метрика аналитики, ADR 0017 п. 1).
             db.execute(
                 update(Ticket)
                 .where(Ticket.id == ticket.id, Ticket.first_response_at.is_(None))
-                .values(first_response_at=func.now())
+                .values(first_response_at=now)
                 .execution_options(synchronize_session=False)
             )
         db.commit()

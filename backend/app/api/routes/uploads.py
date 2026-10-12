@@ -13,7 +13,7 @@ router = APIRouter(tags=["Uploads"])
 @router.post(
     "/uploads/presign",
     operation_id="createPresignedUpload",
-    **rbac(UserRole.CLIENT, UserRole.ENGINEER),
+    **rbac(UserRole.CLIENT, UserRole.ENGINEER, UserRole.ADMIN),
 )
 def create_presigned_upload(
     body: PresignRequest,

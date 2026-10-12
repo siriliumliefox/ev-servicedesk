@@ -50,7 +50,8 @@ def list_tickets(
     page: PageDep,
     ticket_status: Annotated[TicketStatus | None, Query(alias="status")] = None,
     category: TicketCategory | None = None,
-    assigned_engineer_id: Annotated[int | None, Query(le=BIGINT_MAX)] = None,
+    # Диапазон BIGINT: вне его — ошибка драйвера и 500, а не 422.
+    assigned_engineer_id: Annotated[int | None, Query(ge=-BIGINT_MAX - 1, le=BIGINT_MAX)] = None,
     overdue: bool | None = None,
 ) -> TicketList:
     stmt = service.list_tickets_stmt(

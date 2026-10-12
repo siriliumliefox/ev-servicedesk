@@ -261,6 +261,13 @@ def test_resolved_status_requires_resolved_at(conn: Connection) -> None:
     )
 
 
+ATTACHMENT_INSERT = (
+    "INSERT INTO ticket_attachment (ticket_id, ticket_message_id, object_key, upload_name, "
+    "file_type, mime_type, size_bytes, uploaded_by_user_id) "
+    "VALUES (:t, :msg, :key, :upload, :ft, :mime, 1024, :u)"
+)
+
+
 def test_attachment_message_must_belong_to_same_ticket(conn: Connection) -> None:
     vehicle = make_vehicle(conn)
     author = scalar(conn, "SELECT user_id FROM vehicle WHERE id = :v", v=vehicle)
@@ -272,18 +279,14 @@ def test_attachment_message_must_belong_to_same_ticket(conn: Connection) -> None
         t=ticket_b,
         u=author,
     )
-    insert = (
-        "INSERT INTO ticket_attachment (ticket_id, ticket_message_id, object_key, file_type, "
-        "mime_type, size_bytes, uploaded_by_user_id) "
-        "VALUES (:t, :msg, :key, :ft, :mime, 1024, :u)"
-    )
     assert_violation(
         conn,
         "fk_ticket_attachment_message_same_ticket",
-        insert,
+        ATTACHMENT_INSERT,
         t=ticket_a,
         msg=message_b,
         key="tickets/a/1.jpg",
+        upload="1.jpg",
         ft="photo",
         mime="image/jpeg",
         u=author,
@@ -291,13 +294,31 @@ def test_attachment_message_must_belong_to_same_ticket(conn: Connection) -> None
     assert_violation(
         conn,
         "ck_ticket_attachment_mime_matches_type",
-        insert,
+        ATTACHMENT_INSERT,
         t=ticket_b,
         msg=message_b,
         key="tickets/b/1.mp4",
+        upload="1.mp4",
         ft="photo",
         mime="video/mp4",
         u=author,
+    )
+
+
+def test_upload_becomes_one_attachment(conn: Connection) -> None:
+    """Одна загрузка — одно вложение (ADR 0017 п. 10): ключи копий разные, имя загрузки одно."""
+    vehicle = make_vehicle(conn)
+    author = scalar(conn, "SELECT user_id FROM vehicle WHERE id = :v", v=vehicle)
+    ticket_a, ticket_b = make_ticket(conn, vehicle), make_ticket(conn, vehicle)
+    values = {"msg": None, "upload": "a1.jpg", "ft": "photo", "mime": "image/jpeg", "u": author}
+    conn.execute(text(ATTACHMENT_INSERT), {"t": ticket_a, "key": "tickets/a/k1.jpg", **values})
+    assert_violation(
+        conn,
+        "uq_ticket_attachment_upload_name",
+        ATTACHMENT_INSERT,
+        t=ticket_b,
+        key="tickets/b/k2.jpg",
+        **values,
     )
 
 

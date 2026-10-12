@@ -2,10 +2,17 @@
 
 Только доставка сервер → клиент. Первое сообщение клиента — `{"type": "auth",
 "access_token": …}` не позже `ws_auth_timeout_seconds`, иначе закрытие 4401; токен в URL не
-передаётся (URL попадают в логи прокси). Доступ — как у getTicket; нет доступа — 4403.
-События приходят из Redis-канала `ticket:{id}` (несколько экземпляров backend); на каждом
-событии пользователь и доступ к тикету проверяются заново: потерявший доступ при смене
-исполнителя закрывается 4403, деактивированный — 4401. По истечении access-токена — 4401.
+передаётся (URL попадают в логи прокси). Доступ — как у getTicket; нет доступа (и ticketId
+не целое число) — 4403. После проверки доступа подключение подписывается на канал тикета
+и присылает `{"type": "ready"}`: с этого момента события не теряются, клиент догружает
+пропущенное через REST. События приходят из Redis pub/sub (несколько экземпляров backend)
+через общую подписку процесса (`PubSubHub`); на каждом событии пользователь и доступ к
+тикету проверяются заново: потерявший доступ при смене исполнителя закрывается 4403,
+деактивированный — 4401. По истечении access-токена — 4401.
+
+Лимиты: попытки подключения с IP (`ws_connects_per_ip_minute`, Redis) и одновременные
+подключения пользователя в процессе (`ws_max_sockets_per_user`) — сверх них 4429. Сбой Redis
+или БД — 1011; не успевающий забирать события получатель — 1013.
 
 БД синхронная: обращения — в пуле потоков, каждое — в своей короткой сессии
 (`get_session_scope`), чтобы долгоживущее подключение не держало соединение пула.
@@ -15,19 +22,28 @@ import asyncio
 import contextlib
 import json
 import logging
+import re
+import threading
+from collections import Counter
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Path, WebSocket, WebSocketDisconnect
-from redis.asyncio.client import PubSub
+from fastapi import APIRouter, Depends, Path, WebSocket, WebSocketDisconnect
+from redis import Redis
+from redis.exceptions import RedisError
+from sqlalchemy.exc import SQLAlchemyError
 from starlette.concurrency import run_in_threadpool
 
-from app.api.deps import PubSubRedisDep, SessionScopeDep, SettingsDep, StorageDep
+from app.api.deps import RedisDep, SessionScopeDep, SettingsDep, StorageDep
 from app.api.schemas.tickets import message_out, ticket_out
+from app.core import rate_limit
 from app.core.config import Settings
 from app.core.db import SessionScope
 from app.core.errors import ApiError
+from app.core.redis import Listener, PubSubHub, SlowSubscriberError, get_pubsub_hub
 from app.core.security import AccessClaims, InvalidTokenError, decode_access_token
+from app.core.storage import ObjectStorage
 from app.domain.tickets import access, events, service
 from app.domain.tickets.attachments import Presign, presigner
 from app.domain.tickets.events import EventType, TicketEvent
@@ -37,11 +53,62 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 CLOSE_UNAUTHORIZED = 4401  # нет/неверный auth, токен недействителен или истёк
-CLOSE_FORBIDDEN = 4403  # тикета нет, он не виден или доступ потерян
-CLOSE_INTERNAL = 1011
+CLOSE_FORBIDDEN = 4403  # тикета нет, он не виден, доступ потерян или ticketId не число
+CLOSE_TOO_MANY = 4429  # лимит подключений пользователя или попыток с IP
+CLOSE_INTERNAL = 1011  # сбой Redis или БД
+CLOSE_TRY_AGAIN = 1013  # получатель не успевает забирать события
 LISTEN_TIMEOUT_SECONDS = 30.0  # потолок ожидания события между проверками срока токена
+CONNECT_WINDOW_SECONDS = 60
+# BIGINT без знака: прочее (`abc`, `1.5`, `-1`, цифры других алфавитов) — тикета нет.
+_TICKET_ID = re.compile(r"[0-9]{1,19}")
 
 Frame = dict[str, Any]
+READY: Frame = {"type": "ready"}
+PubSubHubDep = Annotated[PubSubHub, Depends(get_pubsub_hub)]
+
+
+class _UserSockets:
+    """Открытые подключения пользователя в процессе (лимит `ws_max_sockets_per_user`).
+
+    Счётчик в памяти процесса: освобождается и при аварийном завершении обработчика.
+    Подключения Starlette TestClient живут в разных потоках — счётчик под блокировкой.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._open: Counter[int] = Counter()
+
+    @contextlib.contextmanager
+    def hold(self, user_id: int, limit: int) -> Iterator[bool]:
+        with self._lock:
+            allowed = self._open[user_id] < limit
+            if allowed:
+                self._open[user_id] += 1
+        try:
+            yield allowed
+        finally:
+            if allowed:
+                with self._lock:
+                    self._open[user_id] -= 1
+                    if not self._open[user_id]:
+                        del self._open[user_id]
+
+
+_user_sockets = _UserSockets()
+
+
+def _connect_allowed(redis: Redis, ip: str, settings: Settings) -> bool:
+    attempt = rate_limit.hit(redis, f"ws-ip:{ip}", CONNECT_WINDOW_SECONDS)
+    return not attempt.exceeded(settings.ws_connects_per_ip_minute)
+
+
+def _client_ip(websocket: WebSocket) -> str:
+    # Как app.api.deps.client_ip: за прокси нужен --forwarded-allow-ips (Глава 26).
+    return websocket.client.host if websocket.client else "unknown"
+
+
+def _ticket_id(raw: str) -> int | None:
+    return int(raw) if _TICKET_ID.fullmatch(raw) else None
 
 
 def _access_token(text: str | None) -> str | None:
@@ -121,23 +188,22 @@ async def _drain(websocket: WebSocket) -> None:
 
 async def _forward(
     websocket: WebSocket,
-    pubsub: PubSub,
+    listener: Listener,
     scope: SessionScope,
     claims: AccessClaims,
     ticket_id: int,
     presign: Presign,
 ) -> int:
-    """События канала → клиенту; возвращает код закрытия (истёк токен или нет доступа)."""
+    """`ready`, затем события канала → клиенту; код закрытия (истёк токен или нет доступа)."""
+    await websocket.send_json(READY)
     while True:
         remaining = (claims.expires_at - datetime.now(UTC)).total_seconds()
         if remaining <= 0:
             return CLOSE_UNAUTHORIZED
-        message = await pubsub.get_message(
-            ignore_subscribe_messages=True, timeout=min(remaining, LISTEN_TIMEOUT_SECONDS)
-        )
-        if message is None:
+        data = await listener.get(timeout=min(remaining, LISTEN_TIMEOUT_SECONDS))
+        if data is None:
             continue
-        event = events.parse(message["data"])
+        event = events.parse(data)
         if event is None or event.ticket_id != ticket_id:
             continue
         outcome = await run_in_threadpool(_render, scope, claims.user_id, event, presign)
@@ -149,27 +215,33 @@ async def _forward(
 
 async def _relay(
     websocket: WebSocket,
-    pubsub: PubSub,
+    listener: Listener,
     scope: SessionScope,
     claims: AccessClaims,
     ticket_id: int,
     presign: Presign,
 ) -> int | None:
     """Доставка до закрытия: код закрытия сервером или None — клиент отключился сам."""
-    forward = asyncio.create_task(_forward(websocket, pubsub, scope, claims, ticket_id, presign))
+    forward = asyncio.create_task(_forward(websocket, listener, scope, claims, ticket_id, presign))
     drain = asyncio.create_task(_drain(websocket))
     try:
         await asyncio.wait({forward, drain}, return_when=asyncio.FIRST_COMPLETED)
     finally:
         for task in (forward, drain):
             task.cancel()
-        await asyncio.gather(forward, drain, return_exceptions=True)
+        # wait, а не gather: отмена самого обработчика (закрытие сервера, TestClient) выходит
+        # своим CancelledError, а не исключением отменённой подзадачи без причины отмены.
+        await asyncio.wait({forward, drain})
     if not forward.done() or forward.cancelled():
         return None
     if (exc := forward.exception()) is not None:
         if drain.done() and not drain.cancelled() and drain.exception() is None:
             return None  # клиент ушёл, отправка в закрытый сокет не удалась
-        logger.error("Сбой доставки событий тикета: %s", type(exc).__name__)
+        if isinstance(exc, SlowSubscriberError):
+            logger.warning("Получатель событий тикета не успевает: подключение закрыто")
+            return CLOSE_TRY_AGAIN
+        # Трассировка без ПД: параметры SQL скрыты (hide_parameters), тексты — не в сообщениях.
+        logger.error("Сбой доставки событий тикета", exc_info=exc)
         return CLOSE_INTERNAL
     return forward.result()
 
@@ -183,30 +255,67 @@ async def _close(websocket: WebSocket, code: int) -> None:
 @router.websocket("/tickets/{ticketId}/ws")
 async def ticket_events(
     websocket: WebSocket,
-    ticket_id: Annotated[int, Path(alias="ticketId")],
+    ticket_ref: Annotated[str, Path(alias="ticketId")],
     scope: SessionScopeDep,
     settings: SettingsDep,
     storage: StorageDep,
-    pubsub_redis: PubSubRedisDep,
+    redis: RedisDep,
+    hub: PubSubHubDep,
 ) -> None:
+    # ticketId — строка: не число закрывается 4403 по контракту, а не 1008 до accept.
     await websocket.accept()
+    code = await _serve(websocket, ticket_ref, scope, settings, storage, redis, hub)
+    if code is not None:
+        await _close(websocket, code)
+
+
+async def _serve(
+    websocket: WebSocket,
+    ticket_ref: str,
+    scope: SessionScope,
+    settings: Settings,
+    storage: ObjectStorage,
+    redis: Redis,
+    hub: PubSubHub,
+) -> int | None:
+    """Подключение от лимитов до конца доставки: код закрытия или None — клиент ушёл сам."""
+    try:
+        allowed = await run_in_threadpool(_connect_allowed, redis, _client_ip(websocket), settings)
+    except RedisError:
+        logger.error("Лимит подключений к событиям тикета не проверен", exc_info=True)
+        return CLOSE_INTERNAL
+    if not allowed:
+        return CLOSE_TOO_MANY
     try:
         claims = await _authenticate(websocket, settings)
     except _Disconnected:
-        return
+        return None
     if claims is None:
-        return await _close(websocket, CLOSE_UNAUTHORIZED)
-    code = await run_in_threadpool(_check_access, scope, claims.user_id, ticket_id)
-    if code is not None:
-        return await _close(websocket, code)
+        return CLOSE_UNAUTHORIZED
 
-    pubsub = pubsub_redis.pubsub()
-    try:
-        await pubsub.subscribe(events.channel(ticket_id))
-        code = await _relay(
-            websocket, pubsub, scope, claims, ticket_id, presigner(storage, settings)
-        )
-    finally:
-        await pubsub.aclose()
-    if code is not None:
-        await _close(websocket, code)
+    with _user_sockets.hold(claims.user_id, settings.ws_max_sockets_per_user) as held:
+        if not held:
+            return CLOSE_TOO_MANY
+        ticket_id = _ticket_id(ticket_ref)
+        if ticket_id is None:
+            return CLOSE_FORBIDDEN
+        try:
+            code = await run_in_threadpool(_check_access, scope, claims.user_id, ticket_id)
+        except SQLAlchemyError:
+            logger.error("Доступ к событиям тикета не проверен", exc_info=True)
+            return CLOSE_INTERNAL
+        if code is not None:
+            return code
+
+        # Доступ проверяется до подписки: отказ не трогает Redis. Потерю доступа между
+        # проверкой и подпиской ловит проверка на следующем событии и REST после `ready`.
+        try:
+            listener = await hub.subscribe(events.channel(ticket_id))
+        except RedisError:
+            logger.error("Подписка на события тикета не удалась", exc_info=True)
+            return CLOSE_INTERNAL
+        try:
+            presign = presigner(storage, settings)
+            return await _relay(websocket, listener, scope, claims, ticket_id, presign)
+        finally:
+            hub.unsubscribe(listener)

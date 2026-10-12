@@ -31,7 +31,7 @@
 | C-04, C-05 | `vehicle_aggregate_status`, `maintenance_regulation`, `aggregate_status_thresholds` (расчёт — `docs/specs/AGGREGATE_STATUS_ALGORITHM.md`) |
 | C-06 | `knowledge_article.vehicle_model_id`, `.firmware_release_id`, `vehicle.current_firmware_release_id` |
 | C-07 | `decision_tree_node`, `ticket.source_article_id`, `ticket.source_node_id` |
-| C-08, X-03 | `ticket`, `ticket_attachment` (object_key, ADR 0004) |
+| C-08, X-03 | `ticket`, `ticket_attachment` (object_key, ADR 0004; upload_name — имя исходной загрузки, UNIQUE, ADR 0017) |
 | C-09 | `ticket_message`; история — `ticket` по `vehicle.user_id` |
 | C-10, C-11, C-14, A-03 | `notification` (type, таргетинг по модели), `firmware_release`, `push_token` |
 | C-12 | `vehicle.user_id` 1:N |
@@ -109,4 +109,5 @@
 | Норматив SLA у каждой категории тикета, срок > 0, один на категорию (seed 0008) | `pk_ticket_sla_policy`, `ck_ticket_sla_policy_resolution_minutes_positive` | `test_sla_policy.py` |
 | Только хэши секретов | `ck_refresh_token_token_hash_sha256`, `ck_app_user_staff_password` | `test_refresh_token_stores_only_sha256`, `test_staff_requires_password_hash` |
 | Вложение и сообщение — одного тикета | `fk_ticket_attachment_message_same_ticket` | `test_attachment_message_must_belong_to_same_ticket` |
+| Одна загрузка — одно вложение, и при одновременных привязках (миграция 0009, ADR 0017) | `uq_ticket_attachment_upload_name` | `test_upload_becomes_one_attachment`, `test_second_binding_of_upload_waits_for_first` |
 | ORM ≡ миграции; DDL/ERD синхронны | autogenerate, export-скрипты | `test_orm_matches_migrations`, `test_ddl_file_in_sync_with_migrations`, `test_erd_file_in_sync_with_models` |

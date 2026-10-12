@@ -16,6 +16,7 @@ from app.api.routes import (
 )
 from app.core.config import SAFE_ENVIRONMENTS, Settings, get_settings
 from app.core.errors import install_error_handlers
+from app.core.redis import PubSubHub
 from app.core.storage import get_storage
 
 API_PREFIX = "/v1"  # servers в docs/openapi.yaml: http://localhost:8000/v1
@@ -31,11 +32,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         Исключение при старте — uvicorn пишет причину в лог и завершается с ненулевым кодом.
         Проверяется то же хранилище, что получат маршруты (с учётом dependency_overrides);
         local/test S3 не требуют — ни при импорте, ни при старте.
+
+        Общая подписка Redis pub/sub процесса (WebSocket событий тикета) соединяется при первом
+        подписчике, а не при старте; при остановке закрывается.
         """
         if settings.environment not in SAFE_ENVIRONMENTS:
             storage = app.dependency_overrides.get(get_storage, get_storage)()
             await run_in_threadpool(storage.check_bucket)
-        yield
+        app.state.pubsub_hub = hub = PubSubHub.from_settings(settings)
+        try:
+            yield
+        finally:
+            await hub.aclose()
 
     application = FastAPI(
         title="EV-ServiceDesk API",

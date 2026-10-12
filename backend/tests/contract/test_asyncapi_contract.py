@@ -2,7 +2,8 @@
 
 Spectral (`npm run lint:asyncapi`) проверяет структуру AsyncAPI 3.0, но не примеры сообщений и не
 payload в формате схем OpenAPI. Здесь: канал — путь тикета REST, payload событий — схемы
-openapi.yaml по $ref, каждый пример валиден по своему payload, `type` конверта = имя сообщения.
+openapi.yaml по $ref, каждый пример валиден по своему payload, `type` конверта = имя сообщения;
+коды закрытия и кадр `ready` сервера описаны в документе.
 """
 
 from functools import cache
@@ -13,6 +14,8 @@ import pytest
 import yaml
 from jsonschema import Draft7Validator
 from openapi_schema_validator import OAS30Validator
+
+from app.api.routes import ticket_events
 
 DOCS = Path(__file__).resolve().parents[3] / "docs"
 OPENAPI_FORMAT = "application/vnd.oai.openapi;version=3.0.0"
@@ -82,3 +85,30 @@ def test_examples_match_payload(name: str) -> None:
     for example in message["examples"]:
         validator(schema).validate(example["payload"])
         assert example["payload"]["type"] == message["name"]
+
+
+def test_close_codes_documented() -> None:
+    """Каждый код закрытия сервера — строка таблицы «Коды закрытия» канала."""
+    description = load("asyncapi.yaml")["channels"]["ticketEvents"]["description"]
+    codes = {
+        value
+        for name, value in vars(ticket_events).items()
+        if name.startswith("CLOSE_") and isinstance(value, int)
+    }
+    assert codes == {4401, 4403, 4429, 1011, 1013}
+    for code in codes:
+        assert f"| `{code}` |" in description, code
+
+
+def test_ready_frame_matches_contract() -> None:
+    """Кадр `ready` сервера — сообщение Ready, отправляется операцией send."""
+    doc = load("asyncapi.yaml")
+    ready = inline(doc["components"]["messages"]["Ready"])
+    Draft7Validator(ready["payload"]).validate(ticket_events.READY)
+    sent = [
+        message["$ref"]
+        for operation in doc["operations"].values()
+        if operation["action"] == "send"
+        for message in operation["messages"]
+    ]
+    assert "#/channels/ticketEvents/messages/ready" in sent

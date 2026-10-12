@@ -49,7 +49,7 @@ def _snapshot(engine: Engine) -> dict[str, set[str]]:
 def test_upgrade_downgrade_upgrade(migrated_engine: Engine, db_url: URL) -> None:
     cfg = alembic_config(db_url)
     head = ScriptDirectory.from_config(cfg).get_current_head()
-    assert head == "0008"
+    assert head == "0009"
 
     command.downgrade(cfg, "base")
     empty = _snapshot(migrated_engine)

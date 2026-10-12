@@ -93,6 +93,25 @@ class Settings(BaseSettings):
     # WebSocket чата: первое сообщение {"type": "auth"} — не позже, иначе закрытие 4401.
     ws_auth_timeout_seconds: float = Field(5, gt=0, le=60)
 
+    # --- WebSocket событий тикета (ADR 0017 п. 9, docs/asyncapi.yaml) ---
+    # Каналы Redis pub/sub не зависят от номера БД Redis: стенды на одном сервере Redis
+    # разделяются префиксом каналов. Пусто — `ev-servicedesk:<environment>`.
+    redis_channel_prefix: str = ""
+    # Подключения процесса к Redis pub/sub — одно общее соединение (app.core.redis.PubSubHub).
+    # Тишина дольше интервала — PING; нет ответа за тот же срок — связь потеряна, подключения
+    # закрываются 1011 (клиент переподключается и догружает пропущенное).
+    redis_pubsub_ping_seconds: float = Field(10, gt=0, le=60)
+    # Кадров в очереди одного подключения; не успевающий получатель закрывается 1013.
+    ws_event_queue_size: int = Field(100, ge=1)
+    ws_max_sockets_per_user: int = Field(10, ge=1)  # одновременно, на процесс; сверх — 4429
+    ws_connects_per_ip_minute: int = Field(60, ge=1)  # попыток подключения; сверх — 4429
+
+    @model_validator(mode="after")
+    def _default_channel_prefix(self) -> "Settings":
+        if not self.redis_channel_prefix:
+            self.redis_channel_prefix = f"ev-servicedesk:{self.environment}"
+        return self
+
     @model_validator(mode="after")
     def _check_real_environment(self) -> "Settings":
         """Вне local/test заглушки секретов, фейковый SMS-провайдер и S3 без ключей запрещены.

@@ -16,14 +16,20 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.core.storage import FakeObjectStorage, S3ObjectStorage, get_storage
-from app.models import TicketAttachment
+from app.core.storage import FakeObjectStorage, S3ObjectStorage, StorageUnavailable, get_storage
+from app.models import Ticket, TicketAttachment, TicketMessage
 from app.models.enums import UserRole
 from tests.api.conftest import API, add_vehicle, api_settings, assert_contract
 
 Headers = dict[str, str]
 JPEG = b"\xff\xd8\xff\xe0" + b"0" * 64
 UPLOAD_KEY = re.compile(r"uploads/(\d+)/[0-9a-f-]{36}(\.[a-z0-9]+)?")
+UUID = r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"
+
+
+def copy_key(ticket_id: int, extension: str = ".jpg") -> re.Pattern[str]:
+    """Ключ копии вложения: tickets/{ticket_id}/{новый uuid}{расширение загрузки}."""
+    return re.compile(rf"tickets/{ticket_id}/{UUID}{re.escape(extension)}")
 
 
 @pytest.fixture
@@ -96,14 +102,11 @@ def test_presign_key_layout(client, owner, storage):
 
 
 def test_presign_roles_and_validation(client, owner, as_staff):
-    admin_headers, _ = as_staff("+375294400002", UserRole.ADMIN)
-    r = client.post(
-        f"{API}/uploads/presign",
-        json={"file_name": "a.jpg", "file_type": "photo"},
-        headers=admin_headers,
+    # admin пишет в чат любого тикета (RBAC-04) — и загружает вложения (решение 2026-10-12).
+    admin_headers, admin = as_staff("+375294400002", UserRole.ADMIN)
+    assert UPLOAD_KEY.fullmatch(presign(client, admin_headers)["file_url"]).group(1) == str(
+        admin.id
     )
-    assert r.status_code == 403
-    assert_contract(r, "createPresignedUpload")
     engineer_headers, _ = as_staff("+375294400003")
     presign(client, engineer_headers)
     for body in (
@@ -139,14 +142,54 @@ def test_attachment_is_copied_and_presigned_on_read(client, owner, vehicle, stor
 
     [row] = db.scalars(select(TicketAttachment).where(TicketAttachment.ticket_id == ticket["id"]))
     name = item["file_url"].rsplit("/", 1)[1]
-    assert row.object_key == f"tickets/{ticket['id']}/{name}"
+    assert copy_key(ticket["id"]).fullmatch(row.object_key), row.object_key
+    assert row.upload_name == name and name not in row.object_key, "ключ копии — новый"
     assert (row.mime_type, row.size_bytes, row.ticket_message_id) == ("image/jpeg", len(JPEG), None)
-    assert storage.objects[row.object_key][0] == JPEG
+    # MIME копии — проверенный (без параметров), а не присланный клиентом.
+    assert storage.objects[row.object_key] == (JPEG, "image/jpeg")
     assert item["file_url"] not in storage.objects, "исходная загрузка удалена после привязки"
 
     [att] = ticket["attachments"]
     assert att["file_type"] == "photo"
     assert "X-Fake-Method=GET" in att["file_url"] and row.object_key in unquote(att["file_url"])
+    assert "X-Fake-Content-Type=image%2Fjpeg" in att["file_url"], "Content-Type ответа — из БД"
+
+
+@pytest.mark.parametrize("operation", ["createTicket", "createTicketMessage"])
+def test_upload_overwritten_after_check_is_not_copied(
+    client, owner, vehicle, storage, monkeypatch, db: Session, operation
+):
+    """Загрузка перезаписана тем же presigned PUT между HEAD и копированием (TOCTOU).
+
+    Копируется только проверенная версия (ETag): иначе в tickets/ оказался бы HTML на 30 МБ
+    с записью «image/jpeg, 68 байт» в БД — в обход списка MIME и лимита размера.
+    """
+    tid = create(client, owner, vehicle["id"], []).json()["id"]
+    item = uploaded(client, owner, storage)
+    real_head = storage.head
+
+    def head_then_swap(key: str):
+        info = real_head(key)
+        storage.put(key, b"<html>" * 5_000_000, "text/html")  # гонка: PUT после HEAD
+        return info
+
+    monkeypatch.setattr(storage, "head", head_then_swap)
+    if operation == "createTicket":
+        r = create(client, owner, vehicle["id"], [item])
+    else:
+        r = client.post(
+            f"{API}/tickets/{tid}/messages",
+            json={"body": "Фото", "attachments": [item]},
+            headers=owner,
+        )
+    assert r.status_code == 422, r.text
+    assert_contract(r, operation)
+    assert r.json()["error"]["code"] == "ATTACHMENT_NOT_FOUND"
+    assert r.json()["error"]["details"]["fields"] == [
+        {"loc": ["body", "attachments", 0, "file_url"]}
+    ]
+    assert not [k for k in storage.objects if k.startswith("tickets/")], "копии нет"
+    assert db.scalars(select(TicketAttachment)).all() == []
 
 
 def test_message_attachments(client, owner, vehicle, storage, db: Session):
@@ -168,6 +211,28 @@ def test_message_attachments(client, owner, vehicle, storage, db: Session):
     assert r.json()["attachments"] == [], "вложения сообщений — не вложения тикета"
     r = client.get(f"{API}/tickets/{tid}/messages", headers=owner)
     assert [a["file_type"] for a in r.json()["items"][0]["attachments"]] == ["video"]
+
+
+def test_timestamps_of_one_write_are_equal(client, owner, vehicle, storage, db: Session):
+    """Тикет, сообщение и их вложения: одна метка «момент записи» (ADR 0017, «Уточнения»)."""
+    photo = uploaded(client, owner, storage, b"\xff\xd8\xff\xe0jpeg", "image/jpeg")
+    tid = create(client, owner, vehicle["id"], [photo]).json()["id"]
+    ticket = db.get(Ticket, tid)
+    row = db.scalars(select(TicketAttachment).where(TicketAttachment.ticket_id == tid)).one()
+    assert ticket.updated_at == ticket.created_at == row.created_at
+
+    video = uploaded(client, owner, storage, b"\x00\x00\x00\x18ftypmp42", "video/mp4", "video")
+    r = client.post(
+        f"{API}/tickets/{tid}/messages",
+        json={"body": "Видео", "attachments": [video]},
+        headers=owner,
+    )
+    assert r.status_code == 201, r.text
+    message = db.get(TicketMessage, r.json()["id"])
+    row = db.scalars(
+        select(TicketAttachment).where(TicketAttachment.ticket_message_id == message.id)
+    ).one()
+    assert row.created_at == message.created_at
 
 
 def test_attachment_errors(client, owner, as_client, vehicle, storage, app, db: Session):
@@ -200,6 +265,14 @@ def test_attachment_errors(client, owner, as_client, vehicle, storage, app, db: 
 
     item = uploaded(client, owner, storage)
     assert code([item, item]) == "ATTACHMENT_ALREADY_USED"
+    # Управляющие символы C1 (U+0080–U+009F) — как C0: 422 (ADR 0017, «Уточнения»).
+    for text in ("a\x85b", "a\x9bb", "a\u0080b", "a\u009fb"):
+        r = client.post(
+            f"{API}/tickets",
+            json={"vehicle_id": vehicle["id"], "category": "audio", "description": text},
+            headers=owner,
+        )
+        assert r.status_code == 422 and r.json()["error"]["code"] == "VALIDATION_ERROR", text
     assert code([uploaded(client, owner, storage) for _ in range(11)]) == "TOO_MANY_ATTACHMENTS"
 
     assert create(client, owner, vehicle["id"], [item]).status_code == 201
@@ -218,10 +291,10 @@ def test_failed_binding_removes_copies(client, owner, vehicle, storage, monkeypa
     first, second = uploaded(client, owner, storage), uploaded(client, owner, storage)
     real_copy = storage.copy
 
-    def flaky_copy(src: str, dst: str) -> None:
+    def flaky_copy(src: str, dst: str, **kwargs) -> None:
         if src == second["file_url"]:
             raise RuntimeError("сбой S3 при копировании")
-        real_copy(src, dst)
+        real_copy(src, dst, **kwargs)
 
     monkeypatch.setattr(storage, "copy", flaky_copy)
     with pytest.raises(RuntimeError):
@@ -229,6 +302,55 @@ def test_failed_binding_removes_copies(client, owner, vehicle, storage, monkeypa
     assert not [k for k in storage.objects if k.startswith("tickets/")], "копия удалена"
     assert first["file_url"] in storage.objects, "исходная загрузка не тронута"
     assert db.scalars(select(TicketAttachment)).all() == []
+
+
+def test_copy_reported_as_failed_is_removed(app, owner, vehicle, storage, monkeypatch, db: Session):
+    """S3 выполнил копирование, но ответ потерян (таймаут): копия не остаётся «сиротой».
+
+    Под tickets/ правило жизненного цикла не действует, а тикета для неё нет.
+    """
+    item = uploaded(TestClient(app), owner, storage)
+    real_copy = storage.copy
+
+    def copy_then_timeout(src: str, dst: str, **kwargs) -> None:
+        real_copy(src, dst, **kwargs)
+        raise StorageUnavailable("S3 copy_object: ReadTimeoutError")
+
+    monkeypatch.setattr(storage, "copy", copy_then_timeout)
+    r = create(TestClient(app, raise_server_exceptions=False), owner, vehicle["id"], [item])
+    assert r.status_code == 500
+    assert not [k for k in storage.objects if k.startswith("tickets/")], "копия удалена"
+    assert item["file_url"] in storage.objects
+    assert db.scalars(select(TicketAttachment)).all() == []
+
+
+def test_each_binding_attempt_copies_to_new_key(client, owner, vehicle, storage, monkeypatch):
+    """Ключ копии уникален для попытки: удаление копий неудачной попытки не заденет объект
+    удачной (той же загрузки в тот же тикет), даже если выполняется после её commit.
+    """
+    tid = create(client, owner, vehicle["id"], []).json()["id"]
+    item = uploaded(client, owner, storage)
+    destinations: list[str] = []
+    real_copy = storage.copy
+
+    def recording_copy(src: str, dst: str, **kwargs) -> None:
+        destinations.append(dst)
+        real_copy(src, dst, **kwargs)
+        if len(destinations) == 1:
+            raise StorageUnavailable("S3 copy_object: ReadTimeoutError")
+
+    monkeypatch.setattr(storage, "copy", recording_copy)
+    message = {"body": "Фото", "attachments": [item]}
+    failing = TestClient(client.app, raise_server_exceptions=False)
+    assert (
+        failing.post(f"{API}/tickets/{tid}/messages", json=message, headers=owner).status_code
+        == 500
+    )
+    r = client.post(f"{API}/tickets/{tid}/messages", json=message, headers=owner)
+    assert r.status_code == 201, r.text
+    first, second = destinations
+    assert first != second and all(copy_key(tid).fullmatch(k) for k in destinations)
+    assert first not in storage.objects and second in storage.objects
 
 
 def test_storage_unavailable_is_server_error(app, owner, vehicle, storage):
@@ -266,7 +388,9 @@ def test_full_cycle_on_minio(client, owner, as_staff, vehicle, minio, db: Sessio
         and "aggregate_statuses" in ticket["vehicle_context"]
     )
     assert minio.head(target["file_url"]) is None, "исходная загрузка удалена"
-    info = minio.head(f"tickets/{tid}/{target['file_url'].rsplit('/', 1)[1]}")
+    [key] = db.scalars(select(TicketAttachment.object_key).where(TicketAttachment.ticket_id == tid))
+    assert copy_key(tid, ".png").fullmatch(key), key
+    info = minio.head(key)
     assert info is not None and (info.size, info.content_type) == (len(data), "image/png")
 
     eng_headers, _ = as_staff("+375294400021")
@@ -297,6 +421,7 @@ def test_full_cycle_on_minio(client, owner, as_staff, vehicle, minio, db: Sessio
     [att] = r.json()["attachments"]
     got = httpx.get(att["file_url"])
     assert got.status_code == 200 and got.content == data, "presigned GET отдаёт тот же файл"
+    assert got.headers["content-type"] == "image/png"
 
     r = client.get(f"{API}/tickets/{tid}/messages", headers=owner)
     [message] = r.json()["items"]
@@ -310,3 +435,33 @@ def test_full_cycle_on_minio(client, owner, as_staff, vehicle, minio, db: Sessio
         client, owner, vehicle["id"], [{"file_url": stranger["file_url"], "file_type": "photo"}]
     )
     assert r.status_code == 422 and r.json()["error"]["code"] == "ATTACHMENT_NOT_FOUND"
+
+
+def test_upload_overwritten_after_check_on_minio(
+    client, owner, vehicle, minio, monkeypatch, db: Session
+):
+    """TOCTOU на настоящем S3 API: перезапись тем же presigned PUT после HEAD — копии нет."""
+    target = presign(client, owner, name="panel.jpg")
+    assert httpx.put(
+        target["upload_url"], content=JPEG, headers={"Content-Type": "image/jpeg"}
+    ).is_success
+    real_head = minio.head
+
+    def head_then_swap(key: str):
+        info = real_head(key)
+        swapped = httpx.put(
+            target["upload_url"],
+            content=b"<html>" * 1000,
+            headers={"Content-Type": "text/html"},
+        )
+        assert swapped.is_success
+        return info
+
+    monkeypatch.setattr(minio, "head", head_then_swap)
+    r = create(
+        client, owner, vehicle["id"], [{"file_url": target["file_url"], "file_type": "photo"}]
+    )
+    assert r.status_code == 422, r.text
+    assert_contract(r, "createTicket")
+    assert r.json()["error"]["code"] == "ATTACHMENT_NOT_FOUND"
+    assert db.scalars(select(TicketAttachment)).all() == []

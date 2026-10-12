@@ -647,5 +647,17 @@ CREATE TRIGGER trg_set_updated_at BEFORE UPDATE ON ticket_sla_policy FOR EACH RO
 
 UPDATE alembic_version SET version_num='0008' WHERE alembic_version.version_num = '0007';
 
+-- Running upgrade 0008 -> 0009
+
+ALTER TABLE ticket_attachment ADD COLUMN upload_name VARCHAR(64);
+
+UPDATE ticket_attachment SET upload_name = regexp_replace(object_key, '^.*/', '');
+
+ALTER TABLE ticket_attachment ALTER COLUMN upload_name SET NOT NULL;
+
+ALTER TABLE ticket_attachment ADD CONSTRAINT uq_ticket_attachment_upload_name UNIQUE (upload_name);
+
+UPDATE alembic_version SET version_num='0009' WHERE alembic_version.version_num = '0008';
+
 COMMIT;
 

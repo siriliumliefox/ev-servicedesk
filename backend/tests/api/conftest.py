@@ -6,7 +6,8 @@ SAVEPOINT (join_transaction_mode="create_savepoint").
 
 import re
 import threading
-from collections.abc import AsyncIterator, Callable, Iterator
+import uuid
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from functools import cache
@@ -20,14 +21,13 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from openapi_schema_validator import OAS30Validator
 from redis import Redis
-from redis.asyncio import Redis as AsyncRedis
 from sqlalchemy import Engine
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_sms_provider
 from app.core.config import Settings, get_settings
 from app.core.db import get_db, get_session_scope
-from app.core.redis import get_pubsub_redis, get_redis
+from app.core.redis import PubSubHub, get_pubsub_hub, get_redis
 from app.core.security import hash_password
 from app.core.storage import FakeObjectStorage, ObjectStorage, get_storage
 from app.domain.auth.sms import FakeSmsProvider
@@ -40,6 +40,9 @@ DOCS = Path(__file__).resolve().parents[3] / "docs"
 API = "/v1"
 POLICY = "2026-10"
 STAFF_PASSWORD = "Staff-pass-123"
+# Каналы pub/sub не зависят от номера БД Redis: параллельные прогоны на одном сервере
+# разделяются префиксом каналов, своим у каждого прогона.
+RUN_CHANNEL_PREFIX = f"test-{uuid.uuid4().hex[:12]}"
 
 
 def api_settings(**overrides: Any) -> Settings:
@@ -49,8 +52,15 @@ def api_settings(**overrides: Any) -> Settings:
         "jwt_secret": "api-test-secret-" + "q" * 32,
         "sms_code_secret": "api-test-sms-secret-" + "w" * 32,
         "sms_provider": "fake",
+        "redis_channel_prefix": RUN_CHANNEL_PREFIX,
     }
     return Settings(_env_file=None, **(values | overrides))
+
+
+@pytest.fixture(autouse=True)
+def _run_channel_prefix(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Каналы событий тикетов (events.channel) — с префиксом прогона."""
+    monkeypatch.setattr(get_settings(), "redis_channel_prefix", RUN_CHANNEL_PREFIX)
 
 
 @pytest.fixture
@@ -81,13 +91,9 @@ def storage(fake_storage: FakeObjectStorage) -> ObjectStorage:
     return fake_storage
 
 
-async def _pubsub_redis() -> AsyncIterator[AsyncRedis]:
-    """Подписки WebSocket — на тестовом Redis (каналы pub/sub не зависят от номера БД)."""
-    client = AsyncRedis.from_url(_test_redis_url(), decode_responses=True)
-    try:
-        yield client
-    finally:
-        await client.aclose()
+def pubsub_hub(settings: Settings) -> PubSubHub:
+    """Общая подписка WebSocket — на тестовом Redis (как в app.main, но с TEST_REDIS_URL)."""
+    return PubSubHub.from_settings(settings, url=_test_redis_url())
 
 
 @pytest.fixture
@@ -117,7 +123,8 @@ def app(
     application.dependency_overrides[get_db] = shared_db
     application.dependency_overrides[get_session_scope] = lambda: session_scope
     application.dependency_overrides[get_redis] = lambda: real_redis
-    application.dependency_overrides[get_pubsub_redis] = _pubsub_redis
+    hub = pubsub_hub(settings)
+    application.dependency_overrides[get_pubsub_hub] = lambda: hub
     application.dependency_overrides[get_sms_provider] = lambda: sms
     application.dependency_overrides[get_storage] = lambda: storage
     return application
