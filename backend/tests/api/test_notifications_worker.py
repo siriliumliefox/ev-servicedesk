@@ -10,7 +10,6 @@ import time
 from datetime import UTC, date, datetime, timedelta
 
 import pytest
-from fastapi.testclient import TestClient
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
@@ -29,7 +28,7 @@ from app.models import (
 )
 from app.models.enums import UserRole
 from tests.api.conftest import API, Headers, model_id
-from tests.api.notifications_support import feed, publish
+from tests.api.notifications_support import feed, mileage, publish, regulation, replace
 
 
 @pytest.fixture
@@ -154,29 +153,6 @@ def test_publication_reaches_sender_via_redis_signal_fast(
 
 
 # ---------- Cron: напоминания о ТО (C-11, N-10, ADR 0019 п. 5–7) ----------
-
-
-def regulation(client: TestClient, admin: Headers, model: int, code: str, **interval) -> None:
-    r = client.post(
-        f"{API}/maintenance-regulations",
-        json={"vehicle_model_id": model, "aggregate_type_code": code, **interval},
-        headers=admin,
-    )
-    assert r.status_code == 201, r.text
-
-
-def replace(client: TestClient, admin: Headers, vid: int, code: str, day: date, km: int) -> None:
-    r = client.post(
-        f"{API}/vehicles/{vid}/aggregate-statuses/{code}/replace",
-        json={"replaced_at": str(day), "mileage_at_replacement": km},
-        headers=admin,
-    )
-    assert r.status_code == 200, r.text
-
-
-def mileage(client: TestClient, headers: Headers, vid: int, km: int) -> None:
-    r = client.patch(f"{API}/vehicles/{vid}/mileage", json={"mileage": km}, headers=headers)
-    assert r.status_code == 200, r.text
 
 
 def reminders(db: Session, vid: int) -> list[tuple[str, str]]:
