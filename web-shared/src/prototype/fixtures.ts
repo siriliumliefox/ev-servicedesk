@@ -371,6 +371,8 @@ export function seedTickets(now: Date): TicketRecord[] {
   });
 }
 
+const ARTICLES_UPDATED_AT = "2026-10-01T09:00:00Z";
+
 const article = (
   id: number,
   article_type: KnowledgeArticle["article_type"],
@@ -379,7 +381,23 @@ const article = (
   vehicle_model_id: number | null = null,
   version = 1,
   is_published = true,
-): KnowledgeArticle => ({ id, article_type, title, content, vehicle_model_id, firmware_release_id: null, version, is_published });
+  category: KnowledgeArticle["category"] = null,
+): KnowledgeArticle => ({
+  id,
+  article_type,
+  category,
+  title,
+  content,
+  vehicle_model_id,
+  firmware_release_id: null,
+  version,
+  is_published,
+  updated_at: ARTICLES_UPDATED_AT,
+});
+
+/** «Устранение неполадок» — с категорией ошибки (= категория тикета при эскалации, ADR 0018 п. 2). */
+const troubleshooting = (id: number, title: string, content: string, category: NonNullable<KnowledgeArticle["category"]>) =>
+  article(id, "troubleshooting", title, content, null, 1, true, category);
 
 export const ARTICLES: KnowledgeArticle[] = [
   article(
@@ -435,10 +453,10 @@ export const ARTICLES: KnowledgeArticle[] = [
     1,
     false,
   ),
-  article(10, "troubleshooting", "Завис экран мультимедиа", "Экран не реагирует на касания или показывает чёрный фон."),
-  article(11, "troubleshooting", "Пропал звук", "Нет звука из динамиков в музыке, навигации или звонках."),
-  article(12, "troubleshooting", "Нет мобильного интернета", "Не работают онлайн-карты, музыка и голосовой помощник."),
-  article(13, "troubleshooting", "Навигация не видит GPS", "Метка автомобиля не двигается или стоит не на месте."),
+  troubleshooting(10, "Завис экран мультимедиа", "Экран не реагирует на касания или показывает чёрный фон.", "app_crash"),
+  troubleshooting(11, "Пропал звук", "Нет звука из динамиков в музыке, навигации или звонках.", "audio"),
+  troubleshooting(12, "Нет мобильного интернета", "Не работают онлайн-карты, музыка и голосовой помощник.", "sim"),
+  troubleshooting(13, "Навигация не видит GPS", "Метка автомобиля не двигается или стоит не на месте.", "navigation"),
 ];
 
 const node = (

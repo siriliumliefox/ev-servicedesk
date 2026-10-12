@@ -9,7 +9,7 @@ from app.models.aggregates import (
 )
 from app.models.auth import AppUser, PdConsent, RefreshToken
 from app.models.base import Base
-from app.models.knowledge import DecisionTreeNode, KnowledgeArticle
+from app.models.knowledge import DecisionTreeNode, KnowledgeArticle, KnowledgeArticleRevision
 from app.models.notifications import (
     Notification,
     NotificationDelivery,
@@ -27,6 +27,7 @@ __all__ = [
     "DecisionTreeNode",
     "FirmwareRelease",
     "KnowledgeArticle",
+    "KnowledgeArticleRevision",
     "MaintenanceRecord",
     "MaintenanceRegulation",
     "Notification",

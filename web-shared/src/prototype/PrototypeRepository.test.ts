@@ -180,14 +180,41 @@ describe("база знаний и дерево решений", () => {
     expect(issues).toContainEqual({ node_id: dead.id, problem: "DEAD_END" });
   });
 
+  it("цикл без выхода — тупик; нет корня и нет эскалации — проблемы дерева целиком (ADR 0018)", async () => {
+    const repo = admin();
+    const ts = await repo.createKnowledgeArticle({ article_type: "troubleshooting", category: "audio", title: "Цикл", content: "x" });
+    expect((await repo.validateDecisionTree(ts.id)).issues).toEqual([{ problem: "NO_ROOT" }]);
+    const solved = await repo.createDecisionTreeNode(ts.id, { question_text: "Решено", is_root: false, is_escalation: false, options: [] });
+    const a = await repo.createDecisionTreeNode(ts.id, { question_text: "А", is_root: true, is_escalation: false, options: [{ label: "Решено", next_node_id: solved.id }] });
+    expect((await repo.validateDecisionTree(ts.id)).issues).toEqual([{ problem: "NO_ESCALATION" }]);
+    const b = await repo.createDecisionTreeNode(ts.id, { question_text: "Б", is_root: false, is_escalation: false, options: [{ label: "В А", next_node_id: a.id }] });
+    await repo.updateDecisionTreeNode(a.id, { question_text: "А", is_root: true, is_escalation: false, options: [{ label: "В Б", next_node_id: b.id }] });
+    const { issues } = await repo.validateDecisionTree(ts.id);
+    expect(issues).toEqual(
+      expect.arrayContaining([
+        { node_id: a.id, problem: "DEAD_END" },
+        { node_id: b.id, problem: "DEAD_END" },
+        { node_id: solved.id, problem: "UNREACHABLE" },
+        { problem: "NO_ESCALATION" },
+      ]),
+    );
+  });
+
+  it("«устранение неполадок» без категории ошибки не создаётся", async () => {
+    const e = await apiError(admin().createKnowledgeArticle({ article_type: "troubleshooting", title: "t", content: "c" }));
+    expect(e.field).toBe("category");
+  });
+
   it("статья: черновик → публикация, правка поднимает версию; дерево с ошибкой не публикуется", async () => {
     const repo = admin();
     const draft = await repo.createKnowledgeArticle({ article_type: "guide", title: "Новая", content: "Текст" });
     expect([draft.is_published, draft.version]).toEqual([false, 1]);
+    // Версия — опубликованная редакция: правки черновика и первая публикация — версия 1.
     const published = await repo.updateKnowledgeArticle(draft.id, { content: "Текст 2", is_published: true });
-    expect([published.is_published, published.version]).toEqual([true, 2]);
+    expect([published.is_published, published.version]).toEqual([true, 1]);
+    expect((await repo.updateKnowledgeArticle(draft.id, { content: "Текст 3" })).version).toBe(2);
 
-    const ts = await repo.createKnowledgeArticle({ article_type: "troubleshooting", title: "Без дерева?", content: "x" });
+    const ts = await repo.createKnowledgeArticle({ article_type: "troubleshooting", category: "sim", title: "Без дерева?", content: "x" });
     await repo.createDecisionTreeNode(ts.id, { question_text: "?", is_root: true, is_escalation: false, options: [{ label: "a", next_node_id: null }] });
     expect((await apiError(repo.updateKnowledgeArticle(ts.id, { is_published: true }))).field).toBe("is_published");
   });

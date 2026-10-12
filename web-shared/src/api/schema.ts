@@ -458,7 +458,7 @@ export interface paths {
         put?: never;
         /**
          * Создать тикет
-         * @description source_article_id/source_node_id — при эскалации из дерева решений (Knowledge Base), иначе null. Вложения — через /uploads/presign заранее. Уточнено в 1.4.0 (ADR 0017): только на своё активное авто, иначе 404. Тикет создаётся в статусе new без исполнителя (очередь); sla_due_at = created_at + норматив категории (тег Tickets); firmware_version_at_creation — снимок текущей прошивки авто (N-09). description — 1…4000 символов после обрезки пробелов по краям. Статья и узел должны существовать, узел — принадлежать статье, узел без статьи запрещён — иначе 422 INVALID_SOURCE_REFERENCE. Вложения — до 10, правила и коды ошибок 422 — createPresignedUpload. 429 RATE_LIMITED — больше 10 тикетов в час на клиента, заголовок Retry-After. Ограничения на число открытых тикетов нет.
+         * @description source_article_id/source_node_id — при эскалации из дерева решений (Knowledge Base), иначе null. Вложения — через /uploads/presign заранее. Уточнено в 1.4.0 (ADR 0017): только на своё активное авто, иначе 404. Тикет создаётся в статусе new без исполнителя (очередь); sla_due_at = created_at + норматив категории (тег Tickets); firmware_version_at_creation — снимок текущей прошивки авто (N-09). description — 1…4000 символов после обрезки пробелов по краям. Статья и узел должны существовать, узел — принадлежать статье, узел без статьи запрещён — иначе 422 INVALID_SOURCE_REFERENCE. Уточнено в 1.5.0 (ADR 0018 п. 11): у статьи должна быть опубликованная версия (сейчас может быть снята с публикации), source_node_id — узел эскалации (is_escalation=true); удалённый узел — 422, повторите без source_node_id. В тикете сохраняется версия статьи — TicketDetail.source_article. Вложения — до 10, правила и коды ошибок 422 — createPresignedUpload. 429 RATE_LIMITED — больше 10 тикетов в час на клиента, заголовок Retry-After. Ограничения на число открытых тикетов нет.
          */
         post: operations["createTicket"];
         delete?: never;
@@ -590,13 +590,13 @@ export interface paths {
         };
         /**
          * Список/поиск статей
-         * @description client видит только is_published=true; engineer/admin — все, включая черновики.
+         * @description client и engineer видят только is_published=true, admin — все, включая черновики (уточнено в 1.5.0, RBAC-05: инженер не отправит черновик клиенту «быстрым ответом»). vehicle_model_id — статьи модели и общие (без модели). search — полнотекстовый поиск (русская морфология, заголовок важнее текста), до 200 символов, иначе 422; с search — по релевантности, без — по updated_at, новые первыми (ADR 0018 п. 9).
          */
         get: operations["listKnowledgeArticles"];
         put?: never;
         /**
          * Создать статью (черновик)
-         * @description Создаёт неопубликованную статью для дальнейшего редактирования.
+         * @description Создаёт неопубликованную статью (черновик, версий нет, version = 1). Уточнено в 1.5.0 (ADR 0018): category обязательна для troubleshooting — иначе 422 CATEGORY_REQUIRED; vehicle_model_id — существующая модель (422 VEHICLE_MODEL_NOT_FOUND); firmware_release_id — прошивка этой модели (422 FIRMWARE_RELEASE_NOT_FOUND). title — 1…200 символов после обрезки пробелов, content — до 50 000 символов, иначе 422.
          */
         post: operations["createKnowledgeArticle"];
         delete?: never;
@@ -616,23 +616,68 @@ export interface paths {
         };
         /**
          * Детали статьи
-         * @description Возвращает статью по идентификатору.
+         * @description Возвращает статью по идентификатору. Черновик для client и engineer — 404 (уточнено в 1.5.0, RBAC-05).
          */
         get: operations["getKnowledgeArticle"];
         put?: never;
         post?: never;
         /**
          * Снять статью с публикации
-         * @description Soft — is_published=false. Жёсткое удаление не предусмотрено (Ticket.source_article_id ссылается на статьи).
+         * @description Soft — is_published=false; повторный вызов — тоже 204. Жёсткое удаление не предусмотрено (Ticket.source_article_id ссылается на статьи). Версии сохраняются; эскалация из статьи, у которой есть опубликованная версия, остаётся возможной (уточнено в 1.5.0, ADR 0018 п. 11).
          */
         delete: operations["unpublishKnowledgeArticle"];
         options?: never;
         head?: never;
         /**
          * Редактировать/опубликовать статью
-         * @description Редактирование инкрементирует version. Полная история версий не хранится (не требуется ТЗ) — version нужен для отображения актуальности клиенту, не для отката к прошлым редакциям.
+         * @description Меняются только переданные поля; null у category, vehicle_model_id, firmware_release_id снимает значение. Изменено в 1.5.0 (ADR 0018): version — номер последней опубликованной редакции. Если после записи статья опубликована и её содержание (title, content, category, привязка, дерево) отличается от последней версии — version + 1 и снимок (listKnowledgeArticleRevisions); правки черновика версий не создают. Публикация troubleshooting — только с валидным деревом, иначе 409 DECISION_TREE_INVALID (details.issues — как у validateDecisionTree). Ошибки 422 — как у createKnowledgeArticle. Отката к прошлой версии нет.
          */
         patch: operations["updateKnowledgeArticle"];
+        trace?: never;
+    };
+    "/knowledge-articles/{articleId}/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                articleId: number;
+            };
+            cookie?: never;
+        };
+        /**
+         * История версий статьи
+         * @description Опубликованные редакции статьи, новые первыми. Доступны у статьи с хотя бы одной опубликованной версией — в т. ч. снятой с публикации (на неё может ссылаться тикет, TicketDetail.source_article); черновик без версий для engineer — 404, admin видит все. Добавлено в 1.5.0 (ADR 0018 п. 1, RBAC-05).
+         */
+        get: operations["listKnowledgeArticleRevisions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/knowledge-articles/{articleId}/revisions/{version}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                articleId: number;
+                version: number;
+            };
+            cookie?: never;
+        };
+        /**
+         * Версия статьи (снимок)
+         * @description Снимок опубликованной редакции: заголовок, текст, категория, привязка и дерево решений на момент публикации. Добавлено в 1.5.0 (ADR 0018 п. 1).
+         */
+        get: operations["getKnowledgeArticleRevision"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/knowledge-articles/{articleId}/decision-tree": {
@@ -646,13 +691,13 @@ export interface paths {
         };
         /**
          * Дерево решений статьи (все узлы)
-         * @description Клиент проходит от узла с is_root=true, следуя options[].next_node_id.
+         * @description Клиент проходит от узла с is_root=true, следуя options[].next_node_id. Дерево черновика для client и engineer — 404 (уточнено в 1.5.0). Узлы — по порядку создания; в дереве не больше 100 узлов (page_size=100 — всё дерево).
          */
         get: operations["listDecisionTreeNodes"];
         put?: never;
         /**
          * Добавить узел дерева решений
-         * @description Создаёт узел; сервер проверяет уникальность is_root=true для статьи. 409 — Нарушение инварианта (напр. второй is_root=true).
+         * @description Создаёт узел; сервер проверяет уникальность is_root=true для статьи. 409 — Нарушение инварианта (напр. второй is_root=true). Уточнено в 1.5.0 (ADR 0018 п. 3, 5, 6): 409 ARTICLE_TYPE_HAS_NO_TREE — у guide дерева нет; 409 ARTICLE_PUBLISHED — дерево опубликованной статьи не меняется (снять с публикации → править → опубликовать); 409 DECISION_TREE_ROOT_EXISTS — второй корень. 422: INVALID_NEXT_NODE — вариант ведёт не на узел этой статьи; DECISION_TREE_TOO_LARGE — больше 100 узлов; question_text — 1…1000 символов, label — 1…100, не больше 10 вариантов, метки вариантов узла не повторяются.
          */
         post: operations["createDecisionTreeNode"];
         delete?: never;
@@ -672,7 +717,7 @@ export interface paths {
         };
         /**
          * Проверить дерево на тупики перед публикацией
-         * @description Операционализация теста из чек-листа Главы 14 ("отсутствие тупиков в дереве решений") — админ прогоняет проверку сам, не дожидаясь QA.
+         * @description Операционализация теста из чек-листа Главы 14 ("отсутствие тупиков в дереве решений") — админ прогоняет проверку сам, не дожидаясь QA. Уточнено в 1.5.0 (ADR 0018 п. 4): NO_ROOT — нет корня; MULTIPLE_ROOTS; BROKEN_REFERENCE — переход на отсутствующий узел; UNREACHABLE — узел недостижим из корня; DEAD_END — из узла не достижим ни один финал (решение или эскалация), в том числе замкнутый цикл; NO_ESCALATION — из корня не достижим ни один узел эскалации. У guide дерева нет — is_valid=true без проблем.
          */
         get: operations["validateDecisionTree"];
         put?: never;
@@ -697,14 +742,14 @@ export interface paths {
         post?: never;
         /**
          * Удалить узел
-         * @description Отклоняется с 409, если на узел ссылаются другие узлы. 409 — На узел ссылаются другие узлы — сначала обновите их options.
+         * @description Отклоняется с 409, если на узел ссылаются другие узлы. 409 — На узел ссылаются другие узлы — сначала обновите их options. Уточнено в 1.5.0: 409 DECISION_TREE_NODE_REFERENCED (details.referenced_by — id узлов), 409 ARTICLE_PUBLISHED — дерево опубликованной статьи не меняется. Ссылка тикета на удалённый узел обнуляется.
          */
         delete: operations["deleteDecisionTreeNode"];
         options?: never;
         head?: never;
         /**
          * Редактировать узел
-         * @description Обновляет текст вопроса и варианты переходов узла дерева решений.
+         * @description Обновляет текст вопроса и варианты переходов узла дерева решений (узел заменяется целиком). Ошибки 409 и 422 — как у createDecisionTreeNode (добавлено в 1.5.0).
          */
         patch: operations["updateDecisionTreeNode"];
         trace?: never;
@@ -1247,6 +1292,13 @@ export interface components {
             description?: string;
             /** @description Версия прошивки авто на момент создания тикета (снимок, N-09); null — прошивка не была зафиксирована. Текущая прошивка — vehicle_context.vehicle.current_firmware_version. Добавлено в 1.4.0 (ADR 0017). */
             firmware_version_at_creation: string | null;
+            /** @description «Пометка» эскалации из дерева решений: статья в версии на момент эскалации (ADR 0018 п. 11); null — тикет создан не из базы знаний. Добавлено в 1.5.0. */
+            source_article: {
+                id: number;
+                /** @description Заголовок в этой версии. */
+                title: string;
+                version: number;
+            } | null;
             attachments?: components["schemas"]["TicketAttachmentInput"][];
             vehicle_context?: components["schemas"]["VehicleContext"];
         };
@@ -1278,13 +1330,50 @@ export interface components {
             firmware_release_id?: number | null;
             /** @enum {string} */
             article_type: "guide" | "troubleshooting";
+            /**
+             * @description Обязательна для troubleshooting (иначе 422). Добавлено в 1.5.0.
+             * @enum {string|null}
+             */
+            category?: "navigation" | "audio" | "sim" | "app_crash" | "maintenance" | null;
             title: string;
+            /** @description Markdown (CommonMark) без HTML, до 50 000 символов (проверяет сервер, 1.5.0). */
             content: string;
         };
+        /** @description Меняются только переданные поля. Расширено в 1.5.0. */
         KnowledgeArticleUpdateRequest: {
             title?: string;
             content?: string;
+            /**
+             * @description У troubleshooting не может быть null. Добавлено в 1.5.0.
+             * @enum {string|null}
+             */
+            category?: "navigation" | "audio" | "sim" | "app_crash" | "maintenance" | null;
+            /** @description Добавлено в 1.5.0. */
+            vehicle_model_id?: number | null;
+            /** @description Добавлено в 1.5.0. */
+            firmware_release_id?: number | null;
             is_published?: boolean;
+        };
+        /** @description Опубликованная редакция статьи в истории версий. Добавлено в 1.5.0. */
+        KnowledgeArticleRevisionSummary: {
+            version: number;
+            title: string;
+            /** Format: date-time */
+            published_at: string;
+        };
+        /** @description Снимок опубликованной редакции: содержание и дерево решений на момент публикации. Добавлено в 1.5.0 (ADR 0018 п. 1). */
+        KnowledgeArticleRevision: components["schemas"]["KnowledgeArticleRevisionSummary"] & {
+            article_id: number;
+            content: string;
+            /** @enum {string|null} */
+            category: "navigation" | "audio" | "sim" | "app_crash" | "maintenance" | null;
+            vehicle_model_id: number | null;
+            firmware_release_id: number | null;
+            decision_tree: components["schemas"]["DecisionTreeNode"][];
+        };
+        KnowledgeArticleRevisionList: {
+            items: components["schemas"]["KnowledgeArticleRevisionSummary"][];
+            meta: components["schemas"]["PaginationMeta"];
         };
         KnowledgeArticle: {
             id: number;
@@ -1293,10 +1382,22 @@ export interface components {
             firmware_release_id?: number | null;
             /** @enum {string} */
             article_type: "guide" | "troubleshooting";
+            /**
+             * @description Категория ошибки (= категория тикета при эскалации); у troubleshooting всегда задана. Добавлено в 1.5.0.
+             * @enum {string|null}
+             */
+            category: "navigation" | "audio" | "sim" | "app_crash" | "maintenance" | null;
             title: string;
+            /** @description Markdown (CommonMark) без HTML. */
             content?: string;
+            /** @description Номер последней опубликованной редакции; у черновика без публикаций — 1. Уточнено в 1.5.0 (ADR 0018). */
             version: number;
             is_published: boolean;
+            /**
+             * Format: date-time
+             * @description Добавлено в 1.5.0.
+             */
+            updated_at: string;
         };
         KnowledgeArticleList: {
             items: components["schemas"]["KnowledgeArticle"][];
@@ -1305,7 +1406,7 @@ export interface components {
         DecisionTreeOption: {
             /** @example Экран всё ещё завис */
             label: string;
-            /** @description null допустим только если is_escalation=true на текущем узле */
+            /** @description Узел этой же статьи. Уточнено в 1.5.0 (ADR 0018 п. 3): null сервер отклоняет (422) — узел эскалации — финал с кнопкой «Создать обращение», его варианты ведут к узлам; в ответах null не бывает. */
             next_node_id: number | null;
         };
         DecisionTreeNodeCreateRequest: {
@@ -1321,9 +1422,13 @@ export interface components {
         DecisionTreeValidationResult: {
             is_valid: boolean;
             issues: {
+                /** @description Отсутствует у проблем дерева целиком (NO_ROOT, NO_ESCALATION). */
                 node_id?: number;
-                /** @enum {string} */
-                problem?: "DEAD_END" | "UNREACHABLE" | "MULTIPLE_ROOTS" | "BROKEN_REFERENCE";
+                /**
+                 * @description NO_ROOT и NO_ESCALATION добавлены в 1.5.0 (ADR 0018 п. 4).
+                 * @enum {string}
+                 */
+                problem: "DEAD_END" | "UNREACHABLE" | "MULTIPLE_ROOTS" | "BROKEN_REFERENCE" | "NO_ROOT" | "NO_ESCALATION";
             }[];
         };
         NotificationCreateRequest: {
@@ -2542,8 +2647,14 @@ export interface operations {
     listKnowledgeArticles: {
         parameters: {
             query?: {
+                /** @description Статьи этой модели и общие (vehicle_model_id = null). Уточнено в 1.5.0. */
                 vehicle_model_id?: number;
                 article_type?: "guide" | "troubleshooting";
+                /** @description Категория ошибки. Добавлено в 1.5.0. */
+                category?: "navigation" | "audio" | "sim" | "app_crash" | "maintenance";
+                /** @description Только для engineer/admin (client — игнорируется); engineer видит только опубликованные. Добавлено в 1.5.0. */
+                is_published?: boolean;
+                /** @description Полнотекстовый поиск по заголовку и тексту, до 200 символов, без управляющих символов (иначе 422). Добавлено в 1.5.0. */
                 search?: string;
                 page?: components["parameters"]["PageParam"];
                 page_size?: components["parameters"]["PageSizeParam"];
@@ -2667,6 +2778,65 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["KnowledgeArticle"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["ValidationError"];
+            default: components["responses"]["ServerError"];
+        };
+    };
+    listKnowledgeArticleRevisions: {
+        parameters: {
+            query?: {
+                page?: components["parameters"]["PageParam"];
+                page_size?: components["parameters"]["PageSizeParam"];
+            };
+            header?: never;
+            path: {
+                articleId: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Страница версий */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KnowledgeArticleRevisionList"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["ValidationError"];
+            default: components["responses"]["ServerError"];
+        };
+    };
+    getKnowledgeArticleRevision: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                articleId: number;
+                version: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Версия статьи */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KnowledgeArticleRevision"];
                 };
             };
             401: components["responses"]["Unauthorized"];
@@ -2815,6 +2985,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
             422: components["responses"]["ValidationError"];
             default: components["responses"]["ServerError"];
         };

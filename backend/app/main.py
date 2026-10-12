@@ -8,6 +8,7 @@ from app.api.routes import (
     aggregates,
     auth,
     debug,
+    knowledge,
     ticket_events,
     tickets,
     uploads,
@@ -65,6 +66,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(uploads.router, prefix=API_PREFIX)
     application.include_router(tickets.router, prefix=API_PREFIX)
     application.include_router(ticket_events.router, prefix=API_PREFIX)
+    application.include_router(knowledge.router, prefix=API_PREFIX)
     # Отладочный маршрут SMS-кода — только local с фейковым провайдером (Issue #46).
     if settings.environment == "local" and settings.sms_provider == "fake":
         application.include_router(debug.router, prefix=API_PREFIX)

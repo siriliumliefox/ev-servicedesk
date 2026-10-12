@@ -217,8 +217,8 @@ def test_regulation_interval_rules(conn: Connection) -> None:
 def test_decision_tree_single_root_and_array_options(conn: Connection) -> None:
     article = scalar(
         conn,
-        "INSERT INTO knowledge_article (article_type, title) "
-        "VALUES ('troubleshooting', 'Нет звука') RETURNING id",
+        "INSERT INTO knowledge_article (article_type, category, title) "
+        "VALUES ('troubleshooting', 'audio', 'Нет звука') RETURNING id",
     )
     insert = (
         "INSERT INTO decision_tree_node (article_id, question_text, is_root, options) "

@@ -17,15 +17,8 @@ from sqlalchemy.orm import Session
 from app.core import rate_limit
 from app.core.config import get_settings
 from app.core.errors import ApiError
-from app.models import (
-    AppUser,
-    DecisionTreeNode,
-    FirmwareRelease,
-    KnowledgeArticle,
-    Ticket,
-    Vehicle,
-)
-from app.models.enums import KbArticleType, TicketStatus, UserRole
+from app.models import AppUser, FirmwareRelease, Ticket, Vehicle
+from app.models.enums import TicketCategory, TicketStatus, UserRole
 from tests.api.conftest import (
     API,
     UNKNOWN_VIN,
@@ -35,6 +28,7 @@ from tests.api.conftest import (
     assert_contract,
     model_id,
 )
+from tests.api.knowledge_support import build_tree
 from tests.api.ticket_support import create, error_code
 
 CLIENT_PHONE = "+375293300001"
@@ -254,34 +248,43 @@ def test_description_limit_is_after_trimming(client, owner, vehicle):
 
 
 def test_source_reference_validation(client, owner, vehicle, db: Session):
-    article, other, draft = (
-        KnowledgeArticle(article_type=KbArticleType.TROUBLESHOOTING, title=t, is_published=t != "C")
-        for t in "ABC"
-    )
-    db.add_all([article, other, draft])
-    db.flush()
-    node = DecisionTreeNode(article_id=article.id, question_text="Перезагрузили?", is_root=True)
-    foreign = DecisionTreeNode(article_id=other.id, question_text="Есть сеть?", is_root=True)
-    draft_node = DecisionTreeNode(article_id=draft.id, question_text="Черновик?", is_root=True)
-    db.add_all([node, foreign, draft_node])
-    db.commit()
+    """Эскалация: опубликованная статья и её узел эскалации (ADR 0017 п. 7, ADR 0018 п. 11)."""
+    tree = build_tree(db)
+    other = build_tree(db, "Нет связи", category=TicketCategory.SIM)
+    draft = build_tree(db, "Черновик", publish=False)
 
     ticket = create(
-        client, owner, vehicle["id"], source_article_id=article.id, source_node_id=node.id
+        client,
+        owner,
+        vehicle["id"],
+        source_article_id=tree.article.id,
+        source_node_id=tree.escalation.id,
     )
-    assert db.get(Ticket, ticket["id"]).source_node_id == node.id
-    create(client, owner, vehicle["id"], source_article_id=article.id)
+    row = db.get(Ticket, ticket["id"])
+    assert (row.source_node_id, row.source_article_version) == (tree.escalation.id, 1)
+    assert ticket["source_article"] == {
+        "id": tree.article.id,
+        "title": tree.article.title,
+        "version": 1,
+    }
+    without_node = create(client, owner, vehicle["id"], source_article_id=tree.article.id)
+    assert without_node["source_article"]["version"] == 1
+    assert create(client, owner, vehicle["id"])["source_article"] is None
 
     bodies = []
     for refs in (
-        {"source_node_id": node.id},  # узел без статьи
+        {"source_node_id": tree.escalation.id},  # узел без статьи
         {"source_article_id": 10**9},
         {"source_article_id": 2**63},
-        {"source_article_id": article.id, "source_node_id": foreign.id},
-        {"source_article_id": article.id, "source_node_id": 10**9},
-        # Черновик для клиента не существует: тот же 422, что и отсутствующая статья.
-        {"source_article_id": draft.id},
-        {"source_article_id": draft.id, "source_node_id": draft_node.id},
+        {"source_article_id": tree.article.id, "source_node_id": other.escalation.id},
+        {"source_article_id": tree.article.id, "source_node_id": 10**9},
+        {"source_article_id": tree.article.id, "source_node_id": 2**63},
+        # Узел статьи, но не эскалация — «Создать обращение» есть только на узле эскалации.
+        {"source_article_id": tree.article.id, "source_node_id": tree.root.id},
+        {"source_article_id": tree.article.id, "source_node_id": tree.solved.id},
+        # Черновик без опубликованных версий для клиента не существует: тот же 422.
+        {"source_article_id": draft.article.id},
+        {"source_article_id": draft.article.id, "source_node_id": draft.escalation.id},
     ):
         r = client.post(
             f"{API}/tickets",

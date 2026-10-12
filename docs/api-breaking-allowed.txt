@@ -1,0 +1,2 @@
+GET /knowledge-articles/{articleId}/decision-tree/validate added the new `NO_ESCALATION` enum value to the `issues/items/problem` response property for the response status `200`
+GET /knowledge-articles/{articleId}/decision-tree/validate added the new `NO_ROOT` enum value to the `issues/items/problem` response property for the response status `200`

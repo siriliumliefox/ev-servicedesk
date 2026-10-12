@@ -245,6 +245,9 @@ SCHEMA_TABLE = {
     "KnowledgeArticleUpdateRequest": ("knowledge_article", set()),
     "DecisionTreeNodeCreateRequest": ("decision_tree_node", set()),
     "DecisionTreeNode": ("decision_tree_node", set()),
+    # published_at — created_at снимка (1.5.0, ADR 0018).
+    "KnowledgeArticleRevisionSummary": ("knowledge_article_revision", {"published_at"}),
+    "KnowledgeArticleRevision": ("knowledge_article_revision", {"published_at"}),
     "Notification": ("notification", set()),
     "NotificationCreateRequest": ("notification", set()),
     "FirmwareRelease": ("firmware_release", set()),
@@ -297,6 +300,10 @@ ENUMS = {
     ("PresignRequest", "file_type"): AttachmentType,
     ("KnowledgeArticle", "article_type"): KbArticleType,
     ("KnowledgeArticleCreateRequest", "article_type"): KbArticleType,
+    ("KnowledgeArticle", "category"): TicketCategory,
+    ("KnowledgeArticleCreateRequest", "category"): TicketCategory,
+    ("KnowledgeArticleUpdateRequest", "category"): TicketCategory,
+    ("KnowledgeArticleRevision", "category"): TicketCategory,
     ("Notification", "type"): NotificationType,
     ("NotificationCreateRequest", "type"): NotificationType,
 }
@@ -306,7 +313,11 @@ ENUMS = {
     ("name", "prop"), sorted(ENUMS), ids=[f"{n}.{p}" for n, p in sorted(ENUMS)]
 )
 def test_enum_values_match_orm(name: str, prop: str) -> None:
-    assert properties(name)[prop]["enum"] == [v.value for v in ENUMS[(name, prop)]]
+    schema = properties(name)[prop]
+    # OAS 3.0: у nullable-перечисления null входит в enum, иначе валидатор отклоняет null.
+    values = [v for v in schema["enum"] if v is not None]
+    assert values == [v.value for v in ENUMS[(name, prop)]]
+    assert (None in schema["enum"]) == bool(schema.get("nullable"))
 
 
 def test_query_enums_match_orm() -> None:
@@ -314,6 +325,7 @@ def test_query_enums_match_orm() -> None:
         ("listTickets", "status"): TicketStatus,
         ("listTickets", "category"): TicketCategory,
         ("listKnowledgeArticles", "article_type"): KbArticleType,
+        ("listKnowledgeArticles", "category"): TicketCategory,
         ("listUsers", "role"): UserRole,
         ("getTicketResolutionStats", "category"): TicketCategory,
     }

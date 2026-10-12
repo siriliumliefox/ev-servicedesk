@@ -35,6 +35,10 @@ BODIES = {
     "updateTicketStatus": {"status": "resolved"},
     "assignTicket": {"assigned_engineer_id": None},
     "createTicketMessage": {"body": "x"},
+    "createKnowledgeArticle": {"article_type": "guide", "title": "x", "content": ""},
+    "updateKnowledgeArticle": {"title": "x"},
+    "createDecisionTreeNode": {"question_text": "x", "is_root": True, "is_escalation": False},
+    "updateDecisionTreeNode": {"question_text": "x", "is_root": True, "is_escalation": False},
 }
 
 
@@ -90,6 +94,19 @@ def test_protected_routes_exist(app):
         "assignTicket",
         "listTicketMessages",
         "createTicketMessage",
+        # Knowledge Base Service (Глава 14)
+        "listKnowledgeArticles",
+        "createKnowledgeArticle",
+        "getKnowledgeArticle",
+        "updateKnowledgeArticle",
+        "unpublishKnowledgeArticle",
+        "listKnowledgeArticleRevisions",
+        "getKnowledgeArticleRevision",
+        "listDecisionTreeNodes",
+        "createDecisionTreeNode",
+        "validateDecisionTree",
+        "updateDecisionTreeNode",
+        "deleteDecisionTreeNode",
     }
 
 

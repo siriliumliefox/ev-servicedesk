@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: EV-ServiceDesk API
-  version: "1.4.0"
+  version: "1.5.0"
   description: >
     API дипломного проекта «EV-ServiceDesk» (ООО «ЕТСавтоГомель»).
     Контракты сервисов: Auth, Vehicle, Aggregates & Maintenance, Tickets,
@@ -51,6 +51,15 @@ tags:
       description: События тикета по WebSocket — AsyncAPI 3.0 (Глава 13, ADR 0017)
       url: https://github.com/siriliumliefox/ev-servicedesk/blob/develop/docs/asyncapi.yaml
   - name: KnowledgeBase
+    description: >
+      Knowledge Base Service (Глава 14, ADR 0018). Статья — «руководство» (guide) или
+      «устранение неполадок» (troubleshooting) с деревом решений и категорией ошибки (= категория
+      тикета). Версия — опубликованная редакция: снимок заголовка, текста, привязки и дерева
+      (listKnowledgeArticleRevisions); черновик до первой публикации версий не имеет. Клиент и
+      инженер видят только опубликованные статьи (черновик — 404), admin — все (RBAC-05).
+      Узлы дерева: вопрос (от 1 варианта), решение (без вариантов, is_escalation=false),
+      эскалация (is_escalation=true, «Создать обращение» — createTicket с source_article_id и
+      source_node_id). Content — Markdown (CommonMark) без HTML.
   - name: Notifications
   - name: Users
   - name: Analytics
@@ -878,7 +887,10 @@ paths:
         Tickets); firmware_version_at_creation — снимок текущей прошивки авто (N-09).
         description — 1…4000 символов после обрезки пробелов по краям. Статья и узел должны
         существовать, узел — принадлежать статье, узел без статьи запрещён — иначе
-        422 INVALID_SOURCE_REFERENCE. Вложения — до 10, правила и коды ошибок 422 —
+        422 INVALID_SOURCE_REFERENCE. Уточнено в 1.5.0 (ADR 0018 п. 11): у статьи должна быть
+        опубликованная версия (сейчас может быть снята с публикации), source_node_id — узел
+        эскалации (is_escalation=true); удалённый узел — 422, повторите без source_node_id.
+        В тикете сохраняется версия статьи — TicketDetail.source_article. Вложения — до 10, правила и коды ошибок 422 —
         createPresignedUpload. 429 RATE_LIMITED — больше 10 тикетов в час на клиента, заголовок
         Retry-After. Ограничения на число открытых тикетов нет.
       requestBody:
@@ -1112,16 +1124,35 @@ paths:
       operationId: listKnowledgeArticles
       x-required-roles: [client, engineer, admin]
       x-rbac-action: ["Просмотр статей / дерева решений"]
-      description: client видит только is_published=true; engineer/admin — все, включая черновики.
+      description: >
+        client и engineer видят только is_published=true, admin — все, включая черновики
+        (уточнено в 1.5.0, RBAC-05: инженер не отправит черновик клиенту «быстрым ответом»).
+        vehicle_model_id — статьи модели и общие (без модели). search — полнотекстовый поиск
+        (русская морфология, заголовок важнее текста), до 200 символов, иначе 422; с search —
+        по релевантности, без — по updated_at, новые первыми (ADR 0018 п. 9).
       parameters:
         - name: vehicle_model_id
           in: query
+          description: Статьи этой модели и общие (vehicle_model_id = null). Уточнено в 1.5.0.
           schema: { type: integer }
         - name: article_type
           in: query
           schema: { type: string, enum: [guide, troubleshooting] }
+        - name: category
+          in: query
+          description: Категория ошибки. Добавлено в 1.5.0.
+          schema: { type: string, enum: [navigation, audio, sim, app_crash, maintenance] }
+        - name: is_published
+          in: query
+          description: >-
+            Только для engineer/admin (client — игнорируется); engineer видит только
+            опубликованные. Добавлено в 1.5.0.
+          schema: { type: boolean }
         - name: search
           in: query
+          description: >-
+            Полнотекстовый поиск по заголовку и тексту, до 200 символов, без управляющих
+            символов (иначе 422). Добавлено в 1.5.0.
           schema: { type: string }
         - $ref: '#/components/parameters/PageParam'
         - $ref: '#/components/parameters/PageSizeParam'
@@ -1138,7 +1169,12 @@ paths:
       tags: [KnowledgeBase]
       summary: Создать статью (черновик)
       operationId: createKnowledgeArticle
-      description: Создаёт неопубликованную статью для дальнейшего редактирования.
+      description: >
+        Создаёт неопубликованную статью (черновик, версий нет, version = 1). Уточнено в 1.5.0
+        (ADR 0018): category обязательна для troubleshooting — иначе 422 CATEGORY_REQUIRED;
+        vehicle_model_id — существующая модель (422 VEHICLE_MODEL_NOT_FOUND); firmware_release_id —
+        прошивка этой модели (422 FIRMWARE_RELEASE_NOT_FOUND). title — 1…200 символов после
+        обрезки пробелов, content — до 50 000 символов, иначе 422.
       x-required-roles: [admin]
       x-rbac-action: ["CRUD статей базы знаний"]
       requestBody:
@@ -1164,7 +1200,9 @@ paths:
       tags: [KnowledgeBase]
       summary: Детали статьи
       operationId: getKnowledgeArticle
-      description: Возвращает статью по идентификатору.
+      description: >
+        Возвращает статью по идентификатору. Черновик для client и engineer — 404
+        (уточнено в 1.5.0, RBAC-05).
       x-required-roles: [client, engineer, admin]
       x-rbac-action: ["Просмотр статей / дерева решений"]
       responses:
@@ -1183,9 +1221,14 @@ paths:
       x-required-roles: [admin]
       x-rbac-action: ["CRUD статей базы знаний"]
       description: >
-        Редактирование инкрементирует version. Полная история версий не
-        хранится (не требуется ТЗ) — version нужен для отображения
-        актуальности клиенту, не для отката к прошлым редакциям.
+        Меняются только переданные поля; null у category, vehicle_model_id,
+        firmware_release_id снимает значение. Изменено в 1.5.0 (ADR 0018): version — номер
+        последней опубликованной редакции. Если после записи статья опубликована и её
+        содержание (title, content, category, привязка, дерево) отличается от последней
+        версии — version + 1 и снимок (listKnowledgeArticleRevisions); правки черновика
+        версий не создают. Публикация troubleshooting — только с валидным деревом, иначе
+        409 DECISION_TREE_INVALID (details.issues — как у validateDecisionTree). Ошибки 422 —
+        как у createKnowledgeArticle. Отката к прошлой версии нет.
       requestBody:
         required: true
         content:
@@ -1201,6 +1244,7 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
         '422': { $ref: '#/components/responses/ValidationError' }
     delete:
       tags: [KnowledgeBase]
@@ -1208,13 +1252,71 @@ paths:
       operationId: unpublishKnowledgeArticle
       x-required-roles: [admin]
       x-rbac-action: ["CRUD статей базы знаний"]
-      description: Soft — is_published=false. Жёсткое удаление не предусмотрено (Ticket.source_article_id ссылается на статьи).
+      description: >
+        Soft — is_published=false; повторный вызов — тоже 204. Жёсткое удаление не
+        предусмотрено (Ticket.source_article_id ссылается на статьи). Версии сохраняются;
+        эскалация из статьи, у которой есть опубликованная версия, остаётся возможной
+        (уточнено в 1.5.0, ADR 0018 п. 11).
       responses:
         default: { $ref: '#/components/responses/ServerError' }
         '204': { description: Снято с публикации }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+
+  /knowledge-articles/{articleId}/revisions:
+    parameters:
+      - { name: articleId, in: path, required: true, schema: { type: integer } }
+    get:
+      tags: [KnowledgeBase]
+      summary: История версий статьи
+      operationId: listKnowledgeArticleRevisions
+      x-required-roles: [engineer, admin]
+      x-rbac-action: ["Просмотр статей / дерева решений"]
+      description: >
+        Опубликованные редакции статьи, новые первыми. Доступны у статьи с хотя бы одной
+        опубликованной версией — в т. ч. снятой с публикации (на неё может ссылаться тикет,
+        TicketDetail.source_article); черновик без версий для engineer — 404, admin видит все.
+        Добавлено в 1.5.0 (ADR 0018 п. 1, RBAC-05).
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '200':
+          description: Страница версий
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/KnowledgeArticleRevisionList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /knowledge-articles/{articleId}/revisions/{version}:
+    parameters:
+      - { name: articleId, in: path, required: true, schema: { type: integer } }
+      - { name: version, in: path, required: true, schema: { type: integer, minimum: 1 } }
+    get:
+      tags: [KnowledgeBase]
+      summary: Версия статьи (снимок)
+      operationId: getKnowledgeArticleRevision
+      x-required-roles: [engineer, admin]
+      x-rbac-action: ["Просмотр статей / дерева решений"]
+      description: >
+        Снимок опубликованной редакции: заголовок, текст, категория, привязка и дерево решений
+        на момент публикации. Добавлено в 1.5.0 (ADR 0018 п. 1).
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '200':
+          description: Версия статьи
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/KnowledgeArticleRevision' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
 
   /knowledge-articles/{articleId}/decision-tree:
     parameters:
@@ -1225,7 +1327,10 @@ paths:
       operationId: listDecisionTreeNodes
       x-required-roles: [client, engineer, admin]
       x-rbac-action: ["Просмотр статей / дерева решений"]
-      description: Клиент проходит от узла с is_root=true, следуя options[].next_node_id.
+      description: >
+        Клиент проходит от узла с is_root=true, следуя options[].next_node_id. Дерево
+        черновика для client и engineer — 404 (уточнено в 1.5.0). Узлы — по порядку создания;
+        в дереве не больше 100 узлов (page_size=100 — всё дерево).
       parameters:
         - $ref: '#/components/parameters/PageParam'
         - $ref: '#/components/parameters/PageSizeParam'
@@ -1246,6 +1351,12 @@ paths:
       description: >
         Создаёт узел; сервер проверяет уникальность is_root=true для статьи.
         409 — Нарушение инварианта (напр. второй is_root=true).
+        Уточнено в 1.5.0 (ADR 0018 п. 3, 5, 6): 409 ARTICLE_TYPE_HAS_NO_TREE — у guide дерева
+        нет; 409 ARTICLE_PUBLISHED — дерево опубликованной статьи не меняется (снять с
+        публикации → править → опубликовать); 409 DECISION_TREE_ROOT_EXISTS — второй корень.
+        422: INVALID_NEXT_NODE — вариант ведёт не на узел этой статьи; DECISION_TREE_TOO_LARGE —
+        больше 100 узлов; question_text — 1…1000 символов, label — 1…100, не больше 10
+        вариантов, метки вариантов узла не повторяются.
       x-required-roles: [admin]
       x-rbac-action: ["CRUD статей базы знаний"]
       requestBody:
@@ -1278,6 +1389,11 @@ paths:
       description: >
         Операционализация теста из чек-листа Главы 14 ("отсутствие тупиков в
         дереве решений") — админ прогоняет проверку сам, не дожидаясь QA.
+        Уточнено в 1.5.0 (ADR 0018 п. 4): NO_ROOT — нет корня; MULTIPLE_ROOTS; BROKEN_REFERENCE —
+        переход на отсутствующий узел; UNREACHABLE — узел недостижим из корня; DEAD_END — из
+        узла не достижим ни один финал (решение или эскалация), в том числе замкнутый цикл;
+        NO_ESCALATION — из корня не достижим ни один узел эскалации. У guide дерева нет —
+        is_valid=true без проблем.
       responses:
         default: { $ref: '#/components/responses/ServerError' }
         '200':
@@ -1296,7 +1412,9 @@ paths:
       tags: [KnowledgeBase]
       summary: Редактировать узел
       operationId: updateDecisionTreeNode
-      description: Обновляет текст вопроса и варианты переходов узла дерева решений.
+      description: >
+        Обновляет текст вопроса и варианты переходов узла дерева решений (узел заменяется
+        целиком). Ошибки 409 и 422 — как у createDecisionTreeNode (добавлено в 1.5.0).
       x-required-roles: [admin]
       x-rbac-action: ["CRUD статей базы знаний"]
       requestBody:
@@ -1314,6 +1432,7 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
         '422': { $ref: '#/components/responses/ValidationError' }
     delete:
       tags: [KnowledgeBase]
@@ -1322,6 +1441,9 @@ paths:
       description: >
         Отклоняется с 409, если на узел ссылаются другие узлы.
         409 — На узел ссылаются другие узлы — сначала обновите их options.
+        Уточнено в 1.5.0: 409 DECISION_TREE_NODE_REFERENCED (details.referenced_by — id узлов),
+        409 ARTICLE_PUBLISHED — дерево опубликованной статьи не меняется. Ссылка тикета на
+        удалённый узел обнуляется.
       x-required-roles: [admin]
       x-rbac-action: ["CRUD статей базы знаний"]
       responses:
@@ -2176,7 +2298,7 @@ components:
       allOf:
         - $ref: '#/components/schemas/Ticket'
         - type: object
-          required: [firmware_version_at_creation]
+          required: [firmware_version_at_creation, source_article]
           properties:
             description: { type: string }
             firmware_version_at_creation:
@@ -2186,6 +2308,17 @@ components:
                 Версия прошивки авто на момент создания тикета (снимок, N-09); null — прошивка
                 не была зафиксирована. Текущая прошивка — vehicle_context.vehicle.current_firmware_version.
                 Добавлено в 1.4.0 (ADR 0017).
+            source_article:
+              type: object
+              nullable: true
+              description: >-
+                «Пометка» эскалации из дерева решений: статья в версии на момент эскалации
+                (ADR 0018 п. 11); null — тикет создан не из базы знаний. Добавлено в 1.5.0.
+              required: [id, title, version]
+              properties:
+                id: { type: integer }
+                title: { type: string, description: Заголовок в этой версии. }
+                version: { type: integer }
             attachments:
               type: array
               items: { $ref: '#/components/schemas/TicketAttachmentInput' }
@@ -2248,19 +2381,74 @@ components:
           nullable: true
           description: Статья под версию прошивки (C-06); требует vehicle_model_id той же модели.
         article_type: { type: string, enum: [guide, troubleshooting] }
+        category:
+          type: string
+          nullable: true
+          enum: [navigation, audio, sim, app_crash, maintenance, null]
+          description: Обязательна для troubleshooting (иначе 422). Добавлено в 1.5.0.
         title: { type: string, maxLength: 200 }
-        content: { type: string }
+        content:
+          type: string
+          description: Markdown (CommonMark) без HTML, до 50 000 символов (проверяет сервер, 1.5.0).
 
     KnowledgeArticleUpdateRequest:
       type: object
+      description: Меняются только переданные поля. Расширено в 1.5.0.
       properties:
         title: { type: string, maxLength: 200 }
         content: { type: string }
+        category:
+          type: string
+          nullable: true
+          enum: [navigation, audio, sim, app_crash, maintenance, null]
+          description: У troubleshooting не может быть null. Добавлено в 1.5.0.
+        vehicle_model_id: { type: integer, nullable: true, description: Добавлено в 1.5.0. }
+        firmware_release_id: { type: integer, nullable: true, description: Добавлено в 1.5.0. }
         is_published: { type: boolean }
+
+    KnowledgeArticleRevisionSummary:
+      type: object
+      description: Опубликованная редакция статьи в истории версий. Добавлено в 1.5.0.
+      required: [version, title, published_at]
+      properties:
+        version: { type: integer }
+        title: { type: string }
+        published_at: { type: string, format: date-time }
+
+    KnowledgeArticleRevision:
+      description: >-
+        Снимок опубликованной редакции: содержание и дерево решений на момент публикации.
+        Добавлено в 1.5.0 (ADR 0018 п. 1).
+      allOf:
+        - $ref: '#/components/schemas/KnowledgeArticleRevisionSummary'
+        - type: object
+          required:
+            [article_id, content, category, vehicle_model_id, firmware_release_id, decision_tree]
+          properties:
+            article_id: { type: integer }
+            content: { type: string }
+            category:
+              type: string
+              nullable: true
+              enum: [navigation, audio, sim, app_crash, maintenance, null]
+            vehicle_model_id: { type: integer, nullable: true }
+            firmware_release_id: { type: integer, nullable: true }
+            decision_tree:
+              type: array
+              items: { $ref: '#/components/schemas/DecisionTreeNode' }
+
+    KnowledgeArticleRevisionList:
+      type: object
+      required: [items, meta]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/KnowledgeArticleRevisionSummary' }
+        meta: { $ref: '#/components/schemas/PaginationMeta' }
 
     KnowledgeArticle:
       type: object
-      required: [id, article_type, title, version, is_published]
+      required: [id, article_type, category, title, version, is_published, updated_at]
       properties:
         id: { type: integer }
         vehicle_model_id: { type: integer, nullable: true }
@@ -2269,10 +2457,22 @@ components:
           nullable: true
           description: Статья под версию прошивки (C-06); требует vehicle_model_id той же модели.
         article_type: { type: string, enum: [guide, troubleshooting] }
+        category:
+          type: string
+          nullable: true
+          enum: [navigation, audio, sim, app_crash, maintenance, null]
+          description: >-
+            Категория ошибки (= категория тикета при эскалации); у troubleshooting всегда
+            задана. Добавлено в 1.5.0.
         title: { type: string }
-        content: { type: string }
-        version: { type: integer }
+        content: { type: string, description: Markdown (CommonMark) без HTML. }
+        version:
+          type: integer
+          description: >-
+            Номер последней опубликованной редакции; у черновика без публикаций — 1.
+            Уточнено в 1.5.0 (ADR 0018).
         is_published: { type: boolean }
+        updated_at: { type: string, format: date-time, description: Добавлено в 1.5.0. }
 
     KnowledgeArticleList:
       type: object
@@ -2288,7 +2488,13 @@ components:
       required: [label, next_node_id]
       properties:
         label: { type: string, example: "Экран всё ещё завис" }
-        next_node_id: { type: integer, nullable: true, description: "null допустим только если is_escalation=true на текущем узле" }
+        next_node_id:
+          type: integer
+          nullable: true
+          description: >-
+            Узел этой же статьи. Уточнено в 1.5.0 (ADR 0018 п. 3): null сервер отклоняет (422) —
+            узел эскалации — финал с кнопкой «Создать обращение», его варианты ведут к узлам;
+            в ответах null не бывает.
 
     DecisionTreeNodeCreateRequest:
       type: object
@@ -2319,11 +2525,16 @@ components:
           type: array
           items:
             type: object
+            required: [problem]
             properties:
-              node_id: { type: integer }
+              node_id:
+                type: integer
+                description: Отсутствует у проблем дерева целиком (NO_ROOT, NO_ESCALATION).
               problem:
                 type: string
-                enum: [DEAD_END, UNREACHABLE, MULTIPLE_ROOTS, BROKEN_REFERENCE]
+                enum:
+                  [DEAD_END, UNREACHABLE, MULTIPLE_ROOTS, BROKEN_REFERENCE, NO_ROOT, NO_ESCALATION]
+                description: NO_ROOT и NO_ESCALATION добавлены в 1.5.0 (ADR 0018 п. 4).
 
     # --- Notifications & Firmware (шаг 5) ---
     NotificationCreateRequest:

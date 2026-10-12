@@ -29,7 +29,9 @@ def implemented() -> list[tuple[str, str, dict]]:
 IDS = [op["operationId"] for _, _, op in implemented()]
 
 
-@pytest.mark.parametrize("tag", ["Auth", "Vehicle", "Aggregates", "Tickets", "Uploads"])
+@pytest.mark.parametrize(
+    "tag", ["Auth", "Vehicle", "Aggregates", "Tickets", "Uploads", "KnowledgeBase"]
+)
 def test_service_fully_implemented(tag):
     tagged = {
         op["operationId"]

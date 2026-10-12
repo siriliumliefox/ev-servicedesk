@@ -18,6 +18,7 @@ from app.core.db import get_by_id, is_db_id
 from app.core.errors import ApiError
 from app.core.storage import ObjectStorage
 from app.domain.aggregates.service import current_statuses
+from app.domain.knowledge import service as knowledge
 from app.domain.tickets import access, attachments, sla
 from app.domain.tickets.attachments import AttachmentInput
 from app.domain.tickets.card import TicketCard
@@ -26,8 +27,6 @@ from app.domain.tickets.status import InvalidTransition, after_assignment, trans
 from app.domain.vehicles import access as vehicle_access
 from app.models import (
     AppUser,
-    DecisionTreeNode,
-    KnowledgeArticle,
     Ticket,
     TicketMessage,
     TicketSlaPolicy,
@@ -36,7 +35,11 @@ from app.models import (
 from app.models.enums import TicketCategory, TicketStatus, UserRole
 
 TICKET_OUT = (selectinload(Ticket.vehicle).selectinload(Vehicle.vehicle_model),)
-TICKET_DETAIL = (*TICKET_OUT, selectinload(Ticket.attachments))
+TICKET_DETAIL = (
+    *TICKET_OUT,
+    selectinload(Ticket.attachments),
+    selectinload(Ticket.source_article),
+)
 MESSAGE_OUT = (selectinload(TicketMessage.author), selectinload(TicketMessage.attachments))
 
 STAFF = frozenset({UserRole.ENGINEER, UserRole.ADMIN})
@@ -104,35 +107,6 @@ def get_ticket(db: Session, user: AppUser, ticket_id: int) -> TicketCard:
 # ---------- Создание ----------
 
 
-def _source_error(message: str) -> ApiError:
-    return ApiError(
-        422,
-        "INVALID_SOURCE_REFERENCE",
-        message,
-        details={"fields": [{"loc": ["body", "source_article_id"]}]},
-    )
-
-
-def _check_source(db: Session, article_id: int | None, node_id: int | None) -> None:
-    """Эскалация из дерева решений: статья опубликована, узел — её (ADR 0017 п. 7).
-
-    Тикет создаёт клиент, а черновик для клиента не существует (listArticles): черновик —
-    тот же 422, что и отсутствующая статья, — ответ не раскрывает id черновиков.
-    """
-    if article_id is None:
-        if node_id is not None:
-            raise _source_error("Узел дерева решений указан без статьи")
-        return
-    article = get_by_id(db, KnowledgeArticle, article_id)
-    if article is None or not article.is_published:
-        raise _source_error("Статья базы знаний не найдена")
-    if node_id is None:
-        return
-    node = get_by_id(db, DecisionTreeNode, node_id)
-    if node is None or node.article_id != article_id:
-        raise _source_error("Узел дерева решений не найден в указанной статье")
-
-
 def create_ticket(
     db: Session,
     redis: Redis,
@@ -157,7 +131,8 @@ def create_ticket(
     ):
         # Проверки до работы с S3; авто ещё раз — под блокировкой перед записью.
         vehicle_access.get_vehicle(db, user, vehicle_id)  # чужое или удалённое — 404
-        _check_source(db, source_article_id, source_node_id)
+        # Эскалация из дерева решений — версия статьи для «пометки» (ADR 0018 п. 11).
+        source_version = knowledge.escalation_version(db, source_article_id, source_node_id)
         uploads = attachments.check_uploads(db, storage, settings, user, attachment_inputs)
         # id тикета выдаётся заранее: вложения копируются в tickets/{id}/ до записи и блокировок.
         ticket_id = db.scalar(select(func.nextval(func.pg_get_serial_sequence("ticket", "id"))))
@@ -184,6 +159,7 @@ def create_ticket(
                     sla_due_at=sla.due_at(now, minutes),
                     firmware_release_id=vehicle.current_firmware_release_id,  # снимок (N-09)
                     source_article_id=source_article_id,
+                    source_article_version=source_version,
                     source_node_id=source_node_id,
                 )
             )
