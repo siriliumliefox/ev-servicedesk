@@ -1,3 +1,4 @@
+import re
 from functools import lru_cache
 from typing import Literal
 
@@ -58,6 +59,10 @@ class Settings(BaseSettings):
     sms_sender: str = Field("", max_length=11)  # альфа-имя A1 — до 11 символов
     sms_provider_url: str = "https://smart-sender.a1.by/api"
     sms_provider_rps: float = Field(10.0, gt=0, le=10)  # лимит A1 — 10 запросов/с
+    # Тестовые номера вне production (ADR 0021 п. 6): через запятую, E.164. Для них код —
+    # SMS_TEST_CODE (секрет), SMS не отправляется; TTL, HMAC, попытки и лимиты — как обычно.
+    sms_test_phones: str = ""
+    sms_test_code: str = ""
 
     # --- Объектное хранилище S3 (Глава 13, ADR 0004, ADR 0017 п. 10–11) ---
     # Локально и в CI — MinIO; провайдер staging/production — глава 26.
@@ -129,6 +134,24 @@ class Settings(BaseSettings):
     def _default_channel_prefix(self) -> "Settings":
         if not self.redis_channel_prefix:
             self.redis_channel_prefix = f"ev-servicedesk:{self.environment}"
+        return self
+
+    @property
+    def test_phones(self) -> frozenset[str]:
+        return frozenset(p.strip() for p in self.sms_test_phones.split(",") if p.strip())
+
+    @model_validator(mode="after")
+    def _check_test_phones(self) -> "Settings":
+        """Тестовые номера — только с кодом нужной длины и только вне production (fail closed)."""
+        phones = self.test_phones
+        if not phones:
+            return self
+        if self.environment == "production":
+            raise ValueError("SMS_TEST_PHONES запрещены в production")
+        if any(not re.fullmatch(r"\+[1-9][0-9]{7,14}", p) for p in phones):
+            raise ValueError("SMS_TEST_PHONES: номера в формате E.164 через запятую")
+        if not re.fullmatch(rf"[0-9]{{{self.sms_code_length}}}", self.sms_test_code):
+            raise ValueError(f"SMS_TEST_CODE: {self.sms_code_length} цифр (SMS_CODE_LENGTH)")
         return self
 
     @model_validator(mode="after")
