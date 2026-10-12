@@ -7,6 +7,7 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Path, Query, Response, status
+from pydantic import AfterValidator
 
 from app.api.deps import ALL_ROLES, CurrentUser, DbDep, rbac
 from app.api.pagination import PageDep, paginate
@@ -24,6 +25,7 @@ from app.api.schemas.knowledge import (
     KnowledgeArticleUpdateRequest,
     revision_out,
     revision_summary_out,
+    search_query,
 )
 from app.core.db import BIGINT_MAX
 from app.domain.knowledge import service
@@ -61,7 +63,9 @@ def list_knowledge_articles(
     article_type: KbArticleType | None = None,
     category: TicketCategory | None = None,
     is_published: bool | None = None,
-    search: Annotated[str | None, Query(max_length=SEARCH_MAX)] = None,
+    search: Annotated[
+        str | None, Query(max_length=SEARCH_MAX), AfterValidator(search_query)
+    ] = None,
 ) -> KnowledgeArticleList:
     stmt = service.list_articles_stmt(
         user,

@@ -1150,7 +1150,9 @@ paths:
           schema: { type: boolean }
         - name: search
           in: query
-          description: Полнотекстовый поиск по заголовку и тексту, до 200 символов (1.5.0).
+          description: >-
+            Полнотекстовый поиск по заголовку и тексту, до 200 символов, без управляющих
+            символов (иначе 422). Добавлено в 1.5.0.
           schema: { type: string }
         - $ref: '#/components/parameters/PageParam'
         - $ref: '#/components/parameters/PageSizeParam'
@@ -1272,8 +1274,10 @@ paths:
       x-required-roles: [engineer, admin]
       x-rbac-action: ["Просмотр статей / дерева решений"]
       description: >
-        Опубликованные редакции статьи, новые первыми. Статья — видимая пользователю
-        (engineer — только опубликованная, иначе 404). Добавлено в 1.5.0 (ADR 0018 п. 1).
+        Опубликованные редакции статьи, новые первыми. Доступны у статьи с хотя бы одной
+        опубликованной версией — в т. ч. снятой с публикации (на неё может ссылаться тикет,
+        TicketDetail.source_article); черновик без версий для engineer — 404, admin видит все.
+        Добавлено в 1.5.0 (ADR 0018 п. 1, RBAC-05).
       parameters:
         - $ref: '#/components/parameters/PageParam'
         - $ref: '#/components/parameters/PageSizeParam'

@@ -341,20 +341,31 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    """Удаляет только статьи этой миграции и только если на них не ссылаются тикеты.
+
+    Статья миграции — версия 1 с заголовком сценария и временем публикации самой ранней такой
+    версии: все сценарии записаны одной транзакцией (одно now()), а статья администратора с тем
+    же заголовком (например, копия) опубликована позже. Переименованный сценарий находится по
+    заголовку версии 1. Узлы и версии удаляются каскадом.
+    """
     titles = ", ".join(_lit(t) for t in TITLES)
-    # Тикеты потеряли бы «пометку» эскалации (FK SET NULL) — данные не удаляются молча.
-    # Узлы и версии удаляются каскадом.
     op.execute(
         f"""
         DO $$
+        DECLARE seeds bigint[];
         BEGIN
-            IF EXISTS (
-                SELECT 1 FROM ticket t JOIN knowledge_article k ON k.id = t.source_article_id
-                WHERE k.title IN ({titles})
-            ) THEN
+            SELECT array_agg(r.article_id) INTO seeds
+            FROM knowledge_article_revision r
+            WHERE r.version = 1 AND r.title IN ({titles})
+              AND r.created_at = (
+                  SELECT min(created_at) FROM knowledge_article_revision
+                  WHERE version = 1 AND title IN ({titles})
+              );
+            -- Тикеты потеряли бы «пометку» эскалации (FK SET NULL) — данные не удаляются молча.
+            IF EXISTS (SELECT 1 FROM ticket WHERE source_article_id = ANY(seeds)) THEN
                 RAISE EXCEPTION 'На сценарии 0011 ссылаются тикеты — откат остановлен';
             END IF;
-            DELETE FROM knowledge_article WHERE title IN ({titles});
+            DELETE FROM knowledge_article WHERE id = ANY(seeds);
         END $$;
         """
     )

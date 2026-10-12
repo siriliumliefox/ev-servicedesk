@@ -10,7 +10,7 @@ from datetime import UTC, date, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.models import FirmwareRelease, KnowledgeArticle, KnowledgeArticleRevision, VehicleModel
@@ -83,6 +83,7 @@ def test_create_draft(client, admin):
         ({"title": "   "}, "VALIDATION_ERROR"),
         ({"title": "я" * 201}, "VALIDATION_ERROR"),
         ({"title": "Строка\nвторая"}, "VALIDATION_ERROR"),
+        ({"title": "CSI\x9bзаголовок"}, "VALIDATION_ERROR"),  # C1 — как в тексте
         ({"content": "x" * 50_001}, "VALIDATION_ERROR"),
         ({"content": "NUL\x00"}, "VALIDATION_ERROR"),
         ({"content": "CSI\x9b"}, "VALIDATION_ERROR"),
@@ -386,6 +387,38 @@ def test_tree_change_creates_version_on_republish(client, admin):
     assert publish(client, admin, article_id)["version"] == 2
 
 
+def test_engineer_reads_history_of_unpublished_article(client, admin, engineer):
+    """Тикет может ссылаться на снятую статью (п. 11).
+
+    Её версии персоналу открыты, черновое содержание — нет.
+    """
+    tree = api_tree(client, admin, title="Была опубликована")
+    article_id = tree["article"]["id"]
+    publish(client, admin, article_id)
+    api(
+        client,
+        "DELETE",
+        f"/knowledge-articles/{article_id}",
+        admin,
+        "unpublishKnowledgeArticle",
+        204,
+    )
+    update_article(client, admin, article_id, title="Черновик следующей версии")
+    assert revision(client, engineer, article_id, 1)["title"] == "Была опубликована"
+    assert [r["version"] for r in revisions(client, engineer, article_id)] == [1]
+    # Само черновое содержание инженеру не видно.
+    api(client, "GET", f"/knowledge-articles/{article_id}", engineer, "getKnowledgeArticle", 404)
+    never = api_tree(client, admin, title="Ни разу не публиковалась")["article"]["id"]
+    api(
+        client,
+        "GET",
+        f"/knowledge-articles/{never}/revisions",
+        engineer,
+        "listKnowledgeArticleRevisions",
+        404,
+    )
+
+
 def test_revisions_are_append_only(client, admin, db: Session):
     tree = api_tree(client, admin)
     publish(client, admin, tree["article"]["id"])
@@ -397,6 +430,13 @@ def test_revisions_are_append_only(client, admin, db: Session):
     row.title = "Подмена"
     with pytest.raises(Exception, match="append-only"):
         db.flush()
+    db.rollback()
+    with pytest.raises(Exception, match="append-only"):
+        db.execute(
+            delete(KnowledgeArticleRevision).where(
+                KnowledgeArticleRevision.article_id == tree["article"]["id"]
+            )
+        )
     db.rollback()
 
 
@@ -438,9 +478,19 @@ def test_blank_and_long_search(client, admin, engineer):
     assert article["id"] in ids(client, engineer, search="   ")
     assert ids(client, engineer, search="и") == [], "только стоп-слово — пустой запрос"
     assert ids(client, engineer, search="а" * 200) == []
-    r = client.get(f"{API}/knowledge-articles", params={"search": "а" * 201}, headers=engineer)
-    assert r.status_code == 422
-    assert_contract(r, "listKnowledgeArticles")
+    for bad in ("а" * 201, "NUL\x00", "CSI\x9b"):
+        r = client.get(f"{API}/knowledge-articles", params={"search": bad}, headers=engineer)
+        assert r.status_code == 422, repr(bad)
+        assert_contract(r, "listKnowledgeArticles")
+
+
+def test_search_is_nfc(client, admin, engineer):
+    """Текст статей хранится в NFC: запрос в NFD («и» + U+0306) находит то же."""
+    article = publish(client, admin, guide(client, admin, title="Йошкар настройка")["id"])
+    for form in ("NFC", "NFD"):
+        assert ids(client, engineer, search=unicodedata.normalize(form, "Йошкар")) == [
+            article["id"]
+        ], form
 
 
 def test_filters(client, admin, engineer, owner):

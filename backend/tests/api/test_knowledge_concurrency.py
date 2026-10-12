@@ -134,20 +134,37 @@ def test_node_edit_during_publication(migrated_engine: Engine, articles: list[in
         ]
 
 
-def test_escalation_blocks_node_deletion(migrated_engine: Engine, articles: list[int]):
+@pytest.mark.parametrize("change", ["delete", "demote"])
+def test_escalation_blocks_node_change(migrated_engine: Engine, articles: list[int], change):
+    """Узел под эскалацией (FOR SHARE): удаление и смена типа ждут COMMIT тикета (п. 11)."""
     with session(migrated_engine) as s:
-        tree = build_tree(s, "Гонка эскалации")
-        # Снять с публикации, чтобы узел можно было удалить (дерево черновика правится).
+        tree = build_tree(s, f"Гонка эскалации {change}")
+        # Снять с публикации, чтобы дерево можно было править.
         service.unpublish_article(s, tree.article.id)
+        if change == "delete":  # на узел эскалации не должны ссылаться другие узлы
+            service.update_node(
+                s, tree.root.id, NodeInput("Перезагрузили?", (("Да", tree.solved.id),), True, False)
+            )
     articles.append(tree.article.id)
 
-    with session(migrated_engine) as escalating, session(migrated_engine) as deleting:
-        version = service.escalation_version(escalating, tree.article.id, tree.escalation.id)
-        assert version == 1
-        deleting.execute(text("SET LOCAL lock_timeout = '300ms'"))
+    with session(migrated_engine) as escalating, session(migrated_engine) as admin:
+        assert service.escalation_version(escalating, tree.article.id, tree.escalation.id) == 1
+        admin.execute(text("SET lock_timeout = '300ms'"))
         with pytest.raises(OperationalError, match="lock"):
-            deleting.execute(
-                delete(DecisionTreeNode).where(DecisionTreeNode.id == tree.escalation.id)
-            )
-        deleting.rollback()
+            if change == "delete":
+                service.delete_node(admin, tree.escalation.id)
+            else:
+                service.update_node(
+                    admin, tree.escalation.id, NodeInput("Решено", (), False, False)
+                )
+        admin.rollback()
         escalating.commit()
+        admin.execute(text("SET lock_timeout = 0"))
+        # После COMMIT эскалации правка проходит.
+        if change == "delete":
+            service.delete_node(admin, tree.escalation.id)
+        else:
+            node = service.update_node(
+                admin, tree.escalation.id, NodeInput("Решено", (), False, False)
+            )
+            assert node.is_escalation is False

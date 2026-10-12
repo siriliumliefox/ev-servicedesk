@@ -646,7 +646,7 @@ export interface paths {
         };
         /**
          * История версий статьи
-         * @description Опубликованные редакции статьи, новые первыми. Статья — видимая пользователю (engineer — только опубликованная, иначе 404). Добавлено в 1.5.0 (ADR 0018 п. 1).
+         * @description Опубликованные редакции статьи, новые первыми. Доступны у статьи с хотя бы одной опубликованной версией — в т. ч. снятой с публикации (на неё может ссылаться тикет, TicketDetail.source_article); черновик без версий для engineer — 404, admin видит все. Добавлено в 1.5.0 (ADR 0018 п. 1, RBAC-05).
          */
         get: operations["listKnowledgeArticleRevisions"];
         put?: never;
@@ -2654,7 +2654,7 @@ export interface operations {
                 category?: "navigation" | "audio" | "sim" | "app_crash" | "maintenance";
                 /** @description Только для engineer/admin (client — игнорируется); engineer видит только опубликованные. Добавлено в 1.5.0. */
                 is_published?: boolean;
-                /** @description Полнотекстовый поиск по заголовку и тексту, до 200 символов (1.5.0). */
+                /** @description Полнотекстовый поиск по заголовку и тексту, до 200 символов, без управляющих символов (иначе 422). Добавлено в 1.5.0. */
                 search?: string;
                 page?: components["parameters"]["PageParam"];
                 page_size?: components["parameters"]["PageSizeParam"];

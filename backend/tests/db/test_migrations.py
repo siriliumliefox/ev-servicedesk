@@ -13,6 +13,7 @@ from app.models import Base
 from app.models.enums import PG_ENUMS
 from tests.db.conftest import alembic_config
 from tests.db.factories import make_ticket
+from tests.db.seeds import SEED_TITLES
 
 EXPECTED_TABLES = set(Base.metadata.tables)
 EXPECTED_FUNCTIONS = {
@@ -92,12 +93,36 @@ def test_downgrade_knowledge_base(migrated_engine: Engine, db_url: URL) -> None:
     """0011 удаляет только свои сценарии, 0010 — свои колонки и таблицу версий (ADR 0018)."""
     cfg = alembic_config(db_url)
     count = "SELECT count(*) FROM knowledge_article WHERE article_type = 'troubleshooting'"
-    with migrated_engine.connect() as c:
+    with migrated_engine.begin() as c:
         assert c.execute(text(count)).scalar_one() == 5
+        # Сценарий переименован администратором — всё равно сценарий миграции.
+        c.execute(
+            text("UPDATE knowledge_article SET title = 'Переименован' WHERE title = :t"),
+            {"t": SEED_TITLES[0]},
+        )
+    with migrated_engine.begin() as c:
+        # Статья администратора с заголовком сценария (копия) — не сценарий миграции.
+        copy = c.execute(
+            text(
+                "INSERT INTO knowledge_article (article_type, category, title, is_published) "
+                "VALUES ('troubleshooting', 'audio', :t, true) RETURNING id"
+            ),
+            {"t": SEED_TITLES[1]},
+        ).scalar_one()
+        c.execute(
+            text(
+                "INSERT INTO knowledge_article_revision (article_id, version, title, content) "
+                "VALUES (:a, 1, :t, '')"
+            ),
+            {"a": copy, "t": SEED_TITLES[1]},
+        )
     command.downgrade(cfg, "0010")
     with migrated_engine.connect() as c:
-        assert c.execute(text(count)).scalar_one() == 0
+        left = c.execute(text("SELECT id FROM knowledge_article")).scalars().all()
+        assert left == [copy], "удалены ровно 5 сценариев, копия осталась"
         assert c.execute(text("SELECT count(*) FROM decision_tree_node")).scalar_one() == 0
+    with migrated_engine.begin() as c:
+        c.execute(text("DELETE FROM knowledge_article WHERE id = :a"), {"a": copy})
     command.downgrade(cfg, "0009")
     snapshot = _snapshot(migrated_engine)
     assert "knowledge_article_revision" not in snapshot["tables"]

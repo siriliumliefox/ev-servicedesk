@@ -7,6 +7,7 @@
 Записи статьи и её дерева идут по очереди под блокировкой строки статьи (п. 7).
 """
 
+import unicodedata
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -66,7 +67,8 @@ def list_articles_stmt(
         stmt = stmt.where(KnowledgeArticle.category == category)
     if is_published is not None and user.role is not UserRole.CLIENT:
         stmt = stmt.where(KnowledgeArticle.is_published.is_(is_published))
-    search = (search or "").strip()
+    # NFC — как текст статей (схемы запросов): иначе «й» из двух кодов не находит «й».
+    search = unicodedata.normalize("NFC", (search or "").strip())
     if not search:
         return stmt.order_by(KnowledgeArticle.updated_at.desc(), KnowledgeArticle.id.desc())
     query = func.websearch_to_tsquery(literal("russian", REGCONFIG), search)
@@ -225,7 +227,7 @@ def _record_version(
 
 def list_revisions_stmt(db: Session, user: AppUser, article_id: int) -> Select:
     """GET /knowledge-articles/{id}/revisions (engineer/admin): новые версии первыми."""
-    article = access.get_article(db, user, article_id)
+    article = access.get_with_history(db, user, article_id)
     return (
         select(KnowledgeArticleRevision)
         .where(KnowledgeArticleRevision.article_id == article.id)
@@ -237,7 +239,7 @@ def get_revision(
     db: Session, user: AppUser, article_id: int, version: int
 ) -> KnowledgeArticleRevision:
     """GET /knowledge-articles/{id}/revisions/{version} (engineer/admin)."""
-    article = access.get_article(db, user, article_id)
+    article = access.get_with_history(db, user, article_id)
     revision = db.scalars(
         select(KnowledgeArticleRevision).where(
             KnowledgeArticleRevision.article_id == article.id,
@@ -419,7 +421,8 @@ def escalation_version(db: Session, article_id: int | None, node_id: int | None)
     Статья — с хотя бы одной опубликованной версией (сейчас может быть снята с публикации);
     узел, если указан, — узел эскалации этой статьи. Иначе 422 INVALID_SOURCE_REFERENCE —
     одинаково для отсутствующей статьи и черновика без версий (не оракул черновиков).
-    Узел блокируется FOR KEY SHARE: удаление узла ждёт создания тикета, а не ломает его FK.
+    Узел блокируется FOR SHARE: удаление узла и смена его типа ждут создания тикета — тикет
+    не ссылается на удалённый узел (FK) и на узел, переставший быть эскалацией.
     """
     if article_id is None:
         if node_id is not None:
@@ -441,7 +444,7 @@ def escalation_version(db: Session, article_id: int | None, node_id: int | None)
         node = db.scalars(
             select(DecisionTreeNode)
             .where(DecisionTreeNode.id == node_id)
-            .with_for_update(read=True, key_share=True)
+            .with_for_update(read=True)
         ).one_or_none()
     if node is None or node.article_id != article_id or not node.is_escalation:
         raise _source_error("Узел эскалации не найден в указанной статье")

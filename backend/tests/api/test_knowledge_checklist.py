@@ -14,6 +14,7 @@ from app.models.enums import TicketCategory, UserRole
 from tests.api.conftest import Headers, add_vehicle
 from tests.api.knowledge_support import api, api_tree, update_article
 from tests.api.ticket_support import create
+from tests.db.seeds import SEED_TITLES
 
 ADMIN_PHONE = "+375293600001"
 ENGINEER_PHONE = "+375293600002"
@@ -141,8 +142,8 @@ def test_seeded_scenarios_cover_every_category_without_dead_ends(client, admin, 
         200,
         params={"article_type": "troubleshooting", "page_size": 100},
     )
-    seeded = [a for a in listing["items"] if a["version"] == 1 and a["is_published"]]
-    assert len(seeded) >= 5
+    seeded = [a for a in listing["items"] if a["title"] in SEED_TITLES]
+    assert len(seeded) == len(SEED_TITLES) >= 5
     assert {a["category"] for a in seeded} == {c.value for c in TicketCategory}
 
     for article in seeded:

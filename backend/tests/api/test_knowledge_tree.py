@@ -133,6 +133,7 @@ def test_next_node_must_be_in_same_article(client, admin):
         node_body(options=[("", 1)]),
         node_body(options=[("я" * 101, 1)]),
         node_body(options=[("Строка\nвторая", 1)]),
+        node_body(options=[("CSI\x9b", 1)]),
         node_body(options=[("Да", 1), ("Да", 1)]),  # метки узла не повторяются
         node_body(options=[(f"Вариант {i}", 1) for i in range(11)]),
         node_body(options=[("Да", 2**63)]),

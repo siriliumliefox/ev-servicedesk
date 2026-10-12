@@ -32,13 +32,18 @@ def _nfc(value: str) -> str:
 
 
 def _line(value: str, max_length: int) -> str:
-    """Однострочный текст: обрезка пробелов, 1…max_length символов, без управляющих."""
-    value = _nfc(no_control_chars(value.strip()))
+    """Однострочный текст: обрезка пробелов, 1…max_length символов, без управляющих (C0, C1)."""
+    value = _nfc(no_control_chars(no_control_chars_multiline(value.strip())))
     if not value:
         raise ValueError("текст не может быть пустым")
     if len(value) > max_length:
         raise ValueError(f"не больше {max_length} символов")
     return value
+
+
+def search_query(value: str | None) -> str | None:
+    """Запрос поиска: управляющие символы — 422 (NUL PostgreSQL в text не хранит — иначе 500)."""
+    return None if value is None else no_control_chars(no_control_chars_multiline(value))
 
 
 def _content(value: str) -> str:
