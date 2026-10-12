@@ -1,5 +1,7 @@
 // Состояние приложения клиента: сессия, авто на аккаунте, выбранное авто, непрочитанные уведомления.
 // Без внешних пакетов: ChangeNotifier + InheritedNotifier (AppScope).
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../data/api/error_text.dart';
@@ -9,7 +11,15 @@ import '../data/repository.dart';
 
 class AppState extends ChangeNotifier {
   AppState(this.repository, {bool signedIn = false}) : _signedIn = signedIn {
-    repository.onSessionEnded = _sessionEnded;
+    _sessionEndedSubscription = repository.sessionEnded.listen((_) => _sessionEnded());
+  }
+
+  late final StreamSubscription<void> _sessionEndedSubscription;
+
+  @override
+  void dispose() {
+    _sessionEndedSubscription.cancel();
+    super.dispose();
   }
 
   final ClientRepository repository;

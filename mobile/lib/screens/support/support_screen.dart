@@ -128,7 +128,7 @@ class _Tickets extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text(t.description, maxLines: 2, overflow: TextOverflow.ellipsis),
+                  Text(t.summary, maxLines: 2, overflow: TextOverflow.ellipsis),
                   Text(formatDateTime(t.createdAt), key: Key('ticket-${t.id}-date')),
                 ],
               ),

@@ -93,12 +93,12 @@ void main() {
       expect(tokens.token, 'refresh-2');
     });
 
-    test('refresh отклонён (401) — сессия завершена: токен стёрт, onSessionEnded, UNAUTHORIZED', () async {
+    test('refresh отклонён (401) — сессия завершена: токен стёрт, событие sessionEnded, UNAUTHORIZED', () async {
       final server = _FakeServer()..refresh = 'rotated-elsewhere';
       final tokens = MemoryTokenStore('refresh-1');
       final api = _client(server, tokens);
       var ended = 0;
-      api.onSessionEnded = () => ended++;
+      api.sessionEnded.listen((_) => ended++);
 
       await expectLater(
         api.get('/vehicles'),
@@ -115,7 +115,7 @@ void main() {
       final tokens = MemoryTokenStore('refresh-1');
       final api = _client(server, tokens);
       var ended = 0;
-      api.onSessionEnded = () => ended++;
+      api.sessionEnded.listen((_) => ended++);
 
       await expectLater(api.get('/vehicles'), throwsA(isA<OfflineException>()));
       expect(server.refreshCalls, 1);

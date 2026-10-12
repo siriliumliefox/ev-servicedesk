@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 
 import '../../app/app_state.dart';
 import '../../data/models.dart';
-import '../../data/repository.dart';
 import '../../theme/app_theme.dart';
 import '../../ui/fact_row.dart';
 import '../../ui/format.dart';
@@ -117,10 +116,9 @@ class _MileageDialogState extends State<_MileageDialog> {
     try {
       final updated = await AppScope.read(context).repository.updateMileage(widget.vehicle.id, mileage);
       if (mounted) Navigator.of(context).pop(updated);
-    } on ApiException catch (e) {
-      if (mounted) setState(() => _error = e.message);
     } on Exception catch (e) {
-      if (mounted) setState(() => _error = e is OfflineException ? 'Нет подключения к интернету' : '$e');
+      // Текст для пользователя — у исключения (ApiException — по коду контракта, OfflineException — «нет сети»).
+      if (mounted) setState(() => _error = '$e');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -232,10 +230,7 @@ class _HistoryListState extends State<_HistoryList> {
         if (_error != null)
           Padding(
             padding: const EdgeInsets.only(top: EvSpace.s2),
-            child: Text(
-              _error is OfflineException ? 'Нет подключения к интернету' : '$_error',
-              style: TextStyle(color: c.dangerText),
-            ),
+            child: Text('$_error', style: TextStyle(color: c.dangerText)),
           ),
         if (_hasMore)
           Padding(

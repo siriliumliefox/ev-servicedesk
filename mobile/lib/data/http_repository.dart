@@ -18,7 +18,7 @@ class HttpClientRepository implements ClientRepository {
   bool get supportsAttachments => false;
 
   @override
-  set onSessionEnded(void Function()? callback) => api.onSessionEnded = callback;
+  Stream<void> get sessionEnded => api.sessionEnded;
 
   // ---------- Auth ----------
 
@@ -91,16 +91,6 @@ class HttpClientRepository implements ClientRepository {
   Future<Page<MaintenanceRecord>> maintenanceRecordsPage(int vehicleId, {int page = 1, int pageSize = 20}) async {
     final json = await api.get('/vehicles/$vehicleId/maintenance-records', query: {'page': page, 'page_size': pageSize});
     return _page(json, _maintenanceRecord);
-  }
-
-  @override
-  Future<List<MaintenanceRecord>> maintenanceRecords(int vehicleId) async {
-    final records = <MaintenanceRecord>[];
-    for (var page = 1;; page++) {
-      final p = await maintenanceRecordsPage(vehicleId, page: page, pageSize: _listPageSize);
-      records.addAll(p.items);
-      if (!p.hasMore) return records;
-    }
   }
 
   // ---------- Knowledge base ----------
@@ -242,13 +232,12 @@ List<TicketAttachment> _attachments(Object? list) => [
         ),
     ];
 
-/// Ticket: в списке нет полного описания — краткое (summary, до 140 символов).
 Ticket _ticket(_Json j) => Ticket(
       id: j['id']! as int,
       vehicleId: j['vehicle_id']! as int,
       category: _category(j['category']),
       status: _statusCodes[j['status']]!,
-      description: j['summary']! as String,
+      summary: j['summary']! as String,
       createdAt: _dateTime(j['created_at']),
       attachments: _attachments(j['attachments']),
     );

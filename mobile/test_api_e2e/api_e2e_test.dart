@@ -37,7 +37,7 @@ void main() {
     final tokens = MemoryTokenStore();
     final repo = _repository(tokens);
     var sessionEnded = 0;
-    repo.onSessionEnded = () => sessionEnded++;
+    repo.sessionEnded.listen((_) => sessionEnded++);
 
     // Регистрация: без согласия ПД — 422 PD_CONSENT_REQUIRED, код не расходуется (контракт).
     expect(await repo.requestCode(_phone), greaterThan(0));
@@ -104,7 +104,7 @@ void main() {
     expect(await tokens.read(), isNull);
     final stale = _repository(MemoryTokenStore(staleRefresh));
     var staleEnded = 0;
-    stale.onSessionEnded = () => staleEnded++;
+    stale.sessionEnded.listen((_) => staleEnded++);
     await expectLater(
       stale.vehicles(),
       throwsA(isA<ApiException>().having((e) => e.code, 'code', 'UNAUTHORIZED')),

@@ -1,7 +1,7 @@
 // HTTP-транспорт клиента (ADR 0022): JSON, тайм-аут, ошибки контракта, сессия и обновление токенов.
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io' show HandshakeException, SocketException;
+import 'dart:io' show IOException;
 
 import 'package:http/http.dart' as http;
 
@@ -23,8 +23,11 @@ class ApiClient {
   final Duration timeout;
   final http.Client _http;
 
+  // sync: подписчик (AppState) узнаёт о завершении сессии до того, как запрос вернёт ошибку экрану.
+  final _sessionEnded = StreamController<void>.broadcast(sync: true);
+
   /// Сессия завершена сервером (refresh отклонён) — приложение возвращается к онбордингу.
-  void Function()? onSessionEnded;
+  Stream<void> get sessionEnded => _sessionEnded.stream;
 
   String? _access;
   Future<String>? _refreshing;
@@ -40,7 +43,7 @@ class ApiClient {
   Future<void> endSession({bool notify = false}) async {
     _access = null;
     await tokens.clear();
-    if (notify) onSessionEnded?.call();
+    if (notify) _sessionEnded.add(null);
   }
 
   Future<Object?> get(String path, {Map<String, Object?>? query}) => send('GET', path, query: query);
@@ -119,10 +122,8 @@ class ApiClient {
       return await http.Response.fromStream(await _http.send(request).timeout(timeout)).timeout(timeout);
     } on TimeoutException {
       throw const OfflineException();
-    } on SocketException {
-      throw const OfflineException();
-    } on HandshakeException {
-      throw const OfflineException();
+    } on IOException {
+      throw const OfflineException(); // сокет, DNS, TLS
     } on http.ClientException {
       throw const OfflineException();
     }

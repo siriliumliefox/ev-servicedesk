@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../app/app_state.dart';
 import '../../data/models.dart';
+import '../../data/repository.dart';
 import '../../theme/app_theme.dart';
 import '../../ui/status_badge.dart';
 import '../../ui/fact_row.dart';

@@ -67,7 +67,7 @@ class PrototypeRepository implements ClientRepository {
 
   /// Сессию в прототипе сервер не завершает.
   @override
-  set onSessionEnded(void Function()? callback) {}
+  Stream<void> get sessionEnded => const Stream.empty();
 
   // ---------- Auth ----------
 
@@ -145,8 +145,10 @@ class PrototypeRepository implements ClientRepository {
   static const takenVin = 'LDPZZZ1Z2RA000777';
 
   @override
-  Future<List<AggregateStatusItem>> aggregateStatuses(int vehicleId) =>
-      _call(() => _statuses[vehicleId] ?? _newVehicleStatuses);
+  Future<List<AggregateStatusItem>> aggregateStatuses(int vehicleId) => _call(() {
+        final vehicle = _vehicles.firstWhere((v) => v.id == vehicleId);
+        return _statuses[vehicleId] ?? _newVehicleStatuses(vehicle.vehicleModel.id);
+      });
 
   @override
   Future<Vehicle> updateMileage(int vehicleId, int mileage) => _call(() {
@@ -175,9 +177,6 @@ class PrototypeRepository implements ClientRepository {
         );
       });
 
-  @override
-  Future<List<MaintenanceRecord>> maintenanceRecords(int vehicleId) => _call(() => _records[vehicleId] ?? const []);
-
   // ---------- Knowledge base ----------
 
   @override
@@ -201,7 +200,7 @@ class PrototypeRepository implements ClientRepository {
           vehicleId: draft.vehicleId,
           category: draft.category,
           status: TicketStatus.newTicket,
-          description: draft.description,
+          summary: draft.description,
           createdAt: now,
           attachments: draft.attachments,
         );
@@ -331,11 +330,18 @@ class PrototypeRepository implements ClientRepository {
     ],
   };
 
-  // Новое авто без истории ТО — «Нет данных» по всем агрегатам (сценарий главы 5, не ошибка).
-  static final _newVehicleStatuses = [
-    for (final code in ['engine_oil', 'oil_filter', 'air_filter', 'cabin_filter', 'gearbox_oil', 'ac_refrigerant'])
-      _status(code, AggregateStatus.unknown),
-  ];
+  /// Агрегаты в регламенте модели (как в web-shared fixtures): Li Auto L7 и Voyah Free EVR — с ДВС-генератором,
+  /// Zeekr 001 — электромобиль без ДВС: редуктор, без масла двигателя и фильтров ДВС.
+  static const _modelAggregates = {
+    1: ['engine_oil', 'oil_filter', 'air_filter', 'cabin_filter', 'gearbox_oil', 'ac_refrigerant'],
+    2: ['cabin_filter', 'gearbox_oil', 'ac_refrigerant'],
+    3: ['engine_oil', 'oil_filter', 'air_filter', 'cabin_filter', 'gearbox_oil', 'ac_refrigerant'],
+  };
+
+  /// Новое авто без истории ТО — «Нет данных» по агрегатам регламента модели (сценарий главы 5, не ошибка).
+  static List<AggregateStatusItem> _newVehicleStatuses(int modelId) => [
+        for (final code in _modelAggregates[modelId]!) _status(code, AggregateStatus.unknown),
+      ];
 
   static final Map<int, List<MaintenanceRecord>> _records = {
     101: [
@@ -557,7 +563,7 @@ class PrototypeRepository implements ClientRepository {
           vehicleId: 101,
           category: TicketCategory.navigation,
           status: TicketStatus.inProgress,
-          description: 'Яндекс Навигатор не показывает пробки',
+          summary: 'Яндекс Навигатор не показывает пробки',
           createdAt: DateTime(2026, 10, 8, 18, 40),
         ),
         Ticket(
@@ -565,7 +571,7 @@ class PrototypeRepository implements ClientRepository {
           vehicleId: 101,
           category: TicketCategory.maintenance,
           status: TicketStatus.resolved,
-          description: 'Запись на замену воздушного фильтра',
+          summary: 'Запись на замену воздушного фильтра',
           createdAt: DateTime(2026, 6, 15, 9, 5),
         ),
       ];

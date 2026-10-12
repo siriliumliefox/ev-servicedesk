@@ -6,16 +6,17 @@ import '../../data/models.dart';
 import '../../theme/app_theme.dart';
 import '../../ui/status_badge.dart';
 
-/// Положение зоны на схеме (доли ширины/высоты). Агрегаты, добавленные в админ-панели
+/// Положение зоны на схеме (доли ширины/высоты) — по месту агрегата в авто. Агрегаты, добавленные в админ-панели
 /// без своего места на схеме, показываются только в списке под схемой.
-/// Боковые зоны отнесены к краям, чтобы полные названия у центральных зон помещались без перекрытия.
+/// Под капотом — агрегаты ДВС (у электромобиля их нет в регламенте модели), за лобовым стеклом — пара климата,
+/// у задней оси — редуктор: схема симметрична и с ДВС, и без него.
 const aggregateSchemePositions = <String, Offset>{
-  'ac_refrigerant': Offset(0.5, 0.08),
-  'engine_oil': Offset(0.19, 0.16),
-  'oil_filter': Offset(0.81, 0.16),
-  'air_filter': Offset(0.5, 0.33),
-  'cabin_filter': Offset(0.5, 0.53),
-  'gearbox_oil': Offset(0.5, 0.82),
+  'engine_oil': Offset(0.31, 0.11),
+  'oil_filter': Offset(0.69, 0.11),
+  'air_filter': Offset(0.5, 0.29),
+  'ac_refrigerant': Offset(0.31, 0.58),
+  'cabin_filter': Offset(0.69, 0.58),
+  'gearbox_oil': Offset(0.5, 0.83),
 };
 
 class AggregateScheme extends StatelessWidget {
@@ -26,13 +27,10 @@ class AggregateScheme extends StatelessWidget {
 
   static const _zone = EvSize.controlMobile; // 48 ≥ 44
 
-  /// Подпись — полное название агрегата (как в списке и карточке, глава 9), до 2 строк.
-  /// Ширина — под самое длинное слово шрифтом Inter (глава 18): «кондиционера» у центральной зоны, «Масляный» у боковой.
+  /// Подпись — полное название агрегата (как в списке и карточке, глава 9), до 2 строк; ширина одна для всех зон —
+  /// под самое длинное слово шрифтом Inter («кондиционера»). Пары под капотом разнесены так, что подписи
+  /// не сходятся и не выходят за кузов.
   static const _labelWidth = 108.0;
-  static const _sideLabelWidth = 78.0;
-
-  /// Центральные зоны (по оси авто) шире: соседей сбоку у них нет.
-  static double _labelWidthAt(Offset position) => position.dx == 0.5 ? _labelWidth : _sideLabelWidth;
 
   @override
   Widget build(BuildContext context) {
@@ -53,9 +51,9 @@ class AggregateScheme extends StatelessWidget {
                   for (final s in statuses)
                     if (aggregateSchemePositions[s.aggregateTypeCode] case final at?)
                       Positioned(
-                        left: at.dx * box.maxWidth - _labelWidthAt(at) / 2,
+                        left: at.dx * box.maxWidth - _labelWidth / 2,
                         top: at.dy * box.maxHeight - _zone / 2,
-                        width: _labelWidthAt(at),
+                        width: _labelWidth,
                         child: _Zone(status: s, onTap: () => onTap(s)),
                       ),
                 ],
@@ -160,19 +158,19 @@ class _CarPainter extends CustomPainter {
     // Лобовое стекло и заднее стекло.
     canvas.drawPath(
       Path()
-        ..moveTo(w * 0.22, h * 0.4)
-        ..quadraticBezierTo(w * 0.5, h * 0.35, w * 0.78, h * 0.4)
-        ..lineTo(w * 0.72, h * 0.44)
-        ..quadraticBezierTo(w * 0.5, h * 0.41, w * 0.28, h * 0.44)
+        ..moveTo(w * 0.2, h * 0.47)
+        ..quadraticBezierTo(w * 0.5, h * 0.43, w * 0.8, h * 0.47)
+        ..lineTo(w * 0.74, h * 0.51)
+        ..quadraticBezierTo(w * 0.5, h * 0.48, w * 0.26, h * 0.51)
         ..close(),
       glass,
     );
     canvas.drawPath(
       Path()
-        ..moveTo(w * 0.26, h * 0.7)
-        ..quadraticBezierTo(w * 0.5, h * 0.73, w * 0.74, h * 0.7)
-        ..lineTo(w * 0.78, h * 0.74)
-        ..quadraticBezierTo(w * 0.5, h * 0.78, w * 0.22, h * 0.74)
+        ..moveTo(w * 0.26, h * 0.72)
+        ..quadraticBezierTo(w * 0.5, h * 0.75, w * 0.74, h * 0.72)
+        ..lineTo(w * 0.78, h * 0.76)
+        ..quadraticBezierTo(w * 0.5, h * 0.8, w * 0.22, h * 0.76)
         ..close(),
       glass,
     );
