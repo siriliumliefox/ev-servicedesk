@@ -1,5 +1,5 @@
 // Дашборд аналитики (ТЗ 4.4, A-05/A-06): время реакции и закрытия тикетов, проблемные модели, конверсия
-// в запись на ТО. Только операции `/analytics/*` контракта v1 (ADR 0012 п. 4).
+// в ТО. Только операции `/analytics/*` контракта (ADR 0012 п. 4); формулы и свежесть данных — ADR 0020.
 import { useState } from 'react'
 import {
   Card,
@@ -71,6 +71,9 @@ function DashboardBody({
   const overdueShare = resolution.tickets_resolved ? resolution.tickets_resolved_overdue / resolution.tickets_resolved : null
   return (
     <>
+      <p className="text-caption text-fg-muted">
+        Данные на {formatComputedAt(resolution.computed_at)} — витрина обновляется каждые 5 минут
+      </p>
       <section aria-labelledby="kpi-title" className="grid gap-3">
         <h2 id="kpi-title" className="text-h3">
           Тикеты
@@ -102,30 +105,40 @@ function DashboardBody({
 
       <section aria-labelledby="conversion-title" className="grid gap-3">
         <h2 id="conversion-title" className="text-h3">
-          Конверсия в запись на ТО
+          Конверсия в ТО
         </h2>
         <div className="grid grid-cols-2 gap-4">
           <Funnel
-            title="Обращение → запись на ТО"
+            title="Обращение → работа ТО"
             rate={conversion.ticket_to_maintenance_rate}
             steps={[
               ['Тикетов', conversion.tickets_total],
-              ['С записью на ТО', conversion.tickets_with_maintenance],
+              ['С работой ТО по тикету', conversion.tickets_with_maintenance],
             ]}
           />
           <Funnel
-            title="Уведомление о ТО → запись"
+            title="Напоминание о ТО → работа ТО за 30 дней"
             rate={conversion.notification_to_maintenance_rate}
             steps={[
-              ['Получили уведомление', conversion.notifications_recipients],
-              ['Открыли', conversion.notifications_opened],
-              ['Записались на ТО', conversion.recipients_with_maintenance],
+              ['Получили напоминание', conversion.notifications_recipients],
+              ['Открыли push', conversion.notifications_opened],
+              ['Прошли ТО', conversion.recipients_with_maintenance],
             ]}
           />
         </div>
       </section>
     </>
   )
+}
+
+function formatComputedAt(iso: string) {
+  return new Date(iso).toLocaleString('ru-RU', {
+    timeZone: 'Europe/Minsk',
+    day: 'numeric',
+    month: 'long',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
 }
 
 function Kpi({ label, value, note }: { label: string; value: string; note?: string }) {

@@ -119,6 +119,10 @@ def test_protected_routes_exist(app):
         "listFirmwareReleases",
         "createFirmwareRelease",
         "setVehicleFirmware",
+        # Analytics Service (Глава 16)
+        "getTicketResolutionStats",
+        "listProblemModels",
+        "getMaintenanceConversionStats",
     }
 
 

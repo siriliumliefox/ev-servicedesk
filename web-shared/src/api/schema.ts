@@ -1029,7 +1029,7 @@ export interface paths {
         };
         /**
          * Время реакции и закрытия тикетов (A-05)
-         * @description Считается по ticket.created_at, first_response_at, resolved_at за период [date_from, date_to] (по дате создания тикета, включительно). 422 — date_from > date_to или период длиннее 366 дней.
+         * @description Считается по ticket.created_at, first_response_at, resolved_at за период [date_from, date_to] (по дате создания тикета по Минску, включительно). Решённые — тикеты, решённые на момент computed_at (переоткрытый и ещё не решённый — не решён); время решения — от создания до последнего решения, календарное. 422 — date_from > date_to или период длиннее 366 дней. Уточнено в 1.7.0 (ADR 0020): computed_at.
          */
         get: operations["getTicketResolutionStats"];
         put?: never;
@@ -1049,7 +1049,7 @@ export interface paths {
         };
         /**
          * Проблемные модели — тикеты по моделям и категориям (A-06)
-         * @description Модели, отсортированные по убыванию tickets_total за период. Модели без тикетов не включаются.
+         * @description Модели, отсортированные по убыванию tickets_total за период, при равенстве — по марке, модели, комплектации и id. Модели без тикетов не включаются; тикеты удалённых и переданных авто учитываются по модели авто. Уточнено в 1.7.0 (ADR 0020): computed_at.
          */
         get: operations["listProblemModels"];
         put?: never;
@@ -1069,7 +1069,7 @@ export interface paths {
         };
         /**
          * Конверсия в ТО (A-06)
-         * @description Две воронки за период: тикеты → работы ТО (maintenance_record.ticket_id) и уведомления type=maintenance → открытие push (notification_delivery.opened_at) → работа ТО по авто получателя в течение 30 дней после уведомления. Rate = null, если знаменатель 0.
+         * @description Две воронки за период: тикеты → работы ТО (maintenance_record.ticket_id) и уведомления type=maintenance → открытие push (notification_delivery.opened_at) → работа ТО по авто получателя в течение 30 дней после уведомления. Rate = null, если знаменатель 0. Получение — пара «напоминание, получатель»; работа ТО — любая по авто напоминания с performed_at от даты напоминания по Минску до +30 дней включительно, среди всех получателей. У напоминаний последних 30 дней окно ещё не истекло — их конверсия может вырасти. Уточнено в 1.7.0 (ADR 0020): computed_at.
          */
         get: operations["getMaintenanceConversionStats"];
         put?: never;
@@ -1655,7 +1655,13 @@ export interface components {
             /** @description Среднее resolved_at − created_at (A-05) */
             avg_resolution_hours: number | null;
             median_resolution_hours: number | null;
+            computed_at: components["schemas"]["AnalyticsComputedAt"];
         };
+        /**
+         * Format: date-time
+         * @description Момент, по состоянию на который витрина аналитики учла данные (ADR 0020, 1.7.0); отставание — до интервала обновления worker.
+         */
+        AnalyticsComputedAt: string;
         TicketCategoryCount: {
             /** @enum {string} */
             category: "navigation" | "audio" | "sim" | "app_crash" | "maintenance";
@@ -1664,13 +1670,15 @@ export interface components {
         ProblemModelStats: {
             vehicle_model: components["schemas"]["VehicleModel"];
             tickets_total: number;
-            /** @description Активные авто модели — для нормирования */
+            /** @description Активные авто модели на момент computed_at — для нормирования */
             vehicles_total: number;
+            /** @description Все категории тикетов, в том числе с count = 0 */
             by_category: components["schemas"]["TicketCategoryCount"][];
         };
         ProblemModelStatsList: {
             items: components["schemas"]["ProblemModelStats"][];
             meta: components["schemas"]["PaginationMeta"];
+            computed_at: components["schemas"]["AnalyticsComputedAt"];
         };
         MaintenanceConversionStats: {
             /** Format: date */
@@ -1680,11 +1688,12 @@ export interface components {
             tickets_total: number;
             tickets_with_maintenance: number;
             ticket_to_maintenance_rate: number | null;
-            /** @description Получатели уведомлений type=maintenance */
+            /** @description Получения напоминаний о ТО (type=maintenance): пары «напоминание, получатель» */
             notifications_recipients: number;
             notifications_opened: number;
             recipients_with_maintenance: number;
             notification_to_maintenance_rate: number | null;
+            computed_at: components["schemas"]["AnalyticsComputedAt"];
         };
     };
     responses: {

@@ -91,6 +91,9 @@ export function allowedTransitions(status: TicketStatus): readonly TicketStatus[
 const SUMMARY_LENGTH = 140;
 
 const clone = <T>(value: T): T => structuredClone(value);
+// Витрина аналитики обновляется раз в 5 минут (ADR 0020 п. 2); доли — до 0,0001, как в API.
+const ANALYTICS_LAG_MS = 3 * 60_000;
+const round4 = (value: number) => Math.round(value * 10_000) / 10_000;
 
 const page = <T>(items: T[]) => ({
   items,
@@ -528,6 +531,7 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
 
   // ---------- Админ: аналитика ----------
   // В прототипе — детерминированные значения, пропорциональные длине периода (не из тикетов фикстур).
+  // computed_at — витрина «обновлена» несколько минут назад (ADR 0020 п. 3).
 
   getTicketResolutionStats(range: DateRange): Promise<TicketResolutionStats> {
     return this.call(() => {
@@ -542,6 +546,7 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
         avg_first_response_hours: created ? 0.4 : null,
         avg_resolution_hours: resolved ? 18.6 : null,
         median_resolution_hours: resolved ? 11.2 : null,
+        computed_at: this.computedAt(),
       };
     });
   }
@@ -582,16 +587,21 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
         ...range,
         tickets_total: tickets,
         tickets_with_maintenance: withMaintenance,
-        ticket_to_maintenance_rate: tickets ? withMaintenance / tickets : null,
+        ticket_to_maintenance_rate: tickets ? round4(withMaintenance / tickets) : null,
         notifications_recipients: recipients,
         notifications_opened: opened,
         recipients_with_maintenance: booked,
-        notification_to_maintenance_rate: recipients ? booked / recipients : null,
+        notification_to_maintenance_rate: recipients ? round4(booked / recipients) : null,
+        computed_at: this.computedAt(),
       };
     });
   }
 
   // ---------- Внутреннее ----------
+
+  private computedAt(): string {
+    return new Date(this.clock().getTime() - ANALYTICS_LAG_MS).toISOString();
+  }
 
   private async call<T>(fn: () => T): Promise<T> {
     if (this.latencyMs > 0) await new Promise((resolve) => setTimeout(resolve, this.latencyMs));

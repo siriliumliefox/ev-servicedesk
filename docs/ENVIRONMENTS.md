@@ -43,6 +43,7 @@ PR-ревью GitHub не позволяет одобрить собственн
 | `SMS_PROVIDER_API_KEY` | Да (когда провайдер выбран) | пока пусто — бизнес-решение |
 | `S3_*` | Да | свой bucket/credentials на окружение — Глава 26; local — MinIO из `docker compose`. Вне local/test backend не стартует без ключей или без доступного бакета (ADR 0017) |
 | `PUSH_PROVIDER`, `FCM_SERVICE_ACCOUNT_JSON` | Да | ADR 0019: staging — `fake`, пока нет Firebase-проекта; production — только `fcm`. JSON-ключ сервисного аккаунта вводит владелец (`scripts/set-fcm-secret.sh`), один Firebase-проект с разными app id. Worker уведомлений — тот же образ, команда `python -m app.workers.notifications` |
+| `ANALYTICS_REFRESH_SECONDS` | Нет | ADR 0020: интервал обновления витрины дашборда (по умолчанию 300 с). Worker аналитики — тот же образ, команда `python -m app.workers.analytics` (`--once` — одно обновление) |
 
 ## Настройка (идемпотентно, нужен `gh auth login` с правами admin)
 

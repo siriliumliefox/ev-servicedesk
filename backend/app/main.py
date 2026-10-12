@@ -6,6 +6,7 @@ from starlette.concurrency import run_in_threadpool
 
 from app.api.routes import (
     aggregates,
+    analytics,
     auth,
     debug,
     knowledge,
@@ -69,6 +70,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(ticket_events.router, prefix=API_PREFIX)
     application.include_router(knowledge.router, prefix=API_PREFIX)
     application.include_router(notifications.router, prefix=API_PREFIX)
+    application.include_router(analytics.router, prefix=API_PREFIX)
     # Отладочный маршрут SMS-кода — только local с фейковым провайдером (Issue #46).
     if settings.environment == "local" and settings.sms_provider == "fake":
         application.include_router(debug.router, prefix=API_PREFIX)

@@ -47,7 +47,7 @@
 | A-02 | `knowledge_article`, `decision_tree_node`, `knowledge_article_revision` |
 | A-04 | `app_user.role`, `is_active` |
 | A-05 | `ticket.created_at`, `first_response_at`, `resolved_at` |
-| A-06 | `ticket` × `vehicle_model`; конверсия — `maintenance_record.ticket_id`, `notification_recipient` |
+| A-06 | `ticket` × `vehicle_model`; конверсия — `maintenance_record.ticket_id`, `notification_recipient`; расчёт — витрина `analytics_ticket_fact`, `analytics_reminder_fact`, `analytics_vehicle_model_fact` (materialized view, миграция `0013`) и `analytics_refresh` (ADR 0020) |
 | A-07 | `aggregate_type` (seed — миграция 0002) |
 | X-01 | `app_user.role`; object-level — см. ниже |
 | X-04, N-08 | `password_hash`, `refresh_token.token_hash` (SHA-256) |

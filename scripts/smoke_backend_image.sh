@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# Smoke-тест образа backend (Главы 10–15, ADR 0013, 0014, 0016–0019): запуск как в
+# Smoke-тест образа backend (Главы 10–16, ADR 0013, 0014, 0016–0020): запуск как в
 # staging, Auth, Vehicle, Aggregates, Tickets/Uploads, WebSocket событий тикета, Knowledge Base,
-# Notifications и worker уведомлений.
+# Notifications и worker уведомлений, Analytics — сверка с контрольным набором (ADR 0020 п. 9).
 # Нужен Redis на localhost:6379 (в CI — service container, локально — docker compose up -d redis).
 # БД Redis 14 отведена smoke-тесту и очищается перед запуском. S3 — собственный сайдкар MinIO
 # во внутренней docker-сети smoke-теста (без порта на хосте; MinIO из docker compose не
-# затрагивается), удаляется вместе с сетью при выходе. Секреты и ключи MinIO — одноразовые
+# затрагивается), удаляется вместе с сетью при выходе. Так же — сайдкар PostgreSQL для миграций
+# и контрольного набора аналитики (каталог backend/tests монтируется только в разовые контейнеры
+# загрузки и сверки — в образ тесты не входят). Секреты и ключи MinIO — одноразовые
 # случайные, передаются в контейнеры по имени переменной (-e NAME) и нигде не печатаются.
 # Запуск: scripts/smoke_backend_image.sh <образ>   (например backend:smoke)
 
@@ -15,6 +17,7 @@ IMAGE="${1:?Укажите образ, например backend:smoke}"
 NAME="ev-backend-smoke-$$"
 NOBUCKET="ev-backend-smoke-nobucket-$$"
 MINIO="ev-minio-smoke-$$"
+PG="ev-postgres-smoke-$$"
 NET="ev-smoke-$$"
 PORT="${SMOKE_PORT:-18000}"
 BASE="http://localhost:$PORT"
@@ -30,6 +33,8 @@ MINIO_IMAGE="${SMOKE_MINIO_IMAGE:-$(docker compose -f "$ROOT/docker-compose.yml"
 if [ -z "$MINIO_IMAGE" ]; then
   echo "FAIL  образ MinIO не найден в docker-compose.yml"; exit 1
 fi
+PG_IMAGE="${SMOKE_POSTGRES_IMAGE:-$(docker compose -f "$ROOT/docker-compose.yml" config --format json postgres \
+  | python3 -c 'import json, sys; print(json.load(sys.stdin)["services"]["postgres"]["image"])')}"
 S3_BUCKET="ev-servicedesk-smoke"
 FORGED='eyJhbGciOiJub25lIn0.eyJzdWIiOiIxIn0.'  # alg=none, без подписи
 
@@ -40,12 +45,15 @@ S3_SECRET_KEY="$(openssl rand -hex 24)"
 MINIO_ROOT_USER="$S3_ACCESS_KEY"
 MINIO_ROOT_PASSWORD="$S3_SECRET_KEY"
 MC_HOST_smoke="http://$S3_ACCESS_KEY:$S3_SECRET_KEY@localhost:9000"  # mc внутри сайдкара
+POSTGRES_PASSWORD="$(openssl rand -hex 24)"
+DATABASE_URL="postgresql+psycopg://smoke:$POSTGRES_PASSWORD@postgres:5432/smoke"
+CONTROL_ADMIN_PASSWORD="$(openssl rand -hex 16)"  # администратор контрольного набора аналитики
 export JWT_SECRET SMS_CODE_SECRET S3_ACCESS_KEY S3_SECRET_KEY MINIO_ROOT_USER MINIO_ROOT_PASSWORD \
-  MC_HOST_smoke
+  MC_HOST_smoke POSTGRES_PASSWORD DATABASE_URL CONTROL_ADMIN_PASSWORD
 
 # shellcheck disable=SC2329  # вызывается из trap
 cleanup() {
-  docker rm -fv "$NAME" "$NOBUCKET" "$MINIO" >/dev/null 2>&1 || true
+  docker rm -fv "$NAME" "$NOBUCKET" "$MINIO" "$PG" >/dev/null 2>&1 || true
   docker network rm "$NET" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
@@ -56,11 +64,13 @@ status() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
 # Логи на экран — только через redact: значения секретов заменяются на ***.
 redact() {
   sed -e "s/$JWT_SECRET/***/g" -e "s/$SMS_CODE_SECRET/***/g" \
-      -e "s/$S3_SECRET_KEY/***/g" -e "s/$S3_ACCESS_KEY/***/g"
+      -e "s/$S3_SECRET_KEY/***/g" -e "s/$S3_ACCESS_KEY/***/g" \
+      -e "s/$POSTGRES_PASSWORD/***/g" -e "s/$CONTROL_ADMIN_PASSWORD/***/g"
 }
 # Окружение staging; S3 — сайдкар по имени minio во внутренней сети smoke-теста.
 APP_ENV=(-e ENVIRONMENT=staging -e JWT_SECRET -e SMS_CODE_SECRET -e REDIS_URL="$REDIS_URL"
-         -e S3_ENDPOINT=http://minio:9000 -e S3_BUCKET="$S3_BUCKET" -e S3_ACCESS_KEY -e S3_SECRET_KEY)
+         -e S3_ENDPOINT=http://minio:9000 -e S3_BUCKET="$S3_BUCKET" -e S3_ACCESS_KEY -e S3_SECRET_KEY
+         -e DATABASE_URL)
 # Контейнер приложения: основная сеть — bridge по умолчанию (как раньше: публикация порта и
 # Redis хоста через host-gateway), плюс внутренняя сеть с MinIO — подключается до старта,
 # потому что бакет проверяется при старте (ADR 0017 п. 11).
@@ -106,6 +116,18 @@ if [ "$minio" != up ]; then
   echo "FAIL  MinIO-сайдкар не поднялся"; docker logs "$MINIO" 2>&1 | redact | tail -50; exit 1
 fi
 
+# Сайдкар PostgreSQL (образ — как в docker-compose.yml): миграции и контрольный набор аналитики.
+docker run -d --name "$PG" --network "$NET" --network-alias postgres \
+  -e POSTGRES_USER=smoke -e POSTGRES_DB=smoke -e POSTGRES_PASSWORD "$PG_IMAGE" >/dev/null
+pg=down
+for _ in $(seq 1 30); do
+  docker exec "$PG" pg_isready -U smoke -d smoke >/dev/null 2>&1 && { pg=up; break; }
+  sleep 1
+done
+if [ "$pg" != up ]; then
+  echo "FAIL  PostgreSQL-сайдкар не поднялся"; docker logs "$PG" 2>&1 | redact | tail -50; exit 1
+fi
+
 # Fail closed: staging с настроенным S3, но без бакета не стартует — и именно потому, что
 # MinIO ответил «бакета нет» (HTTP 404), а не из-за сети или посторонней ошибки.
 start_app "$NOBUCKET"
@@ -137,7 +159,7 @@ done
 
 check "/health отвечает, окружение staging" \
   "$(curl -fsS "$BASE/health" | python3 -c 'import json,sys; print(json.load(sys.stdin)["environment"])')" staging
-check "Swagger: все операции Auth, /me, Vehicle, Aggregates, Tickets, Uploads, KnowledgeBase, Notifications" \
+check "Swagger: все операции Auth, /me, Vehicle, Aggregates, Tickets, Uploads, KnowledgeBase, Notifications, Analytics" \
   "$(curl -fsS "$BASE/openapi.json" | python3 -c '
 import json, sys
 need = {"requestPhoneCode", "verifyPhoneCode", "refreshToken", "logout", "withdrawPdConsent",
@@ -158,7 +180,8 @@ need = {"requestPhoneCode", "verifyPhoneCode", "refreshToken", "logout", "withdr
         "registerPushToken", "deletePushToken", "listNotifications", "createNotification",
         "listPublishedNotifications", "previewNotificationAudience", "markNotificationRead",
         "markNotificationOpened", "listFirmwareReleases", "createFirmwareRelease",
-        "setVehicleFirmware"}
+        "setVehicleFirmware",
+        "getTicketResolutionStats", "listProblemModels", "getMaintenanceConversionStats"}
 ops = {o["operationId"] for p in json.load(sys.stdin)["paths"].values() for o in p.values()}
 print("ok" if need <= ops else sorted(need - ops))')" ok
 check "POST /v1/auth/phone/request-code → 200" \
@@ -189,6 +212,8 @@ check "POST /v1/push-tokens с подделанным токеном → 401" \
 check "POST /v1/firmware-releases без токена → 401" \
   "$(status -X POST "$BASE/v1/firmware-releases" -H 'Content-Type: application/json' \
       -d '{"vehicle_model_id":1,"version":"1.0","released_at":"2026-01-01"}')" 401
+check "GET /v1/analytics/ticket-resolution без токена → 401" \
+  "$(status "$BASE/v1/analytics/ticket-resolution?date_from=2026-03-01&date_to=2026-03-31")" 401
 # Worker в staging: модуль и фейковый отправитель поднимаются в том же образе.
 check "worker уведомлений: staging без Firebase — фейковый push" \
   "$(docker exec "$NAME" python -c \
@@ -244,13 +269,31 @@ if [ "${ws_silent:-} ${ws_forged:-}" != "4401 4401" ]; then
   echo "--- вывод WS-клиента ---"; redact <<<"$ws" | tail -20
 fi
 
+# Analytics (ADR 0020 п. 9): миграции образа на PostgreSQL-сайдкаре, контрольный набор,
+# обновление витрины worker аналитики образа и сверка ответов API с ручным расчётом
+# (docs/ANALYTICS_CONTROL.md). Каталог тестов — только в разовых контейнерах загрузки и сверки.
+CONTROL=(docker run --rm --network "$NET" "${APP_ENV[@]}" -e CONTROL_ADMIN_PASSWORD
+         -v "$ROOT/backend/tests:/app/tests:ro" "$IMAGE" python -m tests.support.analytics_control)
+docker exec "$NAME" alembic upgrade head >/dev/null 2>&1 && r=ok || r=failed
+check "миграции образа применяются (alembic upgrade head)" "$r" ok
+"${CONTROL[@]}" load >/dev/null 2>&1 && r=ok || r=failed
+check "контрольный набор аналитики загружен" "$r" ok
+docker exec "$NAME" python -m app.workers.analytics --once >/dev/null 2>&1 && r=ok || r=failed
+check "worker аналитики: витрина обновлена (--once)" "$r" ok
+control=$("${CONTROL[@]}" verify --base "http://$NAME:8000" 2>&1) && r=ok || r=failed
+redact <<<"$control" | grep -E '^(PASS|FAIL|      )' || true
+check "показатели аналитики совпадают с ручным расчётом (14 запросов)" \
+  "$r $(grep -c '^PASS  контроль аналитики' <<<"$control" || true)" "ok 14"
+if [ "$r" != ok ]; then redact <<<"$control" | tail -20; fi
+
 # Ключи и секреты не попадают в логи приложения — в том числе в трассировку отказа старта.
 logs=$( { docker logs "$NOBUCKET"; docker logs "$NAME"; } 2>&1 )
 leak=none
-for secret in "$JWT_SECRET" "$SMS_CODE_SECRET" "$S3_ACCESS_KEY" "$S3_SECRET_KEY"; do
+for secret in "$JWT_SECRET" "$SMS_CODE_SECRET" "$S3_ACCESS_KEY" "$S3_SECRET_KEY" \
+              "$POSTGRES_PASSWORD" "$CONTROL_ADMIN_PASSWORD"; do
   if grep -qF "$secret" <<<"$logs"; then leak=found; fi
 done
-check "логи контейнеров не содержат секретов и ключей S3" "$leak" none
+check "логи контейнеров не содержат секретов, ключей S3 и паролей БД" "$leak" none
 
 if [ "$fail" -ne 0 ]; then
   echo "--- логи контейнера ---"; docker logs "$NAME" 2>&1 | redact | tail -50
