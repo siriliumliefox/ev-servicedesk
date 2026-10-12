@@ -32,9 +32,10 @@
    колёса, стёкла. Цвета контура — из токенов темы (светлая и тёмная), не зашиты в SVG.
    Зоны остаются виджетами поверх контура — hit-area ≥ 44×44 и Semantics не зависят от рисунка.
 2. **Замена и работа различаются (Q2, Q10–Q12).**
-   - Миграция `0014`: `maintenance_record.kind` — `VARCHAR + CHECK ('replacement', 'work')`
-     (ADR 0003), по умолчанию `work`. `replaceAggregateStatus` пишет `replacement`,
-     `createMaintenanceRecord` — всегда `work` (запрос не меняется).
+   - Миграция `0014`: `maintenance_record.kind` — PostgreSQL ENUM `maintenance_record_kind`
+     (`replacement`, `work`; стабильный набор — нативный ENUM, как `app/models/enums.py`, ADR 0003),
+     по умолчанию `work`; CHECK — замена только по агрегату. `replaceAggregateStatus` пишет
+     `replacement`, `createMaintenanceRecord` — всегда `work` (запрос не меняется).
    - Существующие строки получают `work`: production-данных нет (сервер — глава 26), а
      сопоставление с `last_replaced_*` ненадёжно (замены задним числом, повторы). Принятое ограничение.
    - Контракт 1.9.0 (аддитивно): обязательное поле ответа `MaintenanceRecord.kind`, фильтр

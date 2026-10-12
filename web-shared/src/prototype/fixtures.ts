@@ -149,6 +149,8 @@ const record = (
   at: string,
   mileage: number,
   description: string | null = null,
+  // Записи по агрегату в фикстурах — его замены (статусы выше), без агрегата — работы (ADR 0023).
+  kind: MaintenanceRecord["kind"] = code === null ? "work" : "replacement",
 ): MaintenanceRecord => ({
   id,
   aggregate_type_code: code,
@@ -156,6 +158,7 @@ const record = (
   performed_at: at,
   mileage_at_service: mileage,
   description,
+  kind,
 });
 
 export const MAINTENANCE_RECORDS: Record<number, MaintenanceRecord[]> = {

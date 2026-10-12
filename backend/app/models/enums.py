@@ -58,6 +58,13 @@ class MaintenanceReminderKind(enum.StrEnum):
     OVERDUE = "overdue"
 
 
+class MaintenanceRecordKind(enum.StrEnum):
+    """Вид записи истории ТО (ADR 0023 п. 2): замена агрегата сбрасывает выработку, работа — нет."""
+
+    REPLACEMENT = "replacement"
+    WORK = "work"
+
+
 def pg_enum(enum_cls: type[enum.StrEnum], name: str) -> Enum:
     """ENUM, хранящий value ("in_progress"), а не имя члена ("IN_PROGRESS")."""
     return Enum(
@@ -76,4 +83,5 @@ PG_ENUMS: dict[str, type[enum.StrEnum]] = {
     "kb_article_type": KbArticleType,
     "notification_type": NotificationType,
     "maintenance_reminder_kind": MaintenanceReminderKind,
+    "maintenance_record_kind": MaintenanceRecordKind,
 }

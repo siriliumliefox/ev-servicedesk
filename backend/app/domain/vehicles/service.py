@@ -23,6 +23,7 @@ from app.core.time import today_in_business_tz
 from app.domain.vehicles import access
 from app.domain.vehicles.vin import VinDecoder
 from app.models import AggregateType, AppUser, MaintenanceRecord, Vehicle, VehicleModel
+from app.models.enums import MaintenanceRecordKind
 from app.models.vehicles import VehicleMileageCorrection
 
 VEHICLE_OUT = (selectinload(Vehicle.vehicle_model),)
@@ -233,14 +234,24 @@ def correct_mileage(
 # ---------- История работ ----------
 
 
-def list_maintenance_stmt(db: Session, user: AppUser, vehicle_id: int) -> Select:
+def list_maintenance_stmt(
+    db: Session, user: AppUser, vehicle_id: int, aggregate_type_code: str | None = None
+) -> Select:
+    """История ТО авто; фильтр по коду агрегата — история агрегата (ADR 0023 п. 2).
+
+    Неизвестный код — пустой список, а не ошибка: это фильтр.
+    """
     access.get_vehicle(db, user, vehicle_id)
-    return (
-        select(MaintenanceRecord)
-        .where(MaintenanceRecord.vehicle_id == vehicle_id)
-        .order_by(MaintenanceRecord.performed_at.desc(), MaintenanceRecord.id.desc())
-        .options(*RECORD_OUT)
-    )
+    stmt = select(MaintenanceRecord).where(MaintenanceRecord.vehicle_id == vehicle_id)
+    if aggregate_type_code is not None:
+        stmt = stmt.where(
+            MaintenanceRecord.aggregate_type_id.in_(
+                select(AggregateType.id).where(AggregateType.code == aggregate_type_code)
+            )
+        )
+    return stmt.order_by(
+        MaintenanceRecord.performed_at.desc(), MaintenanceRecord.id.desc()
+    ).options(*RECORD_OUT)
 
 
 def create_maintenance_record(
@@ -257,7 +268,7 @@ def create_maintenance_record(
 
     Пробег на момент работы выше текущего поднимает пробег авто; записи задним числом
     (ниже текущего) допустимы. Тикет-основание даёт `access` (у админа — нет).
-    Сброс счётчика агрегата — Глава 12.
+    Это всегда работа: счётчик агрегата сбрасывает только замена (ADR 0016 п. 1, ADR 0023 п. 2).
     """
     vehicle, ticket_id = access.for_change(db, user, vehicle_id)
     if performed_at > today_in_business_tz():
@@ -287,6 +298,7 @@ def create_maintenance_record(
         performed_at=performed_at,
         mileage_at_service=mileage_at_service,
         description=description,
+        kind=MaintenanceRecordKind.WORK,
     )
     db.add(record)
     db.commit()
