@@ -7,6 +7,7 @@ from app.models.aggregates import (
     MaintenanceRegulation,
     VehicleAggregateStatus,
 )
+from app.models.analytics import AnalyticsRefresh
 from app.models.auth import AppUser, PdConsent, RefreshToken
 from app.models.base import Base
 from app.models.knowledge import DecisionTreeNode, KnowledgeArticle, KnowledgeArticleRevision
@@ -22,6 +23,7 @@ from app.models.vehicles import FirmwareRelease, Vehicle, VehicleMileageCorrecti
 
 __all__ = [
     "AggregateStatusThresholds",
+    "AnalyticsRefresh",
     "AggregateType",
     "AppUser",
     "Base",

@@ -126,7 +126,8 @@ def test_collections_are_paginated(path: str, method: str, op: dict, params: lis
         name = schema.get("$ref", "").rsplit("/", 1)[-1]
         if name.endswith("List"):
             body = spec()["components"]["schemas"][name]
-            assert body["required"] == ["items", "meta"]
+            # Поля уровня всей выборки — после items и meta (computed_at аналитики, ADR 0020).
+            assert body["required"][:2] == ["items", "meta"]
             assert body["properties"]["meta"] == {"$ref": "#/components/schemas/PaginationMeta"}
             refs = {p.get("$ref", "") for p in params}
             assert {

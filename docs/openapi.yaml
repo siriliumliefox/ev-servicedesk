@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: EV-ServiceDesk API
-  version: "1.6.0"
+  version: "1.7.0"
   description: >
     API дипломного проекта «EV-ServiceDesk» (ООО «ЕТСавтоГомель»).
     Контракты сервисов: Auth, Vehicle, Aggregates & Maintenance, Tickets,
@@ -67,6 +67,13 @@ tags:
       (notification_delivery), открытие push — markNotificationOpened. Тексты push без ПД.
   - name: Users
   - name: Analytics
+    description: >
+      Дашборд администратора (A-05, A-06; ADR 0020). Показатели считаются по витрине фактов,
+      которую фоновый worker обновляет раз в несколько минут: computed_at — момент, по
+      состоянию на который учтены данные. Период [date_from, date_to] — даты по времени Минска
+      (Europe/Minsk) включительно; тикет и напоминание о ТО относятся к периоду по дате
+      создания. 422 — date_from > date_to (INVALID_PERIOD) или период длиннее 366 дней
+      (PERIOD_TOO_LONG). Часы округляются до 0,01, доли — до 0,0001.
 
 paths:
   # ===================== AUTH SERVICE (шаг 2) =====================
@@ -1876,7 +1883,9 @@ paths:
       operationId: getTicketResolutionStats
       description: >
         Считается по ticket.created_at, first_response_at, resolved_at за период [date_from, date_to]
-        (по дате создания тикета, включительно). 422 — date_from > date_to или период длиннее 366 дней.
+        (по дате создания тикета по Минску, включительно). Решённые — тикеты, решённые на момент
+        computed_at (переоткрытый и ещё не решённый — не решён); время решения — от создания до
+        последнего решения, календарное. 422 — date_from > date_to или период длиннее 366 дней. Уточнено в 1.7.0 (ADR 0020): computed_at.
       x-required-roles: [admin]
       x-rbac-action: ["Просмотр аналитики (дашборд)"]
       parameters:
@@ -1904,7 +1913,10 @@ paths:
       tags: [Analytics]
       summary: Проблемные модели — тикеты по моделям и категориям (A-06)
       operationId: listProblemModels
-      description: Модели, отсортированные по убыванию tickets_total за период. Модели без тикетов не включаются.
+      description: >
+        Модели, отсортированные по убыванию tickets_total за период, при равенстве — по марке,
+        модели, комплектации и id. Модели без тикетов не включаются; тикеты удалённых и
+        переданных авто учитываются по модели авто. Уточнено в 1.7.0 (ADR 0020): computed_at.
       x-required-roles: [admin]
       x-rbac-action: ["Просмотр аналитики (дашборд)"]
       parameters:
@@ -1932,6 +1944,10 @@ paths:
         Две воронки за период: тикеты → работы ТО (maintenance_record.ticket_id) и уведомления
         type=maintenance → открытие push (notification_delivery.opened_at) → работа ТО по авто
         получателя в течение 30 дней после уведомления. Rate = null, если знаменатель 0.
+        Получение — пара «напоминание, получатель»; работа ТО — любая по авто напоминания с
+        performed_at от даты напоминания по Минску до +30 дней включительно, среди всех
+        получателей. У напоминаний последних 30 дней окно ещё не истекло — их конверсия
+        может вырасти. Уточнено в 1.7.0 (ADR 0020): computed_at.
       x-required-roles: [admin]
       x-rbac-action: ["Просмотр аналитики (дашборд)"]
       parameters:
@@ -2889,7 +2905,8 @@ components:
     TicketResolutionStats:
       type: object
       required: [date_from, date_to, tickets_created, tickets_resolved, tickets_resolved_overdue,
-                 avg_first_response_hours, avg_resolution_hours, median_resolution_hours]
+                 avg_first_response_hours, avg_resolution_hours, median_resolution_hours,
+                 computed_at]
       properties:
         date_from: { type: string, format: date }
         date_to: { type: string, format: date }
@@ -2899,6 +2916,14 @@ components:
         avg_first_response_hours: { type: number, nullable: true }
         avg_resolution_hours: { type: number, nullable: true, description: "Среднее resolved_at − created_at (A-05)" }
         median_resolution_hours: { type: number, nullable: true }
+        computed_at: { $ref: '#/components/schemas/AnalyticsComputedAt' }
+
+    AnalyticsComputedAt:
+      type: string
+      format: date-time
+      description: >
+        Момент, по состоянию на который витрина аналитики учла данные (ADR 0020, 1.7.0);
+        отставание — до интервала обновления worker.
 
     TicketCategoryCount:
       type: object
@@ -2913,35 +2938,38 @@ components:
       properties:
         vehicle_model: { $ref: '#/components/schemas/VehicleModel' }
         tickets_total: { type: integer, minimum: 0 }
-        vehicles_total: { type: integer, minimum: 0, description: "Активные авто модели — для нормирования" }
+        vehicles_total: { type: integer, minimum: 0, description: "Активные авто модели на момент computed_at — для нормирования" }
         by_category:
           type: array
+          description: Все категории тикетов, в том числе с count = 0
           items: { $ref: '#/components/schemas/TicketCategoryCount' }
 
     ProblemModelStatsList:
       type: object
-      required: [items, meta]
+      required: [items, meta, computed_at]
       properties:
         items:
           type: array
           items: { $ref: '#/components/schemas/ProblemModelStats' }
         meta: { $ref: '#/components/schemas/PaginationMeta' }
+        computed_at: { $ref: '#/components/schemas/AnalyticsComputedAt' }
 
     MaintenanceConversionStats:
       type: object
       required: [date_from, date_to, tickets_total, tickets_with_maintenance, ticket_to_maintenance_rate,
                  notifications_recipients, notifications_opened, recipients_with_maintenance,
-                 notification_to_maintenance_rate]
+                 notification_to_maintenance_rate, computed_at]
       properties:
         date_from: { type: string, format: date }
         date_to: { type: string, format: date }
         tickets_total: { type: integer, minimum: 0 }
         tickets_with_maintenance: { type: integer, minimum: 0 }
         ticket_to_maintenance_rate: { type: number, minimum: 0, maximum: 1, nullable: true }
-        notifications_recipients: { type: integer, minimum: 0, description: "Получатели уведомлений type=maintenance" }
+        notifications_recipients: { type: integer, minimum: 0, description: "Получения напоминаний о ТО (type=maintenance): пары «напоминание, получатель»" }
         notifications_opened: { type: integer, minimum: 0 }
         recipients_with_maintenance: { type: integer, minimum: 0 }
         notification_to_maintenance_rate: { type: number, minimum: 0, maximum: 1, nullable: true }
+        computed_at: { $ref: '#/components/schemas/AnalyticsComputedAt' }
 
   responses:
     BadRequest:

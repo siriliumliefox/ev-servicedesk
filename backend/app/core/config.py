@@ -122,6 +122,9 @@ class Settings(BaseSettings):
     # Напоминания о ТО — раз в сутки, час по Europe/Minsk (ADR 0019 п. 7).
     maintenance_reminder_hour: int = Field(10, ge=0, le=23)
 
+    # --- Worker аналитики (Глава 16, ADR 0020 п. 2): интервал обновления витрины ---
+    analytics_refresh_seconds: float = Field(300, ge=10, le=86400)
+
     @model_validator(mode="after")
     def _default_channel_prefix(self) -> "Settings":
         if not self.redis_channel_prefix:

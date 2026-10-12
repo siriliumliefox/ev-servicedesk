@@ -19,6 +19,10 @@ erDiagram
         timestamptz created_at
         timestamptz updated_at
     }
+    analytics_refresh {
+        varchar_63 view_name PK
+        timestamptz refreshed_at
+    }
     app_user {
         bigint id PK
         varchar_16 phone UK "nullable"

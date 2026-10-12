@@ -23,3 +23,4 @@
 | [0017](0017-tickets-service.md) | Tickets Service: SLA — срок решения по категории, граф статусов и claim, доступ инженера (очередь + свои), чат на WebSocket + Redis, вложения через S3 (MinIO), контракт 1.4.0 аддитивно |
 | [0018](0018-knowledge-base-service.md) | Knowledge Base Service: версия — опубликованная редакция со снимком, проверка тупиков дерева решений, публикация только валидного дерева, полнотекстовый поиск PostgreSQL, эскалация с версией статьи, контракт 1.5.0 |
 | [0019](0019-notifications-service.md) | Notifications Service: исходящая очередь в БД + worker, снимок аудитории, прошивка по версии, напоминания о ТО за N км/дней, мягкий отзыв push-токенов, контракт 1.6.0 |
+| [0020](0020-analytics-service.md) | Analytics Service: витрина фактов (materialized view) + `analytics-worker`, период по Минску, формулы A-05/A-06, `computed_at`, контракт 1.7.0 |
