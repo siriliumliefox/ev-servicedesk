@@ -71,6 +71,7 @@ const vehicle = (id: number, modelId: number, vin: string, mileage: number, firm
   vin,
   mileage,
   is_active: true,
+  vehicle_model_id: modelId,
   vehicle_model: modelInfo(modelId),
   current_firmware_version: firmware,
   created_at: "2026-02-01T10:00:00Z",

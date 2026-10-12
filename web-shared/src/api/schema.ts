@@ -1178,6 +1178,8 @@ export interface components {
             vin: string;
             mileage: number;
             is_active: boolean;
+            /** @description id модели авто (VehicleModel) — фильтр статей базы знаний по модели (GET /knowledge-articles?vehicle_model_id=). Добавлено в 1.8.0 (глава 18, ADR 0022). */
+            vehicle_model_id: number;
             vehicle_model: components["schemas"]["VehicleModelInfo"];
             /** @description Версия прошивки из последнего зафиксированного FirmwareRelease (см. PATCH /vehicles/{id}/firmware) */
             current_firmware_version?: string | null;
