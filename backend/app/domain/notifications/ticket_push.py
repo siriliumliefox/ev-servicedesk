@@ -49,7 +49,8 @@ class TicketPush:
         row = db.execute(
             select(Ticket, Vehicle.user_id)
             .join(Vehicle, Vehicle.id == Ticket.vehicle_id)
-            .where(Ticket.id == event.ticket_id)
+            # Тикет удалённого авто клиенту не виден (404) — и push по нему не идёт (ADR 0021 п. 5).
+            .where(Ticket.id == event.ticket_id, Vehicle.deleted_at.is_(None))
         ).one_or_none()
         if row is None:
             return 0

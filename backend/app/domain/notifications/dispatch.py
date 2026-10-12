@@ -7,6 +7,11 @@ FCM идёт вне транзакции, исход каждой строки �
 отзывается. Так сбой посреди пачки не откатывает уже отправленные push (повторной рассылки
 нет), а запросы API (`opened`) не ждут всю пачку. Окно «отправлено, исход не записан»
 (падение процесса между вызовом FCM и COMMIT) — at-least-once: после аренды строка уйдёт ещё раз.
+
+Право на уведомление проверяется заново при аренде (ADR 0021 п. 5): получатель — активный
+клиент с действующим согласием ПД, авто уведомления не удалено и всё ещё его. Иначе доставка
+закрывается без отправки (`RECIPIENT_NOT_ELIGIBLE`): блокировка, отзыв согласия, удаление или
+передача авто после постановки в очередь не приводят к push.
 """
 
 import logging
@@ -14,12 +19,13 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select, update
+from sqlalchemy import ColumnElement, and_, exists, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.domain.notifications.push import Outcome, PushMessage, PushResult, PushSender
-from app.models import Notification, NotificationDelivery, PushToken
+from app.domain.notifications.service import eligible_client
+from app.models import AppUser, Notification, NotificationDelivery, PushToken, Vehicle
 from app.models.enums import NotificationType
 
 TITLES = {
@@ -54,11 +60,31 @@ class _Leased:
     message: PushMessage
 
 
+def _recipient_eligible() -> ColumnElement[bool]:
+    """Владелец токена всё ещё вправе получить уведомление (строка запроса `_lease`)."""
+    owns_vehicle = exists(
+        select(Vehicle.id).where(
+            Vehicle.id == Notification.vehicle_id,
+            Vehicle.user_id == PushToken.user_id,
+            Vehicle.deleted_at.is_(None),
+        )
+    )
+    return and_(
+        exists(select(AppUser.id).where(AppUser.id == PushToken.user_id, *eligible_client())),
+        or_(Notification.vehicle_id.is_(None), owns_vehicle),
+    )
+
+
 def _lease(db: Session, settings: Settings) -> tuple[list[_Leased], int]:
-    """Арендованные строки и число строк, закрытых сразу (токен уже отозван)."""
+    """Арендованные строки и число строк, закрытых сразу (токен отозван, получатель не вправе)."""
     now = datetime.now(UTC)
     rows = db.execute(
-        select(NotificationDelivery, PushToken, Notification)
+        select(
+            NotificationDelivery,
+            PushToken,
+            Notification,
+            _recipient_eligible().label("eligible"),
+        )
         .join(PushToken, PushToken.id == NotificationDelivery.push_token_id)
         .join(Notification, Notification.id == NotificationDelivery.notification_id)
         .where(
@@ -72,10 +98,12 @@ def _lease(db: Session, settings: Settings) -> tuple[list[_Leased], int]:
     ).all()
     leased = []
     closed = 0
-    for delivery, token, notification in rows:
-        if token.revoked_at is not None:
+    for delivery, token, notification, eligible in rows:
+        if token.revoked_at is not None or not eligible:
             delivery.failed_at = now
-            delivery.error_code = "TOKEN_REVOKED"
+            delivery.error_code = (
+                "TOKEN_REVOKED" if token.revoked_at is not None else "RECIPIENT_NOT_ELIGIBLE"
+            )
             closed += 1
             continue
         delivery.next_attempt_at = now + timedelta(seconds=settings.push_lease_seconds)
