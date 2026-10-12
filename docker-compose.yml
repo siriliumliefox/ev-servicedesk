@@ -128,6 +128,31 @@ services:
         condition: service_completed_successfully
     profiles: ["full"]   # docker compose --profile full up — прод-подобный прогон
 
+  # Worker уведомлений (Глава 15, ADR 0019): очередь push, напоминания о ТО в 10:00 по Минску,
+  # push по событиям тикетов. Тот же образ, что у backend; без FCM-ключа — фейковый push.
+  notifications-worker:
+    build:
+      context: ./backend
+    command: ["python", "-m", "app.workers.notifications"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-local}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-ev}:${POSTGRES_PASSWORD:-ev_local_only}@postgres:5432/${POSTGRES_DB:-ev_servicedesk}
+      REDIS_URL: redis://redis:6379/0
+      S3_ENDPOINT: http://minio:9000
+      S3_BUCKET: ${S3_BUCKET:-ev-servicedesk-local}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-ev_local}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-ev_local_only}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles: ["full"]
+
 volumes:
   postgres_data:
   minio_data:

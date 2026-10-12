@@ -42,7 +42,7 @@ PR-ревью GitHub не позволяет одобрить собственн
 | `JWT_SECRET` | Да | `scripts/set-environment-secrets.sh` (задан для staging и production) |
 | `SMS_PROVIDER_API_KEY` | Да (когда провайдер выбран) | пока пусто — бизнес-решение |
 | `S3_*` | Да | свой bucket/credentials на окружение — Глава 26; local — MinIO из `docker compose`. Вне local/test backend не стартует без ключей или без доступного бакета (ADR 0017) |
-| `FCM_SERVICE_ACCOUNT_JSON` | уточнить в Главе 15 | обычно один Firebase-проект с разными app id |
+| `PUSH_PROVIDER`, `FCM_SERVICE_ACCOUNT_JSON` | Да | ADR 0019: staging — `fake`, пока нет Firebase-проекта; production — только `fcm`. JSON-ключ сервисного аккаунта вводит владелец (`scripts/set-fcm-secret.sh`), один Firebase-проект с разными app id. Worker уведомлений — тот же образ, команда `python -m app.workers.notifications` |
 
 ## Настройка (идемпотентно, нужен `gh auth login` с правами admin)
 
