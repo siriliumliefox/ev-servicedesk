@@ -21,7 +21,7 @@
 import logging
 import re
 import uuid
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -192,8 +192,10 @@ def check_uploads(
     return uploads
 
 
-# Записывает строки вложений: attach(created_at=…, ticket_message_id=…).
-Attach = Callable[..., None]
+class Attach(Protocol):
+    """Записывает строки вложений тикета (ticket_message_id=None) или сообщения."""
+
+    def __call__(self, *, created_at: datetime, ticket_message_id: int | None = None) -> None: ...
 
 
 @contextmanager

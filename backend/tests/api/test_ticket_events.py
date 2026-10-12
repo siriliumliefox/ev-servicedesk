@@ -13,11 +13,11 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from redis import Redis
 from redis.asyncio.client import PubSub
 from redis.exceptions import ConnectionError as RedisConnectionError
+from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 from starlette.websockets import WebSocketDisconnect
 
@@ -77,11 +77,6 @@ def ticket_id(client: TestClient, owner) -> int:
 def numsub(redis: Redis, ticket_id: int) -> int:
     channel = run_events(redis).channel(ticket_id)
     return dict(redis.pubsub_numsub(channel)).get(channel, 0)
-
-
-def hub_of(app: FastAPI) -> PubSubHub:
-    """Общая подписка запущенного приложения (lifespan, app.main)."""
-    return app.state.pubsub_hub
 
 
 # ---------- Авторизация ----------
@@ -242,6 +237,46 @@ def test_reassignment_closes_lost_subscribers_4403(
         assert receive_event(client_ws)["data"]["assigned_engineer_id"] == other.id
 
 
+def test_noop_changes_publish_nothing(client, ticket_id, owner, engineer, as_staff, db):
+    """Повтор claim, текущий статус, то же назначение: ни UPDATE строки, ни события (ADR 0017)."""
+    eng_headers, _, eng = engineer
+    admin_headers, _ = as_staff("+375295500041", UserRole.ADMIN)
+    assert client.post(f"{API}/tickets/{ticket_id}/claim", headers=eng_headers).status_code == 200
+
+    def row_version() -> str:  # ctid меняется при любом UPDATE строки, даже в той же транзакции
+        return db.scalar(text("SELECT ctid::text FROM ticket WHERE id = :id"), {"id": ticket_id})
+
+    with connect(client, ticket_id) as ws:
+        auth(ws, owner[1])
+        before = row_version()
+        noops = [
+            client.post(f"{API}/tickets/{ticket_id}/claim", headers=eng_headers),
+            client.patch(
+                f"{API}/tickets/{ticket_id}/status",
+                json={"status": "in_progress"},
+                headers=eng_headers,
+            ),
+            client.patch(
+                f"{API}/tickets/{ticket_id}/assign",
+                json={"assigned_engineer_id": eng.id},
+                headers=admin_headers,
+            ),
+        ]
+        assert [r.status_code for r in noops] == [200, 200, 200]
+        assert_quiet(ws, msg="событие без изменения тикета")
+        assert row_version() == before, "UPDATE без изменения"
+
+        r = client.patch(
+            f"{API}/tickets/{ticket_id}/status",
+            json={"status": "waiting_vendor"},
+            headers=eng_headers,
+        )
+        assert r.status_code == 200
+        frame = assert_frame(receive_event(ws), "ticket.updated", "Ticket")
+        assert frame["status"] == "waiting_vendor"
+        assert row_version() != before
+
+
 def test_publish_failure_does_not_fail_request(client, ticket_id, owner, app, monkeypatch):
     def broken(*_: Any, **__: Any) -> None:
         raise RedisConnectionError("нет связи")
@@ -384,7 +419,7 @@ def test_connect_attempts_per_ip_close_4429(client, ticket_id, owner, settings, 
 
 def test_slow_consumer_closes_1013(app, client, ticket_id, owner, real_redis, monkeypatch):
     """Очередь получателя ограничена: не успевающий — закрытие 1013, а не рост памяти."""
-    monkeypatch.setattr(hub_of(app), "queue_size", 1)
+    monkeypatch.setattr(app.state.pubsub_hub, "queue_size", 1)
     render = ticket_events._render
 
     def slow(*args: Any) -> Any:
@@ -411,7 +446,7 @@ def test_slow_consumer_closes_1013(app, client, ticket_id, owner, real_redis, mo
 
 def test_unanswered_ping_closes_1011(app, client, ticket_id, owner, monkeypatch):
     """Полуоткрытое соединение с Redis (PING без ответа) не держит подключения вечно."""
-    monkeypatch.setattr(hub_of(app), "ping_seconds", 0.2)
+    monkeypatch.setattr(app.state.pubsub_hub, "ping_seconds", 0.2)
     execute = PubSub.execute_command
 
     async def lossy(self: PubSub, *args: Any) -> Any:
@@ -426,7 +461,7 @@ def test_unanswered_ping_closes_1011(app, client, ticket_id, owner, monkeypatch)
 
 
 def test_link_loss_closes_sockets_1011_and_recovers(app, client, ticket_id, owner, monkeypatch):
-    monkeypatch.setattr(hub_of(app), "ping_seconds", 0.2)  # чтение не дольше 0,2 с
+    monkeypatch.setattr(app.state.pubsub_hub, "ping_seconds", 0.2)  # чтение не дольше 0,2 с
     broken = {"now": False}
     get_message = PubSub.get_message
 

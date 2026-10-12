@@ -78,8 +78,9 @@ Frame = dict[str, Any]
 READY: Frame = {"type": "ready"}
 PubSubHubDep = Annotated[PubSubHub, Depends(get_pubsub_hub)]
 
-# Открытые подключения пользователя в процессе (лимит `ws_max_sockets_per_user`). Все
-# обработчики WebSocket работают в одном цикле событий процесса — блокировка не нужна.
+# Открытые подключения пользователя в процессе (лимит `ws_max_sockets_per_user`). В uvicorn
+# все обработчики WebSocket процесса — в одном цикле событий, поэтому блокировка не нужна
+# (проверка и увеличение счётчика идут без await между ними).
 _open_sockets: Counter[int] = Counter()
 
 

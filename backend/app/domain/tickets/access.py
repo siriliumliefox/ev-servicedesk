@@ -48,7 +48,7 @@ def visible(user: AppUser) -> ColumnElement[bool]:
     return false()  # неизвестная роль — deny by default
 
 
-def find(
+def _find(
     db: Session, user: AppUser, ticket_id: int, *options: ExecutableOption, lock: bool = False
 ) -> Ticket | None:
     """Тикет, видимый `user`, или None. `options` — связи для ответа; lock — FOR UPDATE.
@@ -71,7 +71,7 @@ def find(
 
 def get_ticket(db: Session, user: AppUser, ticket_id: int, *options: ExecutableOption) -> Ticket:
     """Тикет, видимый `user`, иначе 404. `options` — загрузка связей для ответа."""
-    ticket = find(db, user, ticket_id, *options)
+    ticket = _find(db, user, ticket_id, *options)
     if ticket is None:
         raise not_found()
     return ticket
@@ -83,7 +83,7 @@ def for_update(db: Session, user: AppUser, ticket_id: int) -> Ticket:
     Блокировка упорядочивает сообщения со сменой статуса: «решён» не проскочит между
     проверкой и вставкой сообщения.
     """
-    ticket = find(db, user, ticket_id, lock=True)
+    ticket = _find(db, user, ticket_id, lock=True)
     if ticket is None:
         raise not_found()
     return ticket

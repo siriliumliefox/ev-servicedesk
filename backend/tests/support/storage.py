@@ -9,9 +9,10 @@ import threading
 import urllib.request
 from urllib.parse import quote
 
+from app.core.config import Settings
 from app.core.storage import CopySourceChanged, ObjectInfo, ObjectStorage, StorageUnavailable
 
-PUT_TTL_SECONDS = 900
+PUT_TTL_SECONDS: int = Settings.model_fields["presign_put_ttl_seconds"].default
 
 
 class FakeObjectStorage:
