@@ -66,8 +66,8 @@ E2E на Detox/Appium и тест на соединении 2G; DoD — «соб
 8. **Конфигурация (Q8).** `--dart-define=API_BASE_URL=…` — HTTP; без него — `PrototypeRepository`
    с панелью «Демо» (юзабилити, демонстрации). Новых пакетов для HTTP и состояния нет (`http`,
    `ChangeNotifier`); добавлены `shared_preferences` и `integration_test` (SDK).
-9. **Шрифт (Q9).** Inter подключён ассетом (OFL, лицензия рядом), `layout_real_font_test`
-   проверяет 360 px с ним.
+9. **Шрифт (Q9).** Inter 4.1 подключён ассетом — статические начертания 400/500/600/700 (OFL,
+   `assets/fonts/inter/OFL.txt`); `layout_real_font_test` проверяет 360/390 px на его метриках.
 10. **Запуск без сети (Q10).** Есть refresh, нет сети — главный экран в состоянии «Нет сети» с
     «Повторить». На онбординг ведут только 401 от refresh и `ACCOUNT_DISABLED`.
 11. **Профиль (Q11).** Телефон, «Выйти» (`POST /auth/logout` best effort, хранилище очищается

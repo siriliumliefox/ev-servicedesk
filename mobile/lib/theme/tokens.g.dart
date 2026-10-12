@@ -285,7 +285,7 @@ abstract final class EvDuration {
 }
 
 /// Типографика мобильного приложения (typography.mobile.*).
-/// Шрифт Inter подключается ассетом в главе 18; до этого — системный (SF Pro).
+/// Шрифт Inter — ассет приложения (assets/fonts/inter, глава 18, ADR 0022 п. 9).
 abstract final class EvTypeMobile {
   static const String fontFamily = 'Inter';
   static const TextStyle display = TextStyle(

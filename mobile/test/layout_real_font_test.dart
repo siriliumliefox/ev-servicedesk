@@ -1,9 +1,9 @@
 // Глава 9 (Issue #43): вёрстка на реальных метриках шрифта — подписи схемы (M6), номер в шапке чата и подсказка
 // у телефона (M7), ошибка выбора авто в форме обращения на маленьком экране и с клавиатурой (M5).
 // Тестовый шрифт flutter_test рисует каждый глиф квадратом 1em и не показывает переносы и обрезку,
-// как на устройстве. Здесь в семейство EvTypeMobile.fontFamily загружается Roboto из Flutter SDK —
-// пропорциональный шрифт с кириллицей, есть и в CI. Системный шрифт iOS/macOS (SF) шире Roboto ≈ на 7 % —
-// у подписей схемы проверяется запас 10 %. Шрифт регистрируется на весь файл, поэтому тесты — отдельным файлом.
+// как на устройстве. Здесь в семейство EvTypeMobile.fontFamily загружаются начертания Inter из assets/fonts —
+// тот же шрифт, что в приложении (глава 18, ADR 0022 п. 9). У подписей схемы — запас 10 % на увеличенный
+// системный размер текста. Шрифт регистрируется на весь файл, поэтому тесты — отдельным файлом.
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -16,14 +16,17 @@ import 'package:ev_servicedesk/main.dart';
 import 'package:ev_servicedesk/theme/app_theme.dart';
 
 /// Минимальная ширина из ТЗ и iPhone 12–15 (390 pt). Подсказка у телефона обрезалась в раунде 1 на 390 pt
-/// с системным шрифтом SF; Roboto уже SF ≈ на 7 %, поэтому с ним обрезка воспроизводится только на 360.
+/// с системным шрифтом SF (до подключения Inter).
 const _widths = [Size(360, 740), Size(390, 844)];
 
 Future<void> _loadFont() async {
-  final root = Platform.environment['FLUTTER_ROOT'];
-  final file = File('$root/bin/cache/artifacts/material_fonts/Roboto-Medium.ttf');
-  expect(file.existsSync(), isTrue, reason: 'нет ${file.path} (FLUTTER_ROOT=$root)');
-  await (FontLoader(EvTypeMobile.fontFamily)..addFont(file.readAsBytes().then(ByteData.sublistView))).load();
+  final loader = FontLoader(EvTypeMobile.fontFamily);
+  for (final weight in ['Regular', 'Medium', 'SemiBold', 'Bold']) {
+    final file = File('assets/fonts/inter/Inter-$weight.ttf');
+    expect(file.existsSync(), isTrue, reason: 'нет ${file.path}');
+    loader.addFont(file.readAsBytes().then(ByteData.sublistView));
+  }
+  await loader.load();
 }
 
 Future<void> _pump(WidgetTester tester, Size size, {bool signedIn = true}) async {
@@ -68,7 +71,7 @@ void main() {
         // Подпись — Text зоны (иконка статуса тоже рисуется через RichText).
         final label = _paragraph(tester, find.descendant(of: zone, matching: find.byType(Text)));
         expect(label.didExceedMaxLines, isFalse, reason: code);
-        // Каждое слово целиком в строке (с запасом на более широкий SF) — без переноса посреди слова.
+        // Каждое слово целиком в строке (с запасом 10 %) — без переноса посреди слова.
         final text = label.text.toPlainText();
         for (final word in text.split(' ')) {
           expect(_width(word, label.text.style) * 1.1, lessThanOrEqualTo(label.constraints.maxWidth),

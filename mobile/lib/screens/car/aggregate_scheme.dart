@@ -27,9 +27,9 @@ class AggregateScheme extends StatelessWidget {
   static const _zone = EvSize.controlMobile; // 48 ≥ 44
 
   /// Подпись — полное название агрегата (как в списке и карточке, глава 9), до 2 строк.
-  /// Ширина — под самое длинное слово: «кондиционера» у центральной зоны, «Масляный» у боковой.
-  static const _labelWidth = 104.0;
-  static const _sideLabelWidth = 76.0;
+  /// Ширина — под самое длинное слово шрифтом Inter (глава 18): «кондиционера» у центральной зоны, «Масляный» у боковой.
+  static const _labelWidth = 108.0;
+  static const _sideLabelWidth = 78.0;
 
   /// Центральные зоны (по оси авто) шире: соседей сбоку у них нет.
   static double _labelWidthAt(Offset position) => position.dx == 0.5 ? _labelWidth : _sideLabelWidth;
