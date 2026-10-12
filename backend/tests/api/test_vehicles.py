@@ -21,7 +21,6 @@ from tests.api.conftest import (
     UNKNOWN_VIN,
     ZEEKR_VIN,
     add_vehicle,
-    assert_contract,
     bearer,
     model_id,
 )
@@ -38,17 +37,14 @@ def test_add_list_mileage_history_flow(client, as_client, as_staff, make_ticket,
     vid = vehicle["id"]
 
     r = client.get(f"{API}/vehicles", headers=owner)
-    assert_contract(r, "listVehicles")
     assert [v["id"] for v in r.json()["items"]] == [vid]
 
     r = client.patch(f"{API}/vehicles/{vid}/mileage", json={"mileage": 12000}, headers=owner)
     assert r.status_code == 200
-    assert_contract(r, "updateVehicleMileage")
     assert r.json()["mileage"] == 12000
 
     r = client.patch(f"{API}/vehicles/{vid}/mileage", json={"mileage": 11999}, headers=owner)
     assert r.status_code == 409
-    assert_contract(r, "updateVehicleMileage")
     assert r.json()["error"]["code"] == "MILEAGE_DECREASE"
 
     engineer_headers, engineer = as_staff("+375291100002")
@@ -64,17 +60,14 @@ def test_add_list_mileage_history_flow(client, as_client, as_staff, make_ticket,
         headers=engineer_headers,
     )
     assert r.status_code == 201, r.text
-    assert_contract(r, "createMaintenanceRecord")
     assert r.json()["performed_by"]["id"] == engineer.id
 
     r = client.get(f"{API}/vehicles/{vid}/maintenance-records", headers=owner)
-    assert_contract(r, "listMaintenanceRecords")
     [record] = r.json()["items"]
     assert record["aggregate_type_code"] == "cabin_filter"
     assert record["mileage_at_service"] == 15000
 
     r = client.get(f"{API}/vehicles/{vid}", headers=owner)
-    assert_contract(r, "getVehicle")
     assert r.json()["mileage"] == 15000, "пробег на момент работы выше — пробег авто поднят"
     assert db.get(MaintenanceRecord, record["id"]).ticket_id == ticket.id
 
@@ -87,7 +80,6 @@ def test_several_vehicles_per_account_with_pagination(client, as_client):
     )
 
     r = client.get(f"{API}/vehicles", params={"page_size": 1, "page": 2}, headers=owner)
-    assert_contract(r, "listVehicles")
     body = r.json()
     assert body["meta"] == {"page": 2, "page_size": 1, "total_items": 2, "total_pages": 2}
     assert [v["id"] for v in body["items"]] == [second["id"]]
@@ -104,7 +96,6 @@ def test_unrecognized_vin_requires_manual_model(client, as_client):
     owner = as_client("+375291100021")
     r = client.post(f"{API}/vehicles", json={"vin": UNKNOWN_VIN}, headers=owner)
     assert r.status_code == 422
-    assert_contract(r, "createVehicle")
     assert r.json()["error"]["code"] == "VIN_DECODE_FAILED"
 
     voyah = model_id(client, owner, "voyah free")
@@ -128,7 +119,6 @@ def test_invalid_vin_is_422_without_echoing_value(client, as_client, vin):
     owner = as_client("+375291100031")
     r = client.post(f"{API}/vehicles", json={"vin": vin}, headers=owner)
     assert r.status_code == 422
-    assert_contract(r, "createVehicle")
     assert vin not in r.text, "VIN — ПД: значение в ответ не возвращается"
 
 
@@ -137,7 +127,6 @@ def test_model_search_escapes_wildcards(client, as_client):
     r = client.get(f"{API}/vehicle-models", params={"search": "zee"}, headers=owner)
     assert [m["brand"] for m in r.json()["items"]] == ["Zeekr"]
     r = client.get(f"{API}/vehicle-models", params={"search": "%"}, headers=owner)
-    assert_contract(r, "searchVehicleModels")
     assert r.json()["items"] == []
     r = client.get(f"{API}/vehicle-models", headers=owner)
     assert r.json()["meta"]["total_items"] >= 3
@@ -153,7 +142,6 @@ def test_same_vin_on_two_accounts_is_conflict(client, as_client, db):
 
     r = client.post(f"{API}/vehicles", json={"vin": ZEEKR_VIN}, headers=second)
     assert r.status_code == 409
-    assert_contract(r, "createVehicle")
     error = r.json()["error"]
     assert error["code"] == "VIN_REGISTERED_TO_ANOTHER_ACCOUNT"
     assert error["details"] is None
@@ -179,7 +167,6 @@ def test_owner_readding_deleted_vehicle_restores_history(client, as_client, as_s
 
     r = client.delete(f"{API}/vehicles/{vid}", headers=owner)
     assert r.status_code == 204
-    assert_contract(r, "deleteVehicle")
     assert client.get(f"{API}/vehicles", headers=owner).json()["items"] == []
 
     restored = add_vehicle(client, owner)
@@ -242,7 +229,6 @@ def test_engineer_access_follows_tickets(client, as_client, as_staff, make_ticke
     assert client.get(f"{API}/vehicles/{vid}", headers=eng_headers).status_code == 200
     r = client.patch(f"{API}/vehicles/{vid}/mileage", json=mileage, headers=eng_headers)
     assert r.status_code == 403
-    assert_contract(r, "updateVehicleMileage")
 
     # Взял тикет в работу — может менять.
     queue.assigned_engineer_id = engineer.id
@@ -275,7 +261,6 @@ def test_deleted_vehicle_visible_to_staff_by_ticket(client, as_client, as_staff,
     for headers in (eng_headers, admin_headers):
         r = client.get(f"{API}/vehicles/{vid}", headers=headers)
         assert r.status_code == 200
-        assert_contract(r, "getVehicle")
         assert r.json()["is_active"] is False
     assert client.get(f"{API}/vehicles/{vid}", headers=owner).status_code == 404
 
@@ -325,7 +310,6 @@ def test_deleted_vehicle_is_read_only(client, as_client, as_staff, make_ticket):
     for headers, (method, path, body, operation_id), status in expected:
         r = client.request(method, path, json=body, headers=headers)
         assert r.status_code == status, (operation_id, r.text)
-        assert_contract(r, operation_id)
         if status == 403:
             assert r.json()["error"]["message"] == "Автомобиль удалён — изменения недоступны"
 
@@ -426,7 +410,6 @@ def test_admin_mileage_correction(client, as_client, as_staff, db):
         headers=admin_headers,
     )
     assert r.status_code == 409
-    assert_contract(r, "correctVehicleMileage")
     assert r.json()["error"]["code"] == "MILEAGE_CORRECTION_STALE"
 
     r = client.post(
@@ -443,7 +426,6 @@ def test_admin_mileage_correction(client, as_client, as_staff, db):
         headers=admin_headers,
     )
     assert r.status_code == 201, r.text
-    assert_contract(r, "correctVehicleMileage")
     assert r.json()["mileage"] == 5000
     entry = db.scalars(
         select(VehicleMileageCorrection).where(VehicleMileageCorrection.vehicle_id == vid)
@@ -494,7 +476,6 @@ def test_maintenance_record_rules(client, as_client, as_staff, make_ticket, db):
     for body, code in cases:
         r = client.post(url, json=body, headers=eng_headers)
         assert r.status_code == 422, body
-        assert_contract(r, "createMaintenanceRecord")
         assert r.json()["error"]["code"] == code
 
     # Запись задним числом: пробег авто не уменьшается; связь с последним тикетом инженера.
@@ -549,7 +530,6 @@ def test_record_without_author_omits_performed_by(client, as_client, db):
     )
     db.commit()
     r = client.get(f"{API}/vehicles/{vid}/maintenance-records", headers=owner)
-    assert_contract(r, "listMaintenanceRecords")
     imported, oil_change = r.json()["items"]
     assert "performed_by" not in imported and "performed_by" not in oil_change
     assert imported["aggregate_type_code"] is None and imported["description"] == "Импорт"
@@ -566,7 +546,6 @@ def test_vehicle_create_rate_limited(client, as_client, settings: Settings):
         assert r.status_code == 422  # попытки перебора считаются, даже неуспешные
     r = client.post(f"{API}/vehicles", json={"vin": UNKNOWN_VIN}, headers=owner)
     assert r.status_code == 429
-    assert_contract(r, "createVehicle")
     assert 0 < int(r.headers["Retry-After"]) <= 3600
 
     other = as_client("+375291100162")
@@ -578,4 +557,3 @@ def test_out_of_range_vehicle_id_is_404(client, as_client, vehicle_id):
     owner = as_client("+375291100171")
     r = client.get(f"{API}/vehicles/{vehicle_id}", headers=owner)
     assert r.status_code == 404
-    assert_contract(r, "getVehicle")

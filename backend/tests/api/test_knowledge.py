@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.models import FirmwareRelease, KnowledgeArticle, KnowledgeArticleRevision, VehicleModel
 from app.models.enums import KbArticleType, UserRole
-from tests.api.conftest import API, Headers, assert_contract, model_id
+from tests.api.conftest import API, Headers, model_id
 from tests.api.knowledge_support import (
     api,
     api_tree,
@@ -50,7 +50,6 @@ def ids(client: TestClient, headers: Headers, **params) -> list[int]:
         f"{API}/knowledge-articles", params={"page_size": 100, **params}, headers=headers
     )
     assert r.status_code == 200, r.text
-    assert_contract(r, "listKnowledgeArticles")
     return [a["id"] for a in r.json()["items"]]
 
 
@@ -98,7 +97,6 @@ def test_create_validation(client, admin, body, code):
     payload = {"article_type": "troubleshooting", "category": "audio", "title": "T", "content": ""}
     r = client.post(f"{API}/knowledge-articles", json=payload | body, headers=admin)
     assert r.status_code == 422, r.text
-    assert_contract(r, "createKnowledgeArticle")
     assert error_code(r) == code
 
 
@@ -158,7 +156,6 @@ def test_update_validation(client, admin, body, code):
     article = create_article(client, admin)
     r = client.patch(f"{API}/knowledge-articles/{article['id']}", json=body, headers=admin)
     assert r.status_code == 422, r.text
-    assert_contract(r, "updateKnowledgeArticle")
     assert error_code(r) == code
 
 
@@ -180,7 +177,6 @@ def test_missing_article_404(client, admin):
                 method, f"{API}/knowledge-articles/{article_id}", json=body, headers=admin
             )
             assert r.status_code == 404, (method, article_id)
-            assert_contract(r, op)
 
 
 # ---------- Доступ (RBAC-05) ----------
@@ -264,7 +260,6 @@ def test_admin_operations_forbidden_for_others(client, admin, engineer, owner):
         for method, path, op, body in calls:
             r = client.request(method, f"{API}{path}", json=body, headers=headers)
             assert r.status_code == 403, (method, path)
-            assert_contract(r, op)
     for path, op in (
         (f"/knowledge-articles/{article_id}/revisions", "listKnowledgeArticleRevisions"),
         (f"/knowledge-articles/{article_id}/revisions/1", "getKnowledgeArticleRevision"),
@@ -481,7 +476,6 @@ def test_blank_and_long_search(client, admin, engineer):
     for bad in ("а" * 201, "NUL\x00", "CSI\x9b"):
         r = client.get(f"{API}/knowledge-articles", params={"search": bad}, headers=engineer)
         assert r.status_code == 422, repr(bad)
-        assert_contract(r, "listKnowledgeArticles")
 
 
 def test_search_is_nfc(client, admin, engineer):
@@ -517,7 +511,6 @@ def test_filters(client, admin, engineer, owner):
     for params in ({"category": "weather"}, {"vehicle_model_id": 2**63}, {"article_type": "x"}):
         r = client.get(f"{API}/knowledge-articles", params=params, headers=owner)
         assert r.status_code == 422, params
-        assert_contract(r, "listKnowledgeArticles")
 
 
 def test_sorted_by_last_change(client, owner, db: Session):

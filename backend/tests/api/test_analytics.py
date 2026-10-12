@@ -18,7 +18,7 @@ from app.models import (
     Ticket,
 )
 from app.models.enums import UserRole
-from tests.api.conftest import API, Headers, assert_contract
+from tests.api.conftest import API, Headers
 from tests.support import analytics_control as control
 
 OPERATIONS = {
@@ -44,7 +44,6 @@ def world(db: Session) -> control.World:
 def get(client: TestClient, headers: Headers, path: str, **params) -> dict:
     r = client.get(f"{API}{path}", params=params, headers=headers)
     assert r.status_code == 200, r.text
-    assert_contract(r, OPERATIONS[path])
     return r.json()
 
 
@@ -120,7 +119,6 @@ def test_refresh_records_time_before_recalculation(db: Session) -> None:
 def test_requires_token(client: TestClient, path: str) -> None:
     r = client.get(f"{API}{path}", params=MARCH)
     assert r.status_code == 401
-    assert_contract(r, OPERATIONS[path])
 
 
 @pytest.mark.parametrize("path", OPERATIONS)
@@ -139,7 +137,6 @@ def test_only_admin(
     )
     r = client.get(f"{API}{path}", params=MARCH, headers=headers)
     assert r.status_code == 403
-    assert_contract(r, OPERATIONS[path])
 
 
 # --- период и параметры -----------------------------------------------------------------------
@@ -161,7 +158,6 @@ def test_invalid_period(
     r = client.get(f"{API}{path}", params=params, headers=admin)
     assert r.status_code == 422, r.text
     assert r.json()["error"]["code"] == code
-    assert_contract(r, OPERATIONS[path])
 
 
 @pytest.mark.parametrize("path", OPERATIONS)
@@ -182,7 +178,6 @@ def test_period_of_366_days_and_single_day(client: TestClient, admin: Headers, p
 def test_invalid_filters(client: TestClient, admin: Headers, path: str, params: dict) -> None:
     r = client.get(f"{API}{path}", params=MARCH | params, headers=admin)
     assert r.status_code == 422, r.text
-    assert_contract(r, OPERATIONS[path])
 
 
 def test_empty_period_and_unknown_model(client: TestClient, admin: Headers) -> None:

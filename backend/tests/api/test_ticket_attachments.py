@@ -19,7 +19,7 @@ from app.core.config import get_settings
 from app.core.storage import ObjectStorage, StorageUnavailable
 from app.models import Ticket, TicketAttachment, TicketMessage
 from app.models.enums import UserRole
-from tests.api.conftest import API, Headers, add_vehicle, api_settings, assert_contract
+from tests.api.conftest import API, ContractClient, Headers, add_vehicle, api_settings
 from tests.api.ticket_support import (
     JPEG,
     MP4,
@@ -78,7 +78,6 @@ def test_presign_roles_and_validation(client, owner, as_staff):
     ):
         r = client.post(f"{API}/uploads/presign", json=body, headers=owner)
         assert r.status_code == 422
-        assert_contract(r, "createPresignedUpload")
 
 
 def test_presign_rate_limit(client, app, owner):
@@ -89,7 +88,6 @@ def test_presign_rate_limit(client, app, owner):
         f"{API}/uploads/presign", json={"file_name": "a.jpg", "file_type": "photo"}, headers=owner
     )
     assert r.status_code == 429
-    assert_contract(r, "createPresignedUpload")
     assert int(r.headers["Retry-After"]) >= 1
 
 
@@ -100,7 +98,6 @@ def test_attachment_is_copied_and_presigned_on_read(client, owner, vehicle, stor
     item = uploaded(client, owner, storage, mime="Image/JPEG; charset=binary")
     r = create_ticket(client, owner, vehicle["id"], attachments=[item])
     assert r.status_code == 201, r.text
-    assert_contract(r, "createTicket")
     ticket = r.json()
 
     [row] = db.scalars(select(TicketAttachment).where(TicketAttachment.ticket_id == ticket["id"]))
@@ -146,7 +143,6 @@ def test_upload_overwritten_after_check_is_not_copied(
             headers=owner,
         )
     assert r.status_code == 422, r.text
-    assert_contract(r, operation)
     assert r.json()["error"]["code"] == "ATTACHMENT_NOT_FOUND"
     assert r.json()["error"]["details"]["fields"] == [
         {"loc": ["body", "attachments", 0, "file_url"]}
@@ -164,7 +160,6 @@ def test_message_attachments(client, owner, vehicle, storage, db: Session):
         headers=owner,
     )
     assert r.status_code == 201, r.text
-    assert_contract(r, "createTicketMessage")
     message = r.json()
     assert [a["file_type"] for a in message["attachments"]] == ["video"]
     row = db.scalars(select(TicketAttachment).where(TicketAttachment.ticket_id == tid)).one()
@@ -204,7 +199,6 @@ def test_attachment_errors(client, owner, as_client, vehicle, storage, app, db: 
     def code(attachments: list[dict]) -> str:
         r = create_ticket(client, owner, vehicle["id"], attachments=attachments)
         assert r.status_code == 422, r.text
-        assert_contract(r, "createTicket")
         return r.json()["error"]["code"]
 
     foreign = uploaded(client, stranger, storage)
@@ -272,7 +266,7 @@ def test_copy_reported_as_failed_is_removed(app, owner, vehicle, storage, monkey
 
     Под tickets/ правило жизненного цикла не действует, а тикета для неё нет.
     """
-    item = uploaded(TestClient(app), owner, storage)
+    item = uploaded(ContractClient(app), owner, storage)
     real_copy = storage.copy
 
     def copy_then_timeout(src: str, dst: str, **kwargs) -> None:
@@ -281,7 +275,7 @@ def test_copy_reported_as_failed_is_removed(app, owner, vehicle, storage, monkey
 
     monkeypatch.setattr(storage, "copy", copy_then_timeout)
     r = create_ticket(
-        TestClient(app, raise_server_exceptions=False), owner, vehicle["id"], attachments=[item]
+        ContractClient(app, raise_server_exceptions=False), owner, vehicle["id"], attachments=[item]
     )
     assert r.status_code == 500
     assert not [k for k in storage.objects if k.startswith("tickets/")], "копия удалена"
@@ -306,7 +300,7 @@ def test_each_binding_attempt_copies_to_new_key(client, owner, vehicle, storage,
 
     monkeypatch.setattr(storage, "copy", recording_copy)
     message = {"body": "Фото", "attachments": [item]}
-    failing = TestClient(client.app, raise_server_exceptions=False)
+    failing = ContractClient(client.app, raise_server_exceptions=False)
     assert (
         failing.post(f"{API}/tickets/{tid}/messages", json=message, headers=owner).status_code
         == 500
@@ -319,13 +313,12 @@ def test_each_binding_attempt_copies_to_new_key(client, owner, vehicle, storage,
 
 
 def test_storage_unavailable_is_server_error(app, owner, vehicle, storage):
-    item = uploaded(TestClient(app), owner, storage)
+    item = uploaded(ContractClient(app), owner, storage)
     storage.available = False
     r = create_ticket(
-        TestClient(app, raise_server_exceptions=False), owner, vehicle["id"], attachments=[item]
+        ContractClient(app, raise_server_exceptions=False), owner, vehicle["id"], attachments=[item]
     )
     assert r.status_code == 500
-    assert_contract(r, "createTicket")
 
 
 def test_upload_overwritten_after_check_on_minio(
@@ -345,6 +338,5 @@ def test_upload_overwritten_after_check_on_minio(
     item = {"file_url": target["file_url"], "file_type": "photo"}
     r = create_ticket(client, owner, vehicle["id"], attachments=[item])
     assert r.status_code == 422, r.text
-    assert_contract(r, "createTicket")
     assert r.json()["error"]["code"] == "ATTACHMENT_NOT_FOUND"
     assert db.scalars(select(TicketAttachment)).all() == []

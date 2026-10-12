@@ -88,3 +88,8 @@ def test_deny_by_default():
 def test_bearer_scheme_declared():
     schemes = GENERATED["components"]["securitySchemes"]
     assert any(s.get("scheme") == "bearer" for s in schemes.values())
+
+
+def test_app_version_matches_contract():
+    """Swagger backend (/docs) показывает ту же версию, что docs/openapi.yaml (ревью главы 17)."""
+    assert GENERATED["info"]["version"] == contract()["info"]["version"]

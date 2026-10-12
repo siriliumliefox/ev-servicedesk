@@ -12,7 +12,7 @@ from app.core.security import create_access_token
 from app.main import create_app
 from app.models import AppUser
 from app.models.enums import UserRole
-from tests.api.conftest import API, STAFF_PASSWORD, api_settings, assert_contract, bearer
+from tests.api.conftest import API, STAFF_PASSWORD, ContractClient, api_settings, bearer
 
 # Тела, проходящие валидацию, — чтобы 401/403 не маскировались 422.
 BODIES = {
@@ -148,7 +148,6 @@ def test_no_or_malformed_token_401(app, client, headers):
     for route in protected_routes(app):
         r = call(client, route, headers)
         assert r.status_code == 401, (route.path, r.text)
-        assert_contract(r, route.operation_id)
         assert r.json()["error"]["code"] == "UNAUTHORIZED"
         assert r.headers["WWW-Authenticate"] == "Bearer"
 
@@ -216,12 +215,10 @@ def test_staff_forbidden_on_client_only_routes(client, make_staff, role):
         f"{API}/auth/staff/login", json={"phone": phone, "password": STAFF_PASSWORD}
     ).json()["access_token"]
     r = client.delete(f"{API}/auth/pd-consent", headers=bearer(token))
-    assert_contract(r, "withdrawPdConsent")
     assert r.status_code == 403 and r.json()["error"]["code"] == "FORBIDDEN"
     r = client.post(
         f"{API}/auth/telegram/link", json={"telegram_id": "tg-x"}, headers=bearer(token)
     )
-    assert_contract(r, "linkTelegram")
     assert r.status_code == 403
     # Доступное всем ролям — доступно.
     assert client.get(f"{API}/me", headers=bearer(token)).status_code == 200
@@ -295,7 +292,6 @@ def test_errors_do_not_leak_internals(client):
 
 def test_debug_route_local_only_returns_code(db, real_redis):
     """ENVIRONMENT=local: код фейкового SMS доступен только через /_debug, вне OpenAPI."""
-    from fastapi.testclient import TestClient
 
     from app.api.deps import get_sms_provider
     from app.core.config import get_settings
@@ -311,7 +307,7 @@ def test_debug_route_local_only_returns_code(db, real_redis):
     local.dependency_overrides[get_redis] = lambda: real_redis
     # Явно модульный фейк: /_debug читает именно его; реальный провайдер исключён.
     local.dependency_overrides[get_sms_provider] = fake_provider
-    c = TestClient(local)
+    c = ContractClient(local)
     phone = "+375291000099"
     assert c.post(f"{API}/auth/phone/request-code", json={"phone": phone}).status_code == 200
     r = c.get(f"{API}/_debug/sms/last-code", params={"phone": phone})

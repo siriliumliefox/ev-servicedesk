@@ -59,12 +59,16 @@ def test_list_filters_and_pagination(client, as_staff, as_client, make_client_us
     as_client(CLIENT)
     blocked = make_client_user("+375296600099", active=False)
 
-    everyone = users(client, admin_headers)
+    # Только пользователи этого теста (общая тестовая БД может содержать чужие строки).
+    mine = {"search": "2966000"}
+    everyone = users(client, admin_headers, **mine)
     assert everyone["meta"]["total_items"] == 4
     assert [u["id"] for u in everyone["items"]] == sorted(u["id"] for u in everyone["items"])
+    assert admin.id in {u["id"] for u in everyone["items"]}
 
-    assert [u["id"] for u in users(client, admin_headers, role="engineer")["items"]] == [eng.id]
-    inactive = users(client, admin_headers, is_active="false")["items"]
+    engineers = users(client, admin_headers, role="engineer", **mine)["items"]
+    assert [u["id"] for u in engineers] == [eng.id]
+    inactive = users(client, admin_headers, is_active="false", **mine)["items"]
     assert [u["id"] for u in inactive] == [blocked.id]
     assert {u["phone"] for u in users(client, admin_headers, search="660000")["items"]} == {
         ADMIN,
@@ -74,10 +78,9 @@ def test_list_filters_and_pagination(client, as_staff, as_client, make_client_us
     # Спецсимволы LIKE — обычные символы: «%» не совпадает ни с чем.
     assert users(client, admin_headers, search="%")["items"] == []
 
-    page = users(client, admin_headers, page=2, page_size=3)
+    page = users(client, admin_headers, page=2, page_size=3, **mine)
     assert page["meta"] == {"page": 2, "page_size": 3, "total_items": 4, "total_pages": 2}
     assert len(page["items"]) == 1
-    assert admin.id in {u["id"] for u in everyone["items"]}
 
 
 def test_get_user_and_not_found(client, as_staff):

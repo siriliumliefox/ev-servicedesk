@@ -31,7 +31,7 @@ from sqlalchemy.orm import Session
 from app.core import storage as storage_module
 from app.core.storage import ObjectStorage, S3ObjectStorage, StorageUnavailable, get_storage
 from app.models import TicketAttachment
-from tests.api.conftest import API, assert_contract
+from tests.api.conftest import API, ContractClient
 from tests.api.ticket_support import JPEG, MP4, UPLOAD_KEY, error_code, presign, put_upload
 from tests.api.ticket_world import (
     ADMIN,
@@ -99,7 +99,6 @@ def test_rest_hides_staff_contacts_from_client(client, world, db):
 
     for viewer in (OWNER, ENGINEER, ADMIN):
         r = client.get(f"{API}/tickets/{tid}/messages", headers=world.headers(viewer))
-        assert_contract(r, "listTicketMessages")
         items = r.json()["items"]
         assert {m["id"] for m in items} == set(authors)
         for m in items:
@@ -289,7 +288,7 @@ def test_failed_cleanup_is_logged_without_object_key(client, world, storage, mon
 
 
 def test_s3_outage_error_log_has_no_object_key(app, world, storage, monkeypatch, caplog):
-    client = TestClient(app, raise_server_exceptions=False)
+    client = ContractClient(app, raise_server_exceptions=False)
     upload = presign(client, world.headers(OWNER), "Паспорт-Иванова-q7z.jpg")
     # Без повторных попыток botocore: тест не ждёт backoff; сбой тот же — нет соединения.
     no_retries = BotoConfig(retries={"max_attempts": 1, "mode": "standard"})
@@ -316,7 +315,6 @@ def test_s3_outage_error_log_has_no_object_key(app, world, storage, monkeypatch,
         headers=world.headers(OWNER),
     )
     assert r.status_code == 500
-    assert_contract(r, "createTicket")
     assert caplog.records, "сбой залогирован"
     name = upload["file_url"].rsplit("/", 1)[1]
     assert not leaks(caplog.records, [upload["file_url"], name])
@@ -508,10 +506,8 @@ def test_presigned_urls_signed_for_public_endpoint_and_expire(
 
     for actor in (OWNER, ENGINEER, ADMIN):
         r = client.get(f"{API}/tickets/{tid}", headers=world.headers(actor))
-        assert_contract(r, "getTicket")
         read_urls.append(r.json()["attachments"][0]["file_url"])
         r = client.get(f"{API}/tickets/{tid}/messages", headers=world.headers(actor))
-        assert_contract(r, "listTicketMessages")
         clip_urls += [a["file_url"] for m in r.json()["items"] for a in m["attachments"]]
 
     # Фото: ответ createTicket и карточка трём ролям; видео: ответ POST, кадр WebSocket и
