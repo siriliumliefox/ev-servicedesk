@@ -111,11 +111,22 @@ class FcmPushSender:
         self, account: ServiceAccount, timeout: float, client: httpx.Client | None = None
     ) -> None:
         self._account = account
+        self._check_key()
         self._client = client or httpx.Client(timeout=timeout)
         self._url = FCM_SEND_URL.format(project_id=account.project_id)
         self._lock = threading.Lock()
         self._access_token: str | None = None
         self._expires_at = 0.0
+
+    def _check_key(self) -> None:
+        """Ключ разбирается при старте worker: битый ключ — отказ старта, а не ошибка на
+        каждой отправке. Фрагменты ключа в сообщение не попадают (from None)."""
+        try:
+            jwt.encode({"check": True}, self._account.private_key, algorithm="RS256")
+        except (jwt.PyJWTError, ValueError, TypeError):
+            raise FcmCredentialsError(
+                "FCM_SERVICE_ACCOUNT_JSON: private_key не является RSA-ключом в формате PEM"
+            ) from None
 
     def _token(self) -> str:
         with self._lock:
@@ -169,7 +180,7 @@ class FcmPushSender:
             response = self._client.post(
                 self._url, json=payload, headers={"Authorization": f"Bearer {access_token}"}
             )
-        except (httpx.HTTPError, KeyError, ValueError) as exc:
+        except (httpx.HTTPError, jwt.PyJWTError, KeyError, ValueError, TypeError) as exc:
             logger.warning("FCM недоступен: %s", type(exc).__name__)
             return PushResult(Outcome.RETRY, "NETWORK")
         if response.is_success:
@@ -182,14 +193,20 @@ class FcmPushSender:
 
 def _fcm_error_code(response: httpx.Response) -> str:
     """errorCode из деталей FcmError, иначе status ошибки Google API, иначе HTTP-код."""
+    fallback = f"HTTP_{response.status_code}"
     try:
-        error = response.json().get("error", {})
+        body = response.json()
     except ValueError:
-        return f"HTTP_{response.status_code}"
-    for detail in error.get("details") or []:
+        return fallback
+    # Тело не по формату Google API (прокси, балансировщик) — только HTTP-код.
+    error = body.get("error") if isinstance(body, dict) else None
+    if not isinstance(error, dict):
+        return fallback
+    details = error.get("details")
+    for detail in details if isinstance(details, list) else []:
         if isinstance(detail, dict) and detail.get("errorCode"):
             return str(detail["errorCode"])[:50]
-    return str(error.get("status") or f"HTTP_{response.status_code}")[:50]
+    return str(error.get("status") or fallback)[:50]
 
 
 def classify(status_code: int, code: str) -> PushResult:

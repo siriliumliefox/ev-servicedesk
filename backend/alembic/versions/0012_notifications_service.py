@@ -169,7 +169,7 @@ def upgrade() -> None:
             ["vehicle_id"],
             ["vehicle.id"],
             name=op.f("fk_maintenance_reminder_vehicle_id_vehicle"),
-            ondelete="CASCADE",
+            ondelete="RESTRICT",
         ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_maintenance_reminder")),
         sa.UniqueConstraint(

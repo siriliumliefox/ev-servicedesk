@@ -225,7 +225,7 @@ def test_reminders_on_overdue_aggregates(
     assert run(date(2026, 6, 4)) == 1
     assert reminders(db, vid)[-1] == (
         "overdue",
-        "Zeekr 001 — Масло двигателя: срок замены прошёл. Запишитесь на ТО.",
+        "Zeekr 001 — Масло двигателя: требуется замена. Запишитесь на ТО.",
     )
     assert run(date(2026, 6, 5)) == 0
 
@@ -381,3 +381,131 @@ def test_ticket_push_skips_new_ticket_and_unavailable_client(
         events.channel(taken.id), TicketUpdated(ticket_id=taken.id).model_dump_json()
     )
     assert sender.sent == [], "клиент отозвал согласие — push нет"
+
+
+# ---------- Регрессия по независимому ревью (ADR 0019, уточнения) ----------
+
+
+class FlakySender:
+    """Отправитель, падающий на заданном вызове; запоминает все вызовы."""
+
+    def __init__(self, fail_on: int) -> None:
+        self.fail_on = fail_on
+        self.calls: list[str] = []
+
+    def send(self, message):
+        self.calls.append(message.token)
+        if len(self.calls) == self.fail_on:
+            raise RuntimeError("сбой посреди пачки")
+        return PushResult(Outcome.SENT)
+
+
+def test_crash_mid_batch_does_not_resend_delivered(
+    client, admin, make_owner, make_worker, settings, db
+):
+    a, b = make_owner(None), make_owner(None)
+    news = publish(client, admin, type="news", message="Один раз")
+    worker = make_worker()
+    worker.sender = FlakySender(fail_on=2)
+    assert worker.dispatch() == 2
+    by_code = sorted(
+        (r.error_code or "", r.delivered_at is not None) for r in deliveries(db, news["id"])
+    )
+    assert by_code == [("", True), ("SENDER_ERROR", False)]
+    for row in deliveries(db, news["id"]):
+        row.next_attempt_at = datetime.now(UTC) - timedelta(seconds=1)
+    db.commit()
+    worker.dispatch()
+    calls = worker.sender.calls
+    assert sorted(calls) == sorted(
+        [a.token, b.token, calls[1]]
+    ), "доставленный не отправлен повторно"
+    assert all(r.delivered_at for r in deliveries(db, news["id"]))
+
+
+def test_stop_mid_batch_leaves_rest_leased_not_sent(
+    client, admin, make_owner, make_worker, sender, settings, db
+):
+    make_owner(None), make_owner(None)
+    news = publish(client, admin, type="news", message="Стоп")
+    worker = make_worker()
+    original = sender.send
+
+    def send_then_stop(message):
+        worker.stop()
+        return original(message)
+
+    sender.send = send_then_stop
+    worker.dispatch()
+    rows = deliveries(db, news["id"])
+    assert len(sender.sent) == 1
+    pending = [r for r in rows if r.delivered_at is None]
+    assert len(pending) == 1 and pending[0].attempts == 0 and pending[0].failed_at is None
+    assert pending[0].next_attempt_at > datetime.now(UTC), "строка арендована до истечения срока"
+
+
+def test_signal_handling_error_does_not_stop_worker(make_worker, monkeypatch):
+    worker = make_worker()
+
+    class OneMessage:
+        def get_message(self, timeout):
+            worker.stop()
+            return {"channel": "x", "data": "y"}
+
+        def close(self):
+            pass
+
+    def boom(channel, data):
+        raise RuntimeError("БД недоступна")
+
+    worker._pubsub = OneMessage()
+    monkeypatch.setattr(worker, "handle_message", boom)
+    worker._wait()  # исключение залогировано, а не проброшено
+
+
+def test_failed_reminders_retry_after_pause(make_worker, settings):
+    clock = [datetime(2026, 6, 1, settings.maintenance_reminder_hour, 0, tzinfo=BUSINESS_TZ)]
+    worker = make_worker(now=lambda: clock[0])
+
+    def broken_scope():
+        raise RuntimeError("БД недоступна")
+
+    worker.scope = broken_scope
+    with pytest.raises(RuntimeError):
+        worker.run_reminders()
+    assert not worker.reminders_due()
+    clock[0] += timedelta(minutes=16)
+    assert worker.reminders_due()
+
+
+@pytest.mark.parametrize(
+    ("red", "km", "expected"),
+    [
+        (120, 10_500, None),  # 105 %, до красного (12 000) — 1500 км > 1000
+        (120, 11_200, ("due_soon", "до замены осталось 800 км")),
+        (120, 12_100, ("overdue", "требуется замена")),
+        (90, 8_500, ("due_soon", "до замены осталось 500 км")),
+        (90, 9_100, ("overdue", "требуется замена")),
+    ],
+)
+def test_reminder_counts_to_configured_red_threshold(
+    client, admin, make_owner, make_worker, db, red, km, expected
+):
+    owner = make_owner("Zeekr")
+    model = model_id(client, admin, "Zeekr")
+    r = client.put(
+        f"{API}/aggregate-status-thresholds",
+        json={"yellow_from_percent": 50, "red_above_percent": red},
+        headers=admin,
+    )
+    assert r.status_code == 200, r.text
+    regulation(client, admin, model, "engine_oil", interval_km=10_000)
+    replace(client, admin, owner.vehicle_id, "engine_oil", date(2026, 1, 10), 0)
+    mileage(client, owner.headers, owner.vehicle_id, km)
+    run_maintenance_reminders(db, make_worker().outbox, date(2026, 6, 1))
+    got = reminders(db, owner.vehicle_id)
+    if expected is None:
+        assert got == []
+    else:
+        ((kind, text),) = got
+        assert kind == expected[0] and expected[1] in text and "-" not in text.split(":")[1]

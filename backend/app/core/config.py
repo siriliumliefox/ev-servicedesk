@@ -117,6 +117,8 @@ class Settings(BaseSettings):
     notifications_batch_size: int = Field(100, ge=1, le=1000)
     push_max_attempts: int = Field(5, ge=1, le=20)
     push_retry_base_seconds: float = Field(10, gt=0, le=3600)
+    # Аренда строки очереди на время отправки: дольше таймаута FCM (запрос OAuth + отправка).
+    push_lease_seconds: float = Field(60, ge=5, le=3600)
     # Напоминания о ТО — раз в сутки, час по Europe/Minsk (ADR 0019 п. 7).
     maintenance_reminder_hour: int = Field(10, ge=0, le=23)
 

@@ -30,7 +30,9 @@ STATUS_LABELS = {
     TicketStatus.WAITING_VENDOR: "ожидает поставщика",
     TicketStatus.RESOLVED: "решено",
 }
-DEDUP_TTL_SECONDS = 90 * 24 * 3600
+# Дольше жизни обращения: без ключа первое событие «не нового» тикета считается сменой статуса
+# (ADR 0019, уточнения) — лишний push возможен только для тикетов старше срока ключа.
+DEDUP_TTL_SECONDS = 400 * 24 * 3600
 
 
 @dataclass(frozen=True)

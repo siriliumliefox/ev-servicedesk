@@ -867,7 +867,7 @@ CREATE TABLE maintenance_reminder (
     CONSTRAINT pk_maintenance_reminder PRIMARY KEY (id), 
     CONSTRAINT fk_maintenance_reminder_aggregate_type_id_aggregate_type FOREIGN KEY(aggregate_type_id) REFERENCES aggregate_type (id) ON DELETE RESTRICT, 
     CONSTRAINT fk_maintenance_reminder_notification_id_notification FOREIGN KEY(notification_id) REFERENCES notification (id) ON DELETE CASCADE, 
-    CONSTRAINT fk_maintenance_reminder_vehicle_id_vehicle FOREIGN KEY(vehicle_id) REFERENCES vehicle (id) ON DELETE CASCADE, 
+    CONSTRAINT fk_maintenance_reminder_vehicle_id_vehicle FOREIGN KEY(vehicle_id) REFERENCES vehicle (id) ON DELETE RESTRICT, 
     CONSTRAINT uq_maintenance_reminder_cycle UNIQUE NULLS NOT DISTINCT (vehicle_id, aggregate_type_id, kind, cycle_replaced_at, cycle_replaced_mileage)
 );
 

@@ -205,3 +205,19 @@ def test_settings_require_fcm_key_and_real_push_in_production(account_json):
         _env_file=None, **base(push_provider="fcm", fcm_service_account_json=account_json)
     )
     assert isinstance(get_push_sender(fcm), FcmPushSender)
+
+
+@pytest.mark.parametrize("body", [b"[1]", b'{"error": "invalid"}', b'{"error": {"details": "x"}}'])
+def test_non_google_error_bodies_fall_back_to_http_code(account_json, key, body):
+    fcm = Fcm(key)
+    fcm.responses.append(httpx.Response(400, content=body))
+    result = sender(account_json, fcm).send(MESSAGE)
+    assert (result.outcome, result.error_code) == (Outcome.FAILED, "HTTP_400")
+
+
+def test_broken_private_key_refused_at_start(account_json):
+    data = json.loads(account_json)
+    data["private_key"] = "-----BEGIN PRIVATE KEY-----\nAAAASECRET\n-----END PRIVATE KEY-----\n"
+    with pytest.raises(FcmCredentialsError) as info:
+        FcmPushSender(ServiceAccount.from_json(json.dumps(data)), timeout=5)
+    assert "SECRET" not in str(info.value) and info.value.__cause__ is None

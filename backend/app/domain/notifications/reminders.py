@@ -1,7 +1,8 @@
 """Напоминания о ТО — суточная задача worker'а (C-11, N-10, ADR 0019 п. 5–7).
 
 Статус агрегата считается той же `compute_status`, что и API (ADR 0009). Вид напоминания:
-красный — «просрочено»; остаток ≤ N км или ≤ N дней — «скоро замена». На цикл замены — не
+красный — «просрочено» (требуется замена); остаток до порога красного ≤ N км или ≤ N дней —
+«скоро замена». На цикл замены — не
 больше одного каждого вида, «скоро» — только если в цикле ещё ничего не было
 (`maintenance_reminder`). Агрегат без истории замен (`unknown`) напоминаний не получает.
 
@@ -25,6 +26,7 @@ from app.domain.aggregates.status import (
     Replacement,
     Thresholds,
     TrafficLight,
+    add_months,
     compute_status,
 )
 from app.domain.notifications.outbox import Outbox
@@ -53,15 +55,38 @@ class ReminderRules:
     before_days: int
 
 
+@dataclass(frozen=True)
+class LeftToReplacement:
+    """Остаток до порога «требуется замена» (красный, `red_above_percent`), а не до 100 %
+    интервала: порог настраивает администратор (ADR 0009). Не отрицателен, пока не красный."""
+
+    km: int | None = None
+    days: int | None = None
+
+
+def left_to_replacement(
+    regulation: Regulation, last: Replacement, mileage: int, today: date, red_above_percent: int
+) -> LeftToReplacement:
+    km = days = None
+    if regulation.interval_km is not None and last.mileage is not None:
+        used = max(0, mileage - last.mileage)
+        km = regulation.interval_km * red_above_percent // 100 - used
+    if regulation.interval_months is not None and last.replaced_at is not None:
+        total = (add_months(last.replaced_at, regulation.interval_months) - last.replaced_at).days
+        elapsed = max(0, (today - last.replaced_at).days)
+        days = total * red_above_percent // 100 - elapsed
+    return LeftToReplacement(km, days)
+
+
 def reminder_kind(
-    result: AggregateStatusResult, rules: ReminderRules
+    result: AggregateStatusResult, left: LeftToReplacement, rules: ReminderRules
 ) -> MaintenanceReminderKind | None:
     if result.status is TrafficLight.RED:
         return MaintenanceReminderKind.OVERDUE
     if result.status is TrafficLight.UNKNOWN:
         return None
-    if (result.remaining_km is not None and result.remaining_km <= rules.before_km) or (
-        result.remaining_days is not None and result.remaining_days <= rules.before_days
+    if (left.km is not None and left.km <= rules.before_km) or (
+        left.days is not None and left.days <= rules.before_days
     ):
         return MaintenanceReminderKind.DUE_SOON
     return None
@@ -71,17 +96,17 @@ def reminder_message(
     model: VehicleModel,
     aggregate: AggregateType,
     kind: MaintenanceReminderKind,
-    result: AggregateStatusResult,
+    left: LeftToReplacement,
 ) -> str:
     head = f"{model.brand} {model.model} — {aggregate.name}"
     if kind is MaintenanceReminderKind.OVERDUE:
-        return f"{head}: срок замены прошёл. Запишитесь на ТО."
-    left = []
-    if result.remaining_km is not None:
-        left.append(f"{result.remaining_km} км")
-    if result.remaining_days is not None:
-        left.append(f"{result.remaining_days} дн")
-    return f"{head}: до замены осталось {', '.join(left)}. Запишитесь на ТО."
+        return f"{head}: требуется замена. Запишитесь на ТО."
+    parts = []
+    if left.km is not None:
+        parts.append(f"{max(left.km, 0)} км")
+    if left.days is not None:
+        parts.append(f"{max(left.days, 0)} дн")
+    return f"{head}: до замены осталось {', '.join(parts)}. Запишитесь на ТО."
 
 
 def _rules(db: Session) -> ReminderRules:
@@ -148,15 +173,16 @@ def run_maintenance_reminders(db: Session, outbox: Outbox, today: date | None = 
     rules = _rules(db)
     created = 0
     for vehicle, regulation, cycle, model, aggregate in _candidates(db):
-        result = compute_status(
-            Regulation(regulation.interval_km, regulation.interval_months),
-            Replacement(cycle.last_replaced_at, cycle.last_replaced_mileage),
-            vehicle.mileage,
-            today,
-            rules.thresholds,
+        rule = Regulation(regulation.interval_km, regulation.interval_months)
+        last = Replacement(cycle.last_replaced_at, cycle.last_replaced_mileage)
+        result = compute_status(rule, last, vehicle.mileage, today, rules.thresholds)
+        if result is None:
+            continue
+        left = left_to_replacement(
+            rule, last, vehicle.mileage, today, rules.thresholds.red_above_percent
         )
-        kind = None if result is None else reminder_kind(result, rules)
-        if result is None or kind is None:
+        kind = reminder_kind(result, left, rules)
+        if kind is None:
             continue
         sent = _sent_kinds(db, vehicle.id, aggregate.id, cycle)
         if kind in sent or (kind is MaintenanceReminderKind.DUE_SOON and sent):
@@ -168,7 +194,7 @@ def run_maintenance_reminders(db: Session, outbox: Outbox, today: date | None = 
                     target_vehicle_model_id=model.id,
                     vehicle_id=vehicle.id,
                     aggregate_type_id=aggregate.id,
-                    message=reminder_message(model, aggregate, kind, result),
+                    message=reminder_message(model, aggregate, kind, left),
                 )
                 db.add(notification)
                 db.flush()

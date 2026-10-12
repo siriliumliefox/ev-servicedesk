@@ -168,8 +168,10 @@ class MaintenanceReminder(IdMixin, CreatedAtMixin, Base):
         ),
     )
 
+    # RESTRICT, как у notification.vehicle_id: авто удаляется мягко; физическое удаление
+    # (анонимизация, глава 25) удаляет напоминания явно.
     vehicle_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("vehicle.id", ondelete="CASCADE"), nullable=False
+        BigInteger, ForeignKey("vehicle.id", ondelete="RESTRICT"), nullable=False
     )
     aggregate_type_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("aggregate_type.id", ondelete="RESTRICT"), nullable=False, index=True

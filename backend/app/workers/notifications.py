@@ -17,7 +17,7 @@ import logging
 import signal
 import time
 from collections.abc import Callable
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from types import FrameType
 
 from redis import Redis
@@ -37,6 +37,8 @@ from app.domain.tickets import events as ticket_events
 logger = logging.getLogger("app.workers.notifications")
 
 REDIS_RETRY_SECONDS = 5.0
+# После сбоя задачи напоминаний — повтор не раньше чем через этот срок, а не на каждом цикле.
+REMINDERS_RETRY_AFTER = timedelta(minutes=15)
 
 
 class NotificationsWorker:
@@ -56,6 +58,7 @@ class NotificationsWorker:
         self.outbox = Outbox(redis, settings.redis_channel_prefix)
         self.ticket_push = TicketPush(redis, settings.redis_channel_prefix, sender)
         self.reminders_done_on: date | None = None
+        self.reminders_retry_at: datetime | None = None
         self.stopping = False
         self._pubsub: PubSub | None = None
 
@@ -63,14 +66,20 @@ class NotificationsWorker:
 
     def reminders_due(self) -> bool:
         now = self.now()
+        if self.reminders_retry_at is not None and now < self.reminders_retry_at:
+            return False
         return now.hour >= self.settings.maintenance_reminder_hour and (
             self.reminders_done_on != now.date()
         )
 
     def run_reminders(self) -> None:
-        today = self.now().date()
+        now = self.now()
+        today = now.date()
+        # Сбой (БД недоступна) — повтор через REMINDERS_RETRY_AFTER; исключение уходит в цикл.
+        self.reminders_retry_at = now + REMINDERS_RETRY_AFTER
         with self.scope() as db:
             created = run_maintenance_reminders(db, self.outbox, today)
+        self.reminders_retry_at = None
         # None — задачу выполняет другая реплика: сегодня её больше не запускаем и здесь.
         self.reminders_done_on = today
         if created is None:
@@ -78,7 +87,7 @@ class NotificationsWorker:
 
     def dispatch(self) -> int:
         with self.scope() as db:
-            return drain(db, self.sender, self.settings)
+            return drain(db, self.sender, self.settings, lambda: self.stopping)
 
     def handle_message(self, channel: str, data: str) -> None:
         """Сообщение pub/sub: сигнал очереди — отправка; событие тикета — push клиенту."""
@@ -125,7 +134,10 @@ class NotificationsWorker:
                 self._close_pubsub()
                 continue
             if message is not None:
-                self.handle_message(str(message["channel"]), str(message["data"]))
+                try:
+                    self.handle_message(str(message["channel"]), str(message["data"]))
+                except Exception:  # noqa: BLE001 — сбой обработки сигнала не останавливает процесс
+                    logger.exception("Ошибка обработки сигнала Redis")
                 return
 
     def _close_pubsub(self) -> None:
