@@ -90,6 +90,7 @@ class VehicleOut(BaseModel):
     vin: str
     mileage: int
     is_active: bool
+    vehicle_model_id: int
     vehicle_model: VehicleModelInfo
     current_firmware_version: str | None = None
     created_at: datetime

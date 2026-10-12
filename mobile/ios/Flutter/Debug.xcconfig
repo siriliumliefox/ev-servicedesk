@@ -1,2 +1,4 @@
 #include? "Pods/Target Support Files/Pods-Runner/Pods-Runner.debug.xcconfig"
 #include "Generated.xcconfig"
+// Команда подписи разработчика (Personal Team) — локально, не в git: DEVELOPMENT_TEAM = <id> (mobile/README.md).
+#include? "DeveloperTeam.xcconfig"

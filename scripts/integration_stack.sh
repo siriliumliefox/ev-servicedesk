@@ -8,15 +8,25 @@
 # случайные; передаются через временный файл окружения и нигде не печатаются; логи — через
 # redact и проверяются на утечку. Стек удаляется при выходе (тома тоже).
 # Нужны: docker compose ≥ 2.24 (!reset), poetry-окружение backend (dev-зависимости).
-# Запуск: scripts/integration_stack.sh <образ>   (например backend:smoke)
+# Запуск: scripts/integration_stack.sh <образ> [-- команда]   (например backend:smoke)
+# Команда после «--» выполняется на том же стеке после сценария backend (глава 18, ADR 0022 п. 2:
+# E2E мобильного клиента) с окружением API_BASE_URL, E2E_PHONE, E2E_CODE — свой тестовый номер,
+# не тот, что блокирует сценарий backend.
 
 set -euo pipefail
 
 IMAGE="${1:?Укажите образ, например backend:smoke}"
+shift
+EXTRA=()
+if [ "${1:-}" = "--" ]; then
+  shift
+  EXTRA=("$@")
+fi
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROJECT="ev-integration-$$"
 PORT="${INTEGRATION_PORT:-18080}"
 E2E_PHONE="+375290009001"  # тестовый номер стека: SMS не отправляется (ADR 0021 п. 6)
+CLIENT_E2E_PHONE="+375290009002"  # тестовый номер для команды после «--» (ADR 0022 п. 2)
 
 ENV_FILE="$(mktemp)"
 chmod 600 "$ENV_FILE"
@@ -31,7 +41,7 @@ JWT_SECRET=$JWT_SECRET
 SMS_CODE_SECRET=$SMS_CODE_SECRET
 SMS_PROVIDER=fake
 PUSH_PROVIDER=fake
-SMS_TEST_PHONES=$E2E_PHONE
+SMS_TEST_PHONES=$E2E_PHONE,$CLIENT_E2E_PHONE
 SMS_TEST_CODE=$E2E_CODE
 EOF
 
@@ -42,8 +52,10 @@ export BACKEND_IMAGE="$IMAGE" BACKEND_ENV_FILE="$ENV_FILE" ENVIRONMENT=staging \
 COMPOSE=(docker compose -p "$PROJECT" -f "$ROOT/docker-compose.yml"
          -f "$ROOT/docker-compose.integration.yml" --profile full)
 
+# Построчный вывод (BSD sed — -l, GNU — -u): строки команды после «--» видны сразу, а не в конце.
+if sed --version >/dev/null 2>&1; then SED_LINE=-u; else SED_LINE=-l; fi
 redact() {
-  sed -e "s/$JWT_SECRET/***/g" -e "s/$SMS_CODE_SECRET/***/g" -e "s/$S3_SECRET_KEY/***/g" \
+  sed "$SED_LINE" -e "s/$JWT_SECRET/***/g" -e "s/$SMS_CODE_SECRET/***/g" -e "s/$S3_SECRET_KEY/***/g" \
       -e "s/$S3_ACCESS_KEY/***/g" -e "s/$POSTGRES_PASSWORD/***/g"
 }
 # shellcheck disable=SC2329  # вызывается из trap
@@ -85,6 +97,15 @@ if ! (cd "$ROOT/backend" && E2E_PHONE="$E2E_PHONE" E2E_CODE="$E2E_CODE" \
   fail=1
 fi
 # set -o pipefail: код выхода сценария не теряется в пайпе через redact.
+
+if [ "${#EXTRA[@]}" -gt 0 ]; then
+  if (API_BASE_URL="http://127.0.0.1:$PORT" E2E_PHONE="$CLIENT_E2E_PHONE" E2E_CODE="$E2E_CODE" \
+      "${EXTRA[@]}" 2>&1 | redact); then
+    echo "PASS  ${EXTRA[*]}"
+  else
+    echo "FAIL  ${EXTRA[*]}"; fail=1
+  fi
+fi
 
 # Логи всех сервисов стека не содержат секретов, ключей S3, пароля БД и кода тестового номера.
 logs="$("${COMPOSE[@]}" logs --no-color 2>&1)"

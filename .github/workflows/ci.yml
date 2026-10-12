@@ -28,6 +28,10 @@ jobs:
       backend: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.backend == 'true' }}
       web: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.web == 'true' }}
       mobile: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.mobile == 'true' }}
+      # E2E клиента (Глава 18): клиент или backend, против которого он проверяется.
+      mobile_e2e: >-
+        ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.mobile == 'true'
+        || steps.filter.outputs.backend == 'true' }}
       docs: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.docs == 'true' }}
     steps:
       - uses: actions/checkout@v4
@@ -71,6 +75,7 @@ jobs:
             mobile:
               - "mobile/**"
               - ".github/workflows/mobile-ci.yml"
+              - ".github/workflows/mobile-e2e.yml"
               - ".github/workflows/ci.yml"
             docs:
               - "docs/**"                              # в т. ч. openapi.yaml и asyncapi.yaml
@@ -99,6 +104,11 @@ jobs:
     needs: changes
     if: needs.changes.outputs.mobile == 'true'
     uses: ./.github/workflows/mobile-ci.yml
+
+  mobile-e2e:
+    needs: changes
+    if: needs.changes.outputs.mobile_e2e == 'true'
+    uses: ./.github/workflows/mobile-e2e.yml
 
   docs:
     needs: changes
@@ -131,7 +141,7 @@ jobs:
   # `unicode-nfc` и `secret-scan` успешны, а каждая проверка сервиса — успешна или не нужна
   # (skipped). Падение, отмена или пропуск из-за упавшей зависимости — красный.
   ci-gate:
-    needs: [changes, backend, web, mobile, docs, unicode-nfc, secret-scan]
+    needs: [changes, backend, web, mobile, mobile-e2e, docs, unicode-nfc, secret-scan]
     if: always()
     runs-on: ubuntu-latest
     steps:

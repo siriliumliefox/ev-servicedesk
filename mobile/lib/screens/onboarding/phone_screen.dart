@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../app/app_state.dart';
+import '../../data/repository.dart';
 import '../../theme/app_theme.dart';
 import '../../ui/demo_panel.dart';
 import '../../ui/states.dart';
@@ -19,6 +20,16 @@ class _PhoneScreenState extends State<PhoneScreen> {
   final _controller = TextEditingController();
   String? _error;
   bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // Сессию завершил сервер: refresh отклонён (блокировка, отзыв согласия, повтор использованного токена).
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final notice = mounted ? AppScope.read(context).takeNotice() : null;
+      if (notice != null) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(notice)));
+    });
+  }
 
   @override
   void dispose() {
@@ -48,6 +59,9 @@ class _PhoneScreenState extends State<PhoneScreen> {
       await Navigator.of(context).push(MaterialPageRoute<void>(
         builder: (_) => CodeScreen(phone: phone, ttlSeconds: ttl),
       ));
+    } on ApiException catch (e) {
+      // Номер не обслуживается, лимит запросов, SMS недоступны — у поля телефона.
+      if (mounted) setState(() => _error = e.message);
     } on Exception catch (e) {
       if (mounted) showErrorSnack(context, e);
     } finally {

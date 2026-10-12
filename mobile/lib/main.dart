@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 
 import 'app/app_state.dart';
+import 'data/api/api_client.dart';
+import 'data/api/token_store.dart';
+import 'data/http_repository.dart';
 import 'data/prototype_repository.dart';
 import 'data/repository.dart';
 import 'screens/home_shell.dart';
@@ -8,9 +11,18 @@ import 'screens/onboarding/phone_screen.dart';
 import 'theme/app_theme.dart';
 
 // Каркас — Глава 4; тема и компоненты — Глава 6; кликабельный прототип на фикстурах — Глава 7 (ADR 0011).
-// Реальный API и авторизация — Глава 18: ClientRepository на HTTP вместо PrototypeRepository.
-void main() {
-  runApp(EvServiceDeskApp(repository: PrototypeRepository()));
+// Реальный API и авторизация — Глава 18 (ADR 0022): --dart-define=API_BASE_URL=http://host:8000;
+// без него — прототип на фикстурах с панелью «Демо».
+const apiBaseUrl = String.fromEnvironment('API_BASE_URL');
+
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  runApp(EvServiceDeskApp(repository: await createRepository()));
+}
+
+Future<ClientRepository> createRepository() async {
+  if (apiBaseUrl.isEmpty) return PrototypeRepository();
+  return HttpClientRepository(ApiClient(baseUrl: Uri.parse(apiBaseUrl), tokens: await SecureTokenStore.open()));
 }
 
 class EvServiceDeskApp extends StatefulWidget {
@@ -35,7 +47,11 @@ class _EvServiceDeskAppState extends State<EvServiceDeskApp> {
     super.initState();
     _signedIn = _state.signedIn;
     _state.addListener(_onState);
-    if (_state.signedIn) _state.refresh();
+    if (_state.signedIn) {
+      _state.refresh();
+    } else {
+      _state.restoreSession();
+    }
   }
 
   /// Вход/выход меняет корневой экран — экраны онбординга (или открытые поверх) закрываются.
@@ -77,5 +93,9 @@ class _Root extends StatelessWidget {
   const _Root();
 
   @override
-  Widget build(BuildContext context) => AppScope.of(context).signedIn ? const HomeShell() : const PhoneScreen();
+  Widget build(BuildContext context) {
+    final app = AppScope.of(context);
+    if (app.restoring) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    return app.signedIn ? const HomeShell() : const PhoneScreen();
+  }
 }

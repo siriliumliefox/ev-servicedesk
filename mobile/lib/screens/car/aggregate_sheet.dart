@@ -4,8 +4,10 @@ import 'package:flutter/material.dart';
 
 import '../../app/app_state.dart';
 import '../../data/models.dart';
+import '../../data/repository.dart';
 import '../../theme/app_theme.dart';
 import '../../ui/status_badge.dart';
+import '../../ui/fact_row.dart';
 import '../../ui/format.dart';
 import '../../ui/states.dart';
 import '../support/ticket_create_screen.dart';
@@ -85,9 +87,9 @@ class AggregateSheet extends StatelessWidget {
           Text('Израсходовано ${s.percentage!.round()} % интервала',
               style: text.bodyMedium?.copyWith(color: c.fgMuted)),
           const SizedBox(height: EvSpace.s4),
-          _Fact(label: 'Остаток ресурса', value: _remaining(s)),
+          FactRow(label: 'Остаток ресурса', value: _remaining(s)),
           if (s.lastReplacedAt != null)
-            _Fact(
+            FactRow(
               label: 'Последняя замена',
               value: [
                 formatDate(s.lastReplacedAt!),
@@ -125,29 +127,6 @@ class AggregateSheet extends StatelessWidget {
         s.remainingDays! >= 0 ? formatDays(s.remainingDays!) : 'просрочено на ${formatDays(s.remainingDays!)}',
     ];
     return parts.isEmpty ? '—' : parts.join(' или ');
-  }
-}
-
-class _Fact extends StatelessWidget {
-  const _Fact({required this.label, required this.value});
-
-  final String label;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) {
-    final text = Theme.of(context).textTheme;
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: EvSpace.s1),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(child: Text(label, style: text.bodyMedium?.copyWith(color: context.evColors.fgMuted))),
-          const SizedBox(width: EvSpace.s4),
-          Expanded(child: Text(value, style: text.bodyLarge, textAlign: TextAlign.end)),
-        ],
-      ),
-    );
   }
 }
 

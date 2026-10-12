@@ -3,9 +3,8 @@ description: "EV-ServiceDesk — клиентское приложение (Ци
 publish_to: "none"
 version: 0.1.0
 
-# Целевые платформы: iOS (iPhone) и macOS (MacBook) — НЕ Android на первом этапе.
-# `flutter create --platforms=ios,macos .` при инициализации через реальный Flutter SDK
-# (Android можно добавить позже без переписывания — просто добавляется платформа).
+# Платформы: iOS (iPhone) — основная; Android — сборка в CI (устройства нет); macOS — для разработки (ADR 0022).
+# API: --dart-define=API_BASE_URL=http://host:8000 — реальный backend; без него — прототип на фикстурах.
 
 environment:
   sdk: ">=3.4.0 <4.0.0"
@@ -14,14 +13,29 @@ dependencies:
   flutter:
     sdk: flutter
   http: ^1.2.0
-  flutter_secure_storage: ^9.2.0   # хранение JWT (Глава 18)
+  flutter_secure_storage: ^9.2.0   # refresh-токен в Keychain/Keystore (Глава 18, ADR 0022)
+  shared_preferences: ^2.3.0       # метка первого запуска: очистка Keychain после переустановки
   firebase_core: ^3.15.2           # push: инициализация Firebase (Глава 15, ADR 0019)
   firebase_messaging: ^15.0.0      # push: отладочный экран — Глава 15, экраны уведомлений — Глава 20
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
+  integration_test:
+    sdk: flutter
   flutter_lints: ^4.0.0
 
 flutter:
   uses-material-design: true
+  # Inter 4.1 (rsms/inter, OFL — assets/fonts/inter/OFL.txt): начертания темы 400/500/600/700 (ADR 0010, 0022 п. 9).
+  fonts:
+    - family: Inter
+      fonts:
+        - asset: assets/fonts/inter/Inter-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/inter/Inter-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/inter/Inter-SemiBold.ttf
+          weight: 600
+        - asset: assets/fonts/inter/Inter-Bold.ttf
+          weight: 700

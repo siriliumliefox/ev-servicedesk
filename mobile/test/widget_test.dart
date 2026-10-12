@@ -6,6 +6,7 @@ import 'package:ev_servicedesk/main.dart';
 void main() {
   testWidgets('Приложение запускается с онбординга', (tester) async {
     await tester.pumpWidget(EvServiceDeskApp(repository: PrototypeRepository(latency: Duration.zero)));
+    await tester.pumpAndSettle();
     expect(find.text('Цифровой паспорт автомобиля'), findsOneWidget);
     expect(find.text('Получить код'), findsOneWidget);
   });

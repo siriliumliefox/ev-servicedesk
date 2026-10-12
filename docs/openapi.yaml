@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: EV-ServiceDesk API
-  version: "1.7.1"
+  version: "1.8.0"
   description: >
     API дипломного проекта «EV-ServiceDesk» (ООО «ЕТСавтоГомель»).
     Контракты сервисов: Auth, Vehicle, Aggregates & Maintenance, Tickets,
@@ -2201,12 +2201,17 @@ components:
 
     Vehicle:
       type: object
-      required: [id, vin, mileage, vehicle_model, is_active, created_at]
+      required: [id, vin, mileage, vehicle_model_id, vehicle_model, is_active, created_at]
       properties:
         id: { type: integer }
         vin: { type: string, minLength: 17, maxLength: 17 }
         mileage: { type: integer, minimum: 0 }
         is_active: { type: boolean }
+        vehicle_model_id:
+          type: integer
+          description: >
+            id модели авто (VehicleModel) — фильтр статей базы знаний по модели
+            (GET /knowledge-articles?vehicle_model_id=). Добавлено в 1.8.0 (глава 18, ADR 0022).
         vehicle_model: { $ref: '#/components/schemas/VehicleModelInfo' }
         current_firmware_version:
           type: string

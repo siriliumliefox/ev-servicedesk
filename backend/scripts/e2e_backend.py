@@ -40,9 +40,11 @@ from tests.support.contract import assert_contract, operation_for  # noqa: E402
 MINSK = ZoneInfo("Europe/Minsk")
 ZEEKR_VIN_PREFIX = "L6TZ001"  # мок-декодер VIN распознаёт как Zeekr 001 (ADR 0014)
 POLICY = "e2e"
-AGGREGATE = "engine_oil"
-INTERVAL_KM = 10_000
-MILEAGE = 9_500  # осталось 500 км ≤ 1000 — напоминание «скоро замена» (ADR 0019 п. 6)
+# Zeekr 001 — электромобиль без ДВС: обслуживается масло редуктора, а не масло двигателя (замечание
+# владельца к главе 18). Интервал — реалистичный для редуктора.
+AGGREGATE = "gearbox_oil"
+INTERVAL_KM = 60_000
+MILEAGE = 59_500  # осталось 500 км ≤ 1000 — напоминание «скоро замена» (ADR 0019 п. 6)
 
 Headers = dict[str, str]
 
@@ -198,7 +200,7 @@ def register_client(api: Api, phone: str, code: str) -> Client:
 
 
 def due_soon_vehicle(api: Api, admin: Headers, client: Client, today: date) -> int:
-    """Авто с базовой заменой масла и пробегом до «скоро замена»; возвращает id авто."""
+    """Авто с базовой заменой масла редуктора и пробегом до «скоро замена»; возвращает id авто."""
     body = {"vin": ZEEKR_VIN_PREFIX + digits(10)}
     car = api.json("POST", "/vehicles", 201, headers=client.headers, json=body)
     check(car["vehicle_model"]["brand"] == "Zeekr", "VIN не распознан как Zeekr")

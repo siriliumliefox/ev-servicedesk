@@ -14,7 +14,8 @@ services:
   backend:
     pull_policy: never
     ports: !override
-      - "127.0.0.1:${INTEGRATION_PORT:-18080}:8000"
+      # INTEGRATION_BIND=0.0.0.0 — для iPhone в локальной сети (mobile/scripts/device_run.sh, глава 18).
+      - "${INTEGRATION_BIND:-127.0.0.1}:${INTEGRATION_PORT:-18080}:8000"
   migrate:
     pull_policy: never
   notifications-worker:

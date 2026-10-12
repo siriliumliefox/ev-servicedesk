@@ -1,5 +1,6 @@
 // Прототип (глава 7, ADR 0011): ClientRepository на фикстурах в памяти.
 // Сценарии ревью — нет сети, аккаунт без авто, одно/несколько авто — переключаются в «Демо».
+import 'api/error_text.dart';
 import 'models.dart';
 import 'repository.dart';
 
@@ -61,10 +62,23 @@ class PrototypeRepository implements ClientRepository {
     return body();
   }
 
+  @override
+  bool get supportsAttachments => true;
+
+  /// Сессию в прототипе сервер не завершает.
+  @override
+  Stream<void> get sessionEnded => const Stream.empty();
+
   // ---------- Auth ----------
+
+  String? _phone;
+
+  @override
+  Future<bool> restoreSession() async => false;
 
   @override
   Future<int> requestCode(String phone) => _call(() {
+        _phone = phone;
         _codeAttempts = 0;
         return 120;
       });
@@ -72,7 +86,7 @@ class PrototypeRepository implements ClientRepository {
   @override
   Future<void> verifyCode(String phone, String code, {String? pdPolicyVersion}) => _call(() {
         if (pdPolicyVersion == null) {
-          throw const ApiException('PD_CONSENT_REQUIRED', 'Нужно согласие на обработку персональных данных');
+          throw ApiException('PD_CONSENT_REQUIRED', errorText('PD_CONSENT_REQUIRED'));
         }
         if (_codeAttempts >= maxCodeAttempts) {
           throw const ApiException('RATE_LIMITED', 'Слишком много попыток. Запросите новый код');
@@ -81,11 +95,21 @@ class PrototypeRepository implements ClientRepository {
           _codeAttempts++;
           final left = maxCodeAttempts - _codeAttempts;
           throw ApiException(
-            'INVALID_CODE',
-            left > 0 ? 'Неверный код. Осталось попыток: $left' : 'Слишком много попыток. Запросите новый код',
+            'CODE_INVALID',
+            left > 0 ? errorText('CODE_INVALID', details: {'attempts_left': left}) : 'Слишком много попыток. Запросите новый код',
           );
         }
+        _phone = phone;
       });
+
+  @override
+  Future<Profile> me() => _call(() => Profile(phone: _phone ?? '+375291234567'));
+
+  @override
+  Future<void> signOut() async {}
+
+  @override
+  Future<void> withdrawPdConsent() => _call(() {});
 
   // ---------- Vehicles ----------
 
@@ -98,11 +122,11 @@ class PrototypeRepository implements ClientRepository {
   @override
   Future<Vehicle> addVehicle(String vin, {int? vehicleModelId}) => _call(() {
         if (_vehicles.any((v) => v.vin == vin) || vin == takenVin) {
-          throw const ApiException('CONFLICT', 'Этот VIN уже привязан к другому аккаунту');
+          throw ApiException('VIN_REGISTERED_TO_ANOTHER_ACCOUNT', errorText('VIN_REGISTERED_TO_ANOTHER_ACCOUNT'));
         }
         final model = vehicleModelId != null ? _models.firstWhere((m) => m.id == vehicleModelId) : _decodeVin(vin);
         if (model == null) {
-          throw const ApiException('VIN_DECODE_FAILED', 'Не удалось определить модель по VIN — выберите её из списка');
+          throw ApiException('VIN_DECODE_FAILED', errorText('VIN_DECODE_FAILED'));
         }
         final vehicle = Vehicle(id: _nextId++, vin: vin, mileage: 0, vehicleModel: model);
         _vehicles = [..._vehicles, vehicle];
@@ -121,11 +145,37 @@ class PrototypeRepository implements ClientRepository {
   static const takenVin = 'LDPZZZ1Z2RA000777';
 
   @override
-  Future<List<AggregateStatusItem>> aggregateStatuses(int vehicleId) =>
-      _call(() => _statuses[vehicleId] ?? _newVehicleStatuses);
+  Future<List<AggregateStatusItem>> aggregateStatuses(int vehicleId) => _call(() {
+        final vehicle = _vehicles.firstWhere((v) => v.id == vehicleId);
+        return _statuses[vehicleId] ?? _newVehicleStatuses(vehicle.vehicleModel.id);
+      });
 
   @override
-  Future<List<MaintenanceRecord>> maintenanceRecords(int vehicleId) => _call(() => _records[vehicleId] ?? const []);
+  Future<Vehicle> updateMileage(int vehicleId, int mileage) => _call(() {
+        final old = _vehicles.firstWhere((v) => v.id == vehicleId);
+        if (mileage < old.mileage) throw ApiException('MILEAGE_DECREASE', errorText('MILEAGE_DECREASE'));
+        final updated = Vehicle(
+          id: old.id,
+          vin: old.vin,
+          mileage: mileage,
+          vehicleModel: old.vehicleModel,
+          currentFirmwareVersion: old.currentFirmwareVersion,
+        );
+        _vehicles = [for (final v in _vehicles) v.id == vehicleId ? updated : v];
+        return updated;
+      });
+
+  @override
+  Future<Page<MaintenanceRecord>> maintenanceRecordsPage(int vehicleId, {int page = 1, int pageSize = 20}) =>
+      _call(() {
+        final all = [...?_records[vehicleId]]..sort((a, b) => b.performedAt.compareTo(a.performedAt));
+        final start = (page - 1) * pageSize;
+        return Page(
+          items: all.skip(start).take(pageSize).toList(),
+          page: page,
+          totalPages: all.isEmpty ? 0 : (all.length / pageSize).ceil(),
+        );
+      });
 
   // ---------- Knowledge base ----------
 
@@ -150,7 +200,7 @@ class PrototypeRepository implements ClientRepository {
           vehicleId: draft.vehicleId,
           category: draft.category,
           status: TicketStatus.newTicket,
-          description: draft.description,
+          summary: draft.description,
           createdAt: now,
           attachments: draft.attachments,
         );
@@ -280,11 +330,18 @@ class PrototypeRepository implements ClientRepository {
     ],
   };
 
-  // Новое авто без истории ТО — «Нет данных» по всем агрегатам (сценарий главы 5, не ошибка).
-  static final _newVehicleStatuses = [
-    for (final code in ['engine_oil', 'oil_filter', 'air_filter', 'cabin_filter', 'gearbox_oil', 'ac_refrigerant'])
-      _status(code, AggregateStatus.unknown),
-  ];
+  /// Агрегаты в регламенте модели (как в web-shared fixtures): Li Auto L7 и Voyah Free EVR — с ДВС-генератором,
+  /// Zeekr 001 — электромобиль без ДВС: редуктор, без масла двигателя и фильтров ДВС.
+  static const _modelAggregates = {
+    1: ['engine_oil', 'oil_filter', 'air_filter', 'cabin_filter', 'gearbox_oil', 'ac_refrigerant'],
+    2: ['cabin_filter', 'gearbox_oil', 'ac_refrigerant'],
+    3: ['engine_oil', 'oil_filter', 'air_filter', 'cabin_filter', 'gearbox_oil', 'ac_refrigerant'],
+  };
+
+  /// Новое авто без истории ТО — «Нет данных» по агрегатам регламента модели (сценарий главы 5, не ошибка).
+  static List<AggregateStatusItem> _newVehicleStatuses(int modelId) => [
+        for (final code in _modelAggregates[modelId]!) _status(code, AggregateStatus.unknown),
+      ];
 
   static final Map<int, List<MaintenanceRecord>> _records = {
     101: [
@@ -506,7 +563,7 @@ class PrototypeRepository implements ClientRepository {
           vehicleId: 101,
           category: TicketCategory.navigation,
           status: TicketStatus.inProgress,
-          description: 'Яндекс Навигатор не показывает пробки',
+          summary: 'Яндекс Навигатор не показывает пробки',
           createdAt: DateTime(2026, 10, 8, 18, 40),
         ),
         Ticket(
@@ -514,7 +571,7 @@ class PrototypeRepository implements ClientRepository {
           vehicleId: 101,
           category: TicketCategory.maintenance,
           status: TicketStatus.resolved,
-          description: 'Запись на замену воздушного фильтра',
+          summary: 'Запись на замену воздушного фильтра',
           createdAt: DateTime(2026, 6, 15, 9, 5),
         ),
       ];

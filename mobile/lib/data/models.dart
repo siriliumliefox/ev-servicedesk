@@ -118,7 +118,7 @@ class Ticket {
     required this.vehicleId,
     required this.category,
     required this.status,
-    required this.description,
+    required this.summary,
     required this.createdAt,
     this.attachments = const [],
   });
@@ -127,7 +127,8 @@ class Ticket {
   final int vehicleId;
   final TicketCategory category;
   final TicketStatus status;
-  final String description;
+  /// Краткое описание (Ticket.summary, до 140 символов) — для списка обращений.
+  final String summary;
   final DateTime createdAt;
   final List<TicketAttachment> attachments;
 }
