@@ -11,7 +11,8 @@
 # Запуск: scripts/integration_stack.sh <образ> [-- команда]   (например backend:smoke)
 # Команда после «--» выполняется на том же стеке после сценария backend (глава 18, ADR 0022 п. 2:
 # E2E мобильного клиента) с окружением API_BASE_URL, E2E_PHONE, E2E_CODE — свой тестовый номер,
-# не тот, что блокирует сценарий backend.
+# не тот, что блокирует сценарий backend; E2E_SCHEME_PHONE — номер клиента 5 тестовых авто схемы
+# агрегатов, E2E_JOB_RUNNER — префикс разовой задачи в контейнере API (глава 19, ADR 0023 п. 7).
 
 set -euo pipefail
 
@@ -27,6 +28,7 @@ PROJECT="ev-integration-$$"
 PORT="${INTEGRATION_PORT:-18080}"
 E2E_PHONE="+375290009001"  # тестовый номер стека: SMS не отправляется (ADR 0021 п. 6)
 CLIENT_E2E_PHONE="+375290009002"  # тестовый номер для команды после «--» (ADR 0022 п. 2)
+SCHEME_E2E_PHONE="+375290009003"  # клиент 5 тестовых авто схемы агрегатов (ADR 0023 п. 7)
 
 ENV_FILE="$(mktemp)"
 chmod 600 "$ENV_FILE"
@@ -41,7 +43,7 @@ JWT_SECRET=$JWT_SECRET
 SMS_CODE_SECRET=$SMS_CODE_SECRET
 SMS_PROVIDER=fake
 PUSH_PROVIDER=fake
-SMS_TEST_PHONES=$E2E_PHONE,$CLIENT_E2E_PHONE
+SMS_TEST_PHONES=$E2E_PHONE,$CLIENT_E2E_PHONE,$SCHEME_E2E_PHONE
 SMS_TEST_CODE=$E2E_CODE
 EOF
 
@@ -100,6 +102,7 @@ fi
 
 if [ "${#EXTRA[@]}" -gt 0 ]; then
   if (API_BASE_URL="http://127.0.0.1:$PORT" E2E_PHONE="$CLIENT_E2E_PHONE" E2E_CODE="$E2E_CODE" \
+      E2E_SCHEME_PHONE="$SCHEME_E2E_PHONE" E2E_JOB_RUNNER="$JOB_RUNNER" \
       "${EXTRA[@]}" 2>&1 | redact); then
     echo "PASS  ${EXTRA[*]}"
   else

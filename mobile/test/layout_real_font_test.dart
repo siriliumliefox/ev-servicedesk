@@ -4,6 +4,7 @@
 // как на устройстве. Здесь в семейство EvTypeMobile.fontFamily загружаются начертания Inter из assets/fonts —
 // тот же шрифт, что в приложении (глава 18, ADR 0022 п. 9). У подписей схемы — запас 10 % на увеличенный
 // системный размер текста. Шрифт регистрируется на весь файл, поэтому тесты — отдельным файлом.
+// Глава 19 (ADR 0023 п. 6): схема на ширинах 360–430 px при масштабе текста 1.0 и 1.3 — группа в конце файла.
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -13,6 +14,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:ev_servicedesk/data/prototype_repository.dart';
 import 'package:ev_servicedesk/main.dart';
+import 'package:ev_servicedesk/screens/car/aggregate_scheme.dart';
 import 'package:ev_servicedesk/theme/app_theme.dart';
 
 /// Минимальная ширина из ТЗ и iPhone 12–15 (390 pt). Подсказка у телефона обрезалась в раунде 1 на 390 pt
@@ -167,4 +169,51 @@ void main() {
       expect(tester.takeException(), isNull);
     });
   }
+
+  group('глава 19: схема на ширинах 360–430 px и с крупным шрифтом', () {
+    // Минимум ТЗ, iPhone SE, iPhone 12–15, iPhone 11/XR, iPhone 15 Pro Max/Plus.
+    const sizes = [Size(360, 740), Size(375, 667), Size(390, 844), Size(414, 896), Size(430, 932)];
+    const codes = ['engine_oil', 'oil_filter', 'air_filter', 'ac_refrigerant', 'cabin_filter', 'gearbox_oil'];
+    for (final size in sizes) {
+      for (final scale in [1.0, AggregateScheme.maxLabelTextScale]) {
+        testWidgets('${size.width.toInt()} px, текст ×$scale: каждая зона нажимается, ≥ 44×44, без наложений',
+            (tester) async {
+          tester.platformDispatcher.textScaleFactorTestValue = scale;
+          addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+          await _pump(tester, size);
+          final rects = <String, Rect>{};
+          for (final code in codes) {
+            final zone = find.byKey(Key('zone-$code'));
+            await tester.ensureVisible(zone);
+            await tester.pumpAndSettle();
+            final rect = tester.getRect(zone);
+            expect(rect.width, greaterThanOrEqualTo(EvSize.tapTargetMin), reason: code);
+            expect(rect.height, greaterThanOrEqualTo(EvSize.tapTargetMin), reason: code);
+            expect(rect.left, greaterThanOrEqualTo(0), reason: code);
+            expect(rect.right, lessThanOrEqualTo(size.width), reason: code);
+            final label = _paragraph(tester, find.descendant(of: zone, matching: find.byType(Text)));
+            expect(label.didExceedMaxLines, isFalse, reason: '$code: подпись целиком');
+            // Центр зоны не перекрыт ничем (подписью соседа, контуром) — тап попадает в неё.
+            expect(zone.hitTestable(), findsOneWidget, reason: code);
+            await tester.tap(zone);
+            await tester.pumpAndSettle();
+            final name = (tester.widget<Text>(find.descendant(of: zone, matching: find.byType(Text)))).data!;
+            expect(find.descendant(of: find.byType(BottomSheet), matching: find.text(name)), findsOneWidget,
+                reason: '$code: открылась карточка агрегата');
+            await tester.tapAt(const Offset(10, 10)); // закрыть шит тапом по затемнению
+            await tester.pumpAndSettle();
+            // Положение на экране зависит от прокрутки — рамка запоминается в координатах схемы.
+            rects[code] = rect.shift(-tester.getTopLeft(find.byType(AggregateScheme)));
+          }
+          final list = rects.entries.toList();
+          for (var i = 0; i < list.length; i++) {
+            for (var j = i + 1; j < list.length; j++) {
+              expect(list[i].value.overlaps(list[j].value), isFalse, reason: '${list[i].key} и ${list[j].key}');
+            }
+          }
+          expect(tester.takeException(), isNull);
+        });
+      }
+    }
+  });
 }

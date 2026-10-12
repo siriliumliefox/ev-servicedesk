@@ -439,8 +439,9 @@ void main() {
       expect(_summary(List.filled(6, _item(AggregateStatus.unknown))),
           ('Нет данных о замене: 6', 'Статусы появятся после ТО в сервисе'));
       expect(_summary([_item(AggregateStatus.green), _item(AggregateStatus.unknown)]), ('Нет данных: 1', null));
-      // У модели нет агрегатов в регламенте — не «в норме».
-      expect(_summary([]), ('Нет данных о замене', 'Статусы появятся после ТО в сервисе'));
+      // У модели нет регламента ТО — не «в норме» и не ошибка (ADR 0023 п. 3).
+      expect(_summary([]),
+          ('Регламент ТО для модели ещё не задан', 'Статусы агрегатов появятся, когда сервис заведёт регламент'));
       expect(aggregateSummary([_item(AggregateStatus.yellow)]).$1, 'Скоро\u00A0менять:\u00A01');
       expect(
           _summary([

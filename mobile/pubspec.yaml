@@ -17,6 +17,7 @@ dependencies:
   shared_preferences: ^2.3.0       # метка первого запуска: очистка Keychain после переустановки
   firebase_core: ^3.15.2           # push: инициализация Firebase (Глава 15, ADR 0019)
   firebase_messaging: ^15.0.0      # push: отладочный экран — Глава 15, экраны уведомлений — Глава 20
+  flutter_svg: ^2.3.0              # контур схемы агрегатов — SVG-ассет (Глава 19, ADR 0023)
 
 dev_dependencies:
   flutter_test:
@@ -27,6 +28,8 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/scheme/car_top.svg
   # Inter 4.1 (rsms/inter, OFL — assets/fonts/inter/OFL.txt): начертания темы 400/500/600/700 (ADR 0010, 0022 п. 9).
   fonts:
     - family: Inter

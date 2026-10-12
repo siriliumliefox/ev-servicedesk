@@ -76,8 +76,8 @@ class HttpClientRepository implements ClientRepository {
       _items(await api.get('/vehicles', query: {'page_size': _listPageSize})).map(_vehicle).toList();
 
   @override
-  Future<Vehicle> addVehicle(String vin, {int? vehicleModelId}) async =>
-      _vehicle(await api.post('/vehicles', body: {'vin': vin, if (vehicleModelId != null) 'vehicle_model_id': vehicleModelId}) as _Json);
+  Future<Vehicle> addVehicle(String vin, {int? vehicleModelId}) async => _vehicle(await api
+      .post('/vehicles', body: {'vin': vin, if (vehicleModelId != null) 'vehicle_model_id': vehicleModelId}) as _Json);
 
   @override
   Future<Vehicle> updateMileage(int vehicleId, int mileage) async =>
@@ -85,11 +85,22 @@ class HttpClientRepository implements ClientRepository {
 
   @override
   Future<List<AggregateStatusItem>> aggregateStatuses(int vehicleId) async =>
-      _items(await api.get('/vehicles/$vehicleId/aggregate-statuses')).map(_aggregateStatus).toList();
+      _items(await api.get('/vehicles/$vehicleId/aggregate-statuses', query: {'page_size': _listPageSize}))
+          .map(_aggregateStatus)
+          .toList();
 
   @override
-  Future<Page<MaintenanceRecord>> maintenanceRecordsPage(int vehicleId, {int page = 1, int pageSize = 20}) async {
-    final json = await api.get('/vehicles/$vehicleId/maintenance-records', query: {'page': page, 'page_size': pageSize});
+  Future<Page<MaintenanceRecord>> maintenanceRecordsPage(
+    int vehicleId, {
+    int page = 1,
+    int pageSize = 20,
+    String? aggregateTypeCode,
+  }) async {
+    final json = await api.get('/vehicles/$vehicleId/maintenance-records', query: {
+      'page': page,
+      'page_size': pageSize,
+      if (aggregateTypeCode != null) 'aggregate_type_code': aggregateTypeCode,
+    });
     return _page(json, _maintenanceRecord);
   }
 
@@ -202,6 +213,7 @@ MaintenanceRecord _maintenanceRecord(_Json j) => MaintenanceRecord(
       aggregateTypeCode: j['aggregate_type_code'] as String?,
       performedAt: DateTime.parse(j['performed_at']! as String),
       mileageAtService: j['mileage_at_service']! as int,
+      kind: MaintenanceKind.values.byName(j['kind']! as String),
       description: j['description'] as String?,
     );
 

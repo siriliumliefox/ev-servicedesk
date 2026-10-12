@@ -59,6 +59,16 @@ class AggregateStatusItem {
   final int? remainingDays;
 }
 
+/// MaintenanceRecord.kind: замена агрегата сбрасывает выработку, работа (осмотр, долив) — нет (ADR 0023).
+enum MaintenanceKind {
+  replacement('Замена'),
+  work('Работа');
+
+  const MaintenanceKind(this.label);
+
+  final String label;
+}
+
 /// MaintenanceRecord.
 class MaintenanceRecord {
   const MaintenanceRecord({
@@ -66,6 +76,7 @@ class MaintenanceRecord {
     required this.aggregateTypeCode,
     required this.performedAt,
     required this.mileageAtService,
+    required this.kind,
     this.description,
   });
 
@@ -73,6 +84,7 @@ class MaintenanceRecord {
   final String? aggregateTypeCode;
   final DateTime performedAt;
   final int mileageAtService;
+  final MaintenanceKind kind;
   final String? description;
 }
 
@@ -127,6 +139,7 @@ class Ticket {
   final int vehicleId;
   final TicketCategory category;
   final TicketStatus status;
+
   /// Краткое описание (Ticket.summary, до 140 символов) — для списка обращений.
   final String summary;
   final DateTime createdAt;

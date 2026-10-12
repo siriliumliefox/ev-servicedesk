@@ -82,9 +82,14 @@ abstract class ClientRepository {
   /// GET /vehicles/{id}/aggregate-statuses.
   Future<List<AggregateStatusItem>> aggregateStatuses(int vehicleId);
 
-  /// GET /vehicles/{id}/maintenance-records — страница истории работ (новые сверху).
-  Future<Page<MaintenanceRecord>> maintenanceRecordsPage(int vehicleId, {int page = 1, int pageSize = 20});
-
+  /// GET /vehicles/{id}/maintenance-records — страница истории работ (новые сверху);
+  /// aggregateTypeCode — история агрегата: его замены и работы по нему.
+  Future<Page<MaintenanceRecord>> maintenanceRecordsPage(
+    int vehicleId, {
+    int page = 1,
+    int pageSize = 20,
+    String? aggregateTypeCode,
+  });
 
   /// GET /knowledge-articles?vehicle_model_id=&article_type=.
   Future<List<KnowledgeArticle>> articles(int vehicleModelId, ArticleType type);
@@ -109,16 +114,4 @@ abstract class ClientRepository {
 
   /// POST /notifications/{id}/read.
   Future<void> markNotificationRead(int notificationId);
-}
-
-extension AllMaintenanceRecords on ClientRepository {
-  /// Вся история работ (все страницы) — карточка агрегата фильтрует её по агрегату.
-  Future<List<MaintenanceRecord>> maintenanceRecords(int vehicleId) async {
-    final records = <MaintenanceRecord>[];
-    for (var page = 1;; page++) {
-      final p = await maintenanceRecordsPage(vehicleId, page: page, pageSize: 100);
-      records.addAll(p.items);
-      if (!p.hasMore) return records;
-    }
-  }
 }

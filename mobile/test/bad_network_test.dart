@@ -69,7 +69,13 @@ class _Backend {
       '/vehicles/7/maintenance-records' => _json(
           200,
           _list([
-            {'id': 1, 'aggregate_type_code': 'cabin_filter', 'performed_at': '2026-05-14', 'mileage_at_service': 30100},
+            {
+              'id': 1,
+              'aggregate_type_code': 'cabin_filter',
+              'performed_at': '2026-05-14',
+              'mileage_at_service': 30100,
+              'kind': 'replacement',
+            },
           ])),
       '/vehicles/7/mileage' => _mileage(r),
       _ => _json(404, {

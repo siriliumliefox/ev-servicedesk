@@ -96,7 +96,9 @@ class PrototypeRepository implements ClientRepository {
           final left = maxCodeAttempts - _codeAttempts;
           throw ApiException(
             'CODE_INVALID',
-            left > 0 ? errorText('CODE_INVALID', details: {'attempts_left': left}) : 'Слишком много попыток. Запросите новый код',
+            left > 0
+                ? errorText('CODE_INVALID', details: {'attempts_left': left})
+                : 'Слишком много попыток. Запросите новый код',
           );
         }
         _phone = phone;
@@ -166,9 +168,17 @@ class PrototypeRepository implements ClientRepository {
       });
 
   @override
-  Future<Page<MaintenanceRecord>> maintenanceRecordsPage(int vehicleId, {int page = 1, int pageSize = 20}) =>
+  Future<Page<MaintenanceRecord>> maintenanceRecordsPage(
+    int vehicleId, {
+    int page = 1,
+    int pageSize = 20,
+    String? aggregateTypeCode,
+  }) =>
       _call(() {
-        final all = [...?_records[vehicleId]]..sort((a, b) => b.performedAt.compareTo(a.performedAt));
+        final all = [
+          for (final r in _records[vehicleId] ?? const <MaintenanceRecord>[])
+            if (aggregateTypeCode == null || r.aggregateTypeCode == aggregateTypeCode) r,
+        ]..sort((a, b) => b.performedAt.compareTo(a.performedAt));
         final start = (page - 1) * pageSize;
         return Page(
           items: all.skip(start).take(pageSize).toList(),
@@ -343,35 +353,81 @@ class PrototypeRepository implements ClientRepository {
         for (final code in _modelAggregates[modelId]!) _status(code, AggregateStatus.unknown),
       ];
 
+  /// Записи по агрегатам — их замены (совпадают со статусами выше), долив — работа (не сбрасывает выработку).
   static final Map<int, List<MaintenanceRecord>> _records = {
     101: [
       MaintenanceRecord(
-          id: 1, aggregateTypeCode: 'gearbox_oil', performedAt: DateTime(2026, 8, 30), mileageAtService: 36450),
+        id: 14,
+        aggregateTypeCode: 'engine_oil',
+        performedAt: DateTime(2026, 3, 14),
+        mileageAtService: 34100,
+        kind: MaintenanceKind.work,
+        description: 'Долив масла',
+      ),
       MaintenanceRecord(
-          id: 2, aggregateTypeCode: 'air_filter', performedAt: DateTime(2026, 6, 20), mileageAtService: 37750),
+          id: 1,
+          aggregateTypeCode: 'gearbox_oil',
+          performedAt: DateTime(2026, 8, 30),
+          mileageAtService: 36450,
+          kind: MaintenanceKind.replacement),
       MaintenanceRecord(
-          id: 3, aggregateTypeCode: 'oil_filter', performedAt: DateTime(2025, 12, 12), mileageAtService: 32700),
+          id: 2,
+          aggregateTypeCode: 'air_filter',
+          performedAt: DateTime(2026, 6, 20),
+          mileageAtService: 37750,
+          kind: MaintenanceKind.replacement),
       MaintenanceRecord(
-          id: 4, aggregateTypeCode: 'cabin_filter', performedAt: DateTime(2025, 11, 1), mileageAtService: 31250),
+          id: 3,
+          aggregateTypeCode: 'oil_filter',
+          performedAt: DateTime(2025, 12, 12),
+          mileageAtService: 32700,
+          kind: MaintenanceKind.replacement),
+      MaintenanceRecord(
+          id: 4,
+          aggregateTypeCode: 'cabin_filter',
+          performedAt: DateTime(2025, 11, 1),
+          mileageAtService: 31250,
+          kind: MaintenanceKind.replacement),
       MaintenanceRecord(
         id: 5,
         aggregateTypeCode: 'engine_oil',
         performedAt: DateTime(2025, 10, 2),
         mileageAtService: 30800,
+        kind: MaintenanceKind.replacement,
         description: 'Плановое ТО-2',
       ),
       MaintenanceRecord(
-          id: 6, aggregateTypeCode: 'engine_oil', performedAt: DateTime(2024, 10, 15), mileageAtService: 15900),
+          id: 6,
+          aggregateTypeCode: 'engine_oil',
+          performedAt: DateTime(2024, 10, 15),
+          mileageAtService: 15900,
+          kind: MaintenanceKind.replacement),
       MaintenanceRecord(
-          id: 7, aggregateTypeCode: 'cabin_filter', performedAt: DateTime(2024, 10, 15), mileageAtService: 15900),
+          id: 7,
+          aggregateTypeCode: 'cabin_filter',
+          performedAt: DateTime(2024, 10, 15),
+          mileageAtService: 15900,
+          kind: MaintenanceKind.replacement),
     ],
     102: [
       MaintenanceRecord(
-          id: 8, aggregateTypeCode: 'cabin_filter', performedAt: DateTime(2026, 5, 15), mileageAtService: 12900),
+          id: 8,
+          aggregateTypeCode: 'cabin_filter',
+          performedAt: DateTime(2026, 5, 15),
+          mileageAtService: 12900,
+          kind: MaintenanceKind.replacement),
       MaintenanceRecord(
-          id: 9, aggregateTypeCode: 'ac_refrigerant', performedAt: DateTime(2026, 4, 2), mileageAtService: 11400),
+          id: 9,
+          aggregateTypeCode: 'ac_refrigerant',
+          performedAt: DateTime(2026, 4, 2),
+          mileageAtService: 11400,
+          kind: MaintenanceKind.replacement),
       MaintenanceRecord(
-          id: 10, aggregateTypeCode: 'gearbox_oil', performedAt: DateTime(2024, 11, 20), mileageAtService: 1200),
+          id: 10,
+          aggregateTypeCode: 'gearbox_oil',
+          performedAt: DateTime(2024, 11, 20),
+          mileageAtService: 1200,
+          kind: MaintenanceKind.replacement),
     ],
   };
 

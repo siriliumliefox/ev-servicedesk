@@ -1,6 +1,8 @@
 // Интерактивная схема автомобиля (вид сверху, перед — вверху): зоны-агрегаты со статусом «светофор».
 // ТЗ раздел 6: читается от 360 px, зона тапа ≥ 44×44; статус — цвет + форма иконки + подпись (Semantics).
+// Контур — SVG-ассет, зоны — виджеты поверх него: тап-зона и Semantics не зависят от рисунка (ADR 0023 п. 1).
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 
 import '../../data/models.dart';
 import '../../theme/app_theme.dart';
@@ -9,11 +11,12 @@ import '../../ui/status_badge.dart';
 /// Положение зоны на схеме (доли ширины/высоты) — по месту агрегата в авто. Агрегаты, добавленные в админ-панели
 /// без своего места на схеме, показываются только в списке под схемой.
 /// Под капотом — агрегаты ДВС (у электромобиля их нет в регламенте модели), за лобовым стеклом — пара климата,
-/// у задней оси — редуктор: схема симметрична и с ДВС, и без него.
+/// у задней оси — редуктор: схема симметрична и с ДВС, и без него. Воздушный фильтр — ниже пары масла: подписи
+/// пары при крупном шрифте (×1.3) переносятся на вторую строку и не должны наезжать на его зону (ADR 0023 п. 6).
 const aggregateSchemePositions = <String, Offset>{
   'engine_oil': Offset(0.31, 0.11),
   'oil_filter': Offset(0.69, 0.11),
-  'air_filter': Offset(0.5, 0.29),
+  'air_filter': Offset(0.5, 0.32),
   'ac_refrigerant': Offset(0.31, 0.58),
   'cabin_filter': Offset(0.69, 0.58),
   'gearbox_oil': Offset(0.5, 0.83),
@@ -32,6 +35,12 @@ class AggregateScheme extends StatelessWidget {
   /// не сходятся и не выходят за кузов.
   static const _labelWidth = 108.0;
 
+  /// Подписи на схеме растут с системным размером текста до 1.3 — дальше зоны сошлись бы; список под схемой
+  /// масштабируется без ограничения (ADR 0023 п. 6).
+  static const maxLabelTextScale = 1.3;
+
+  static const contourAsset = 'assets/scheme/car_top.svg';
+
   @override
   Widget build(BuildContext context) {
     final c = context.evColors;
@@ -47,7 +56,9 @@ class AggregateScheme extends StatelessWidget {
               return Stack(
                 clipBehavior: Clip.none,
                 children: [
-                  Positioned.fill(child: CustomPaint(painter: _CarPainter(c))),
+                  Positioned.fill(
+                    child: SvgPicture.asset(contourAsset, colorMapper: _ContourColors(c), excludeFromSemantics: true),
+                  ),
                   for (final s in statuses)
                     if (aggregateSchemePositions[s.aggregateTypeCode] case final at?)
                       Positioned(
@@ -99,18 +110,21 @@ class _Zone extends StatelessWidget {
             ),
             const SizedBox(height: EvSpace.s1),
             // Подложка — подпись читается поверх контура кузова и колёс.
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: EvSpace.s1),
-              decoration: BoxDecoration(
-                color: c.surface.withValues(alpha: 0.9),
-                borderRadius: const BorderRadius.all(Radius.circular(EvRadius.sm)),
-              ),
-              child: Text(
-                status.aggregateTypeName,
-                textAlign: TextAlign.center,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: EvTypeMobile.caption.copyWith(color: c.fg),
+            MediaQuery.withClampedTextScaling(
+              maxScaleFactor: AggregateScheme.maxLabelTextScale,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: EvSpace.s1),
+                decoration: BoxDecoration(
+                  color: c.surface.withValues(alpha: 0.9),
+                  borderRadius: const BorderRadius.all(Radius.circular(EvRadius.sm)),
+                ),
+                child: Text(
+                  status.aggregateTypeName,
+                  textAlign: TextAlign.center,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: EvTypeMobile.caption.copyWith(color: c.fg),
+                ),
               ),
             ),
           ],
@@ -120,62 +134,31 @@ class _Zone extends StatelessWidget {
   }
 }
 
-/// Контур авто сверху: кузов, колёса, лобовое и заднее стекло.
-class _CarPainter extends CustomPainter {
-  _CarPainter(this.c);
+/// Цвета контура из токенов темы вместо заглушек SVG — по id элемента (assets/scheme/car_top.svg).
+/// Равенство по цветам: от него зависит кэш разобранного SVG (светлая и тёмная тема — разные записи).
+class _ContourColors extends ColorMapper {
+  _ContourColors(EvColors c)
+      : outline = c.borderStrong,
+        body = c.surfaceSubtle,
+        glass = c.border;
 
-  final EvColors c;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final w = size.width;
-    final h = size.height;
-    final body = RRect.fromRectAndCorners(
-      Rect.fromLTWH(w * 0.1, h * 0.02, w * 0.8, h * 0.96),
-      topLeft: Radius.circular(w * 0.3),
-      topRight: Radius.circular(w * 0.3),
-      bottomLeft: Radius.circular(w * 0.2),
-      bottomRight: Radius.circular(w * 0.2),
-    );
-    final wheel = Paint()..color = c.borderStrong;
-    for (final y in [0.18, 0.74]) {
-      for (final x in [0.04, 0.86]) {
-        canvas.drawRRect(
-          RRect.fromRectAndRadius(Rect.fromLTWH(w * x, h * y, w * 0.1, h * 0.13), Radius.circular(w * 0.03)),
-          wheel,
-        );
-      }
-    }
-    canvas.drawRRect(body, Paint()..color = c.surfaceSubtle);
-    canvas.drawRRect(
-      body,
-      Paint()
-        ..color = c.borderStrong
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 2,
-    );
-    final glass = Paint()..color = c.border;
-    // Лобовое стекло и заднее стекло.
-    canvas.drawPath(
-      Path()
-        ..moveTo(w * 0.2, h * 0.47)
-        ..quadraticBezierTo(w * 0.5, h * 0.43, w * 0.8, h * 0.47)
-        ..lineTo(w * 0.74, h * 0.51)
-        ..quadraticBezierTo(w * 0.5, h * 0.48, w * 0.26, h * 0.51)
-        ..close(),
-      glass,
-    );
-    canvas.drawPath(
-      Path()
-        ..moveTo(w * 0.26, h * 0.72)
-        ..quadraticBezierTo(w * 0.5, h * 0.75, w * 0.74, h * 0.72)
-        ..lineTo(w * 0.78, h * 0.76)
-        ..quadraticBezierTo(w * 0.5, h * 0.8, w * 0.22, h * 0.76)
-        ..close(),
-      glass,
-    );
-  }
+  final Color outline;
+  final Color body;
+  final Color glass;
 
   @override
-  bool shouldRepaint(_CarPainter old) => old.c != c;
+  Color substitute(String? id, String elementName, String attributeName, Color color) => switch (id) {
+        'body' when attributeName == 'fill' => body,
+        'body' => outline,
+        final String id when id.startsWith('wheel-') => outline,
+        final String id when id.startsWith('glass-') => glass,
+        _ => color,
+      };
+
+  @override
+  bool operator ==(Object other) =>
+      other is _ContourColors && other.outline == outline && other.body == body && other.glass == glass;
+
+  @override
+  int get hashCode => Object.hash(outline, body, glass);
 }

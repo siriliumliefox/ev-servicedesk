@@ -1,0 +1,93 @@
+{
+  "description": "Глава 19 (ADR 0023 п. 7): 5 тестовых авто для сверки схемы агрегатов с backend. Пороги по умолчанию 70/100 (глава 5, ADR 0009). Создаёт backend/scripts/seed_scheme_vehicles.py на стеке; сверяют seed (API ↔ таблица), mobile/test_api_e2e (клиент ↔ таблица), integration_test/scheme_test.dart (экран ↔ API) и владелец на iPhone (экран ↔ таблица). Пробег замены — mileage_at_replacement, дата — сегодня минус replaced_days_ago; percentage — только у интервалов по пробегу (у интервалов по времени процент зависит от даты прогона).",
+  "thresholds": { "yellow_from_percent": 70, "red_above_percent": 100 },
+  "regulations": {
+    "Li Auto L7": {
+      "engine_oil": { "interval_km": 10000 },
+      "oil_filter": { "interval_km": 10000 },
+      "air_filter": { "interval_km": 20000 },
+      "cabin_filter": { "interval_km": 20000 },
+      "ac_refrigerant": { "interval_months": 24 },
+      "gearbox_oil": { "interval_km": 60000 }
+    },
+    "Voyah Free": {
+      "engine_oil": { "interval_km": 10000 },
+      "oil_filter": { "interval_km": 10000 },
+      "air_filter": { "interval_km": 20000 },
+      "cabin_filter": { "interval_km": 20000 },
+      "ac_refrigerant": { "interval_months": 24 },
+      "gearbox_oil": { "interval_km": 60000 }
+    },
+    "Zeekr 001": {
+      "gearbox_oil": { "interval_km": 60000 },
+      "cabin_filter": { "interval_km": 20000 },
+      "ac_refrigerant": { "interval_months": 24 }
+    }
+  },
+  "vehicles": [
+    {
+      "title": "1 — всё в норме",
+      "model": "Li Auto L7",
+      "vin": "LLXL7000000190001",
+      "mileage": 30000,
+      "aggregates": {
+        "engine_oil": { "replaced_mileage": 28000, "replaced_days_ago": 30, "status": "green", "percentage": 20.0 },
+        "oil_filter": { "replaced_mileage": 28000, "replaced_days_ago": 30, "status": "green", "percentage": 20.0 },
+        "air_filter": { "replaced_mileage": 25000, "replaced_days_ago": 90, "status": "green", "percentage": 25.0 },
+        "cabin_filter": { "replaced_mileage": 25000, "replaced_days_ago": 90, "status": "green", "percentage": 25.0 },
+        "ac_refrigerant": { "replaced_mileage": 25000, "replaced_days_ago": 90, "status": "green" },
+        "gearbox_oil": { "replaced_mileage": 25000, "replaced_days_ago": 90, "status": "green", "percentage": 8.3 }
+      }
+    },
+    {
+      "title": "2 — жёлтый ровно на пороге 70,0 %",
+      "model": "Voyah Free",
+      "vin": "LDPFREE0000190002",
+      "mileage": 17000,
+      "aggregates": {
+        "engine_oil": { "replaced_mileage": 10000, "replaced_days_ago": 120, "status": "yellow", "percentage": 70.0 },
+        "oil_filter": { "replaced_mileage": 14000, "replaced_days_ago": 60, "status": "green", "percentage": 30.0 },
+        "air_filter": { "replaced_mileage": 14000, "replaced_days_ago": 60, "status": "green", "percentage": 15.0 },
+        "cabin_filter": { "replaced_mileage": 14000, "replaced_days_ago": 60, "status": "green", "percentage": 15.0 },
+        "ac_refrigerant": { "replaced_mileage": 14000, "replaced_days_ago": 60, "status": "green" },
+        "gearbox_oil": { "replaced_mileage": 14000, "replaced_days_ago": 60, "status": "green", "percentage": 5.0 }
+      }
+    },
+    {
+      "title": "3 — красный сразу за порогом 100,1 %",
+      "model": "Li Auto L7",
+      "vin": "LLXL7000000190003",
+      "mileage": 20010,
+      "aggregates": {
+        "engine_oil": { "replaced_mileage": 10000, "replaced_days_ago": 150, "status": "red", "percentage": 100.1 },
+        "oil_filter": { "replaced_mileage": 10000, "replaced_days_ago": 150, "status": "red", "percentage": 100.1 },
+        "air_filter": { "replaced_mileage": 15000, "replaced_days_ago": 60, "status": "green", "percentage": 25.0 },
+        "cabin_filter": { "replaced_mileage": 15000, "replaced_days_ago": 60, "status": "green", "percentage": 25.0 },
+        "ac_refrigerant": { "replaced_mileage": 15000, "replaced_days_ago": 60, "status": "green" },
+        "gearbox_oil": { "replaced_mileage": 15000, "replaced_days_ago": 60, "status": "green", "percentage": 8.3 }
+      }
+    },
+    {
+      "title": "4 — новое авто без истории замен",
+      "model": "Zeekr 001",
+      "vin": "L6TZ0010000190004",
+      "mileage": 0,
+      "aggregates": {
+        "gearbox_oil": { "status": "unknown" },
+        "cabin_filter": { "status": "unknown" },
+        "ac_refrigerant": { "status": "unknown" }
+      }
+    },
+    {
+      "title": "5 — смешанное, электромобиль с редуктором",
+      "model": "Zeekr 001",
+      "vin": "L6TZ0010000190005",
+      "mileage": 50000,
+      "aggregates": {
+        "gearbox_oil": { "replaced_mileage": 8060, "replaced_days_ago": 200, "status": "green", "percentage": 69.9 },
+        "cabin_filter": { "replaced_mileage": 30000, "replaced_days_ago": 200, "status": "yellow", "percentage": 100.0 },
+        "ac_refrigerant": { "replaced_mileage": 30000, "replaced_days_ago": 913, "status": "red" }
+      }
+    }
+  ]
+}

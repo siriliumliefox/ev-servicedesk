@@ -7,6 +7,7 @@ import '../../theme/app_theme.dart';
 import '../../ui/fact_row.dart';
 import '../../ui/format.dart';
 import '../../ui/states.dart';
+import 'maintenance_history.dart';
 
 class VehicleCardScreen extends StatelessWidget {
   const VehicleCardScreen({super.key, required this.vehicleId});
@@ -64,7 +65,15 @@ class VehicleCardScreen extends StatelessWidget {
           const SizedBox(height: EvSpace.s6),
           Text('История ТО', style: text.titleMedium),
           const SizedBox(height: EvSpace.s2),
-          _HistoryList(key: ValueKey((vehicle.id, app.revision)), vehicleId: vehicle.id),
+          MaintenanceHistory(
+            key: ValueKey((vehicle.id, app.revision)),
+            vehicleId: vehicle.id,
+            empty: const EmptyState(
+              icon: Icons.history,
+              title: 'Работ пока не было',
+              message: 'Записи появятся после ТО в сервисном центре',
+            ),
+          ),
         ],
       ),
     );
@@ -148,99 +157,6 @@ class _MileageDialogState extends State<_MileageDialog> {
           onPressed: _busy ? null : _submit,
           child: _busy ? const ButtonProgress() : const Text('Сохранить'),
         ),
-      ],
-    );
-  }
-}
-
-/// История ТО постранично: «Показать ещё» догружает следующую страницу; ошибка догрузки не стирает загруженное.
-class _HistoryList extends StatefulWidget {
-  const _HistoryList({super.key, required this.vehicleId});
-
-  final int vehicleId;
-
-  @override
-  State<_HistoryList> createState() => _HistoryListState();
-}
-
-class _HistoryListState extends State<_HistoryList> {
-  final List<MaintenanceRecord> _items = [];
-  int _page = 0;
-  bool _hasMore = true;
-  bool _loading = false;
-  Object? _error;
-
-  @override
-  void initState() {
-    super.initState();
-    _loadMore();
-  }
-
-  Future<void> _loadMore() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
-    try {
-      final page = await AppScope.read(context).repository.maintenanceRecordsPage(widget.vehicleId, page: _page + 1);
-      if (!mounted) return;
-      setState(() {
-        _items.addAll(page.items);
-        _page = page.page;
-        _hasMore = page.hasMore;
-      });
-    } on Exception catch (e) {
-      if (mounted) setState(() => _error = e);
-    } finally {
-      if (mounted) setState(() => _loading = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (_items.isEmpty) {
-      if (_loading) {
-        return const Padding(padding: EdgeInsets.all(EvSpace.s6), child: Center(child: CircularProgressIndicator()));
-      }
-      if (_error != null) return ErrorState(error: _error!, onRetry: _loadMore);
-      return const EmptyState(
-        icon: Icons.history,
-        title: 'Работ пока не было',
-        message: 'Записи появятся после ТО в сервисном центре',
-      );
-    }
-    final c = context.evColors;
-    return Column(
-      children: [
-        Card(
-          child: Column(
-            children: [
-              for (final (i, r) in _items.indexed) ...[
-                if (i > 0) const Divider(height: 1),
-                ListTile(
-                  key: Key('record-${r.id}'),
-                  leading: const Icon(Icons.build_circle_outlined),
-                  title: Text(formatDate(r.performedAt)),
-                  subtitle: Text([formatKm(r.mileageAtService), if (r.description != null) r.description!].join(' · ')),
-                ),
-              ],
-            ],
-          ),
-        ),
-        if (_error != null)
-          Padding(
-            padding: const EdgeInsets.only(top: EvSpace.s2),
-            child: Text('$_error', style: TextStyle(color: c.dangerText)),
-          ),
-        if (_hasMore)
-          Padding(
-            padding: const EdgeInsets.only(top: EvSpace.s2),
-            child: TextButton(
-              key: const Key('more-records'),
-              onPressed: _loading ? null : _loadMore,
-              child: _loading ? const ButtonProgress() : Text(_error == null ? 'Показать ещё' : 'Повторить'),
-            ),
-          ),
       ],
     );
   }
