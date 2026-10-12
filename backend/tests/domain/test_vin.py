@@ -13,7 +13,7 @@ from app.domain.vehicles.vin import (
     MockVinDecoder,
     validate_vin,
 )
-from tests.api.conftest import contract
+from tests.support.contract import contract
 
 VALID = [
     "L6TZ0010000000001",

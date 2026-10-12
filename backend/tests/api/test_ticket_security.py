@@ -39,8 +39,6 @@ from tests.api.conftest import (
     add_vehicle,
     api_settings,
     bearer,
-    contract,
-    contract_operation,
 )
 from tests.api.ticket_world import (
     ADMIN,
@@ -66,6 +64,7 @@ from tests.api.ticket_ws import (
     receive_event,
     run_events,
 )
+from tests.support.contract import contract, contract_operation
 
 NEW_OWNER_PHONE = "+375296610007"
 GHOST_ID = 10**9  # id, которого нет

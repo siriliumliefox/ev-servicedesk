@@ -55,6 +55,18 @@ def _now() -> datetime:
 # ---------- Push-токены (ADR 0019 п. 8) ----------
 
 
+def _lock_eligible_receiver(db: Session, user_id: int) -> None:
+    """Блокирует пользователя (как отзыв согласия) и требует права на уведомления."""
+    lock_user(db, user_id)
+    if db.scalar(select(AppUser.id).where(AppUser.id == user_id, *eligible_client())) is None:
+        db.rollback()
+        raise ApiError(
+            422,
+            "PD_CONSENT_REQUIRED",
+            "Уведомления недоступны без согласия на обработку персональных данных",
+        )
+
+
 def register_token(db: Session, user: AppUser, token: str) -> None:
     """POST /push-tokens: свой токен — обновить; чужой (сменили аккаунт) — перепривязать.
 
@@ -67,15 +79,7 @@ def register_token(db: Session, user: AppUser, token: str) -> None:
     оставит активный токен.
     """
     for _ in range(2):
-        lock_user(db, user.id)
-        allowed = db.scalar(select(AppUser.id).where(AppUser.id == user.id, *eligible_client()))
-        if allowed is None:
-            db.rollback()
-            raise ApiError(
-                422,
-                "PD_CONSENT_REQUIRED",
-                "Уведомления недоступны без согласия на обработку персональных данных",
-            )
+        _lock_eligible_receiver(db, user.id)
         current = db.scalars(
             select(PushToken)
             .where(PushToken.token == token, PushToken.revoked_at.is_(None))
@@ -143,12 +147,7 @@ def eligible_client() -> list[ColumnElement[bool]]:
             PdConsent.user_id == AppUser.id, PdConsent.withdrawn_at.is_(None)
         )
     )
-    return [
-        AppUser.role == UserRole.CLIENT,
-        AppUser.is_active.is_(True),
-        AppUser.anonymized_at.is_(None),
-        consent,
-    ]
+    return [AppUser.role == UserRole.CLIENT, AppUser.is_available, consent]
 
 
 def _owners(model_id: int, firmware: FirmwareRelease | None) -> Select:

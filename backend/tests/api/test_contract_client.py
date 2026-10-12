@@ -10,7 +10,8 @@ from jsonschema.exceptions import ValidationError
 
 from app.api.deps import get_current_user
 from app.core.errors import ApiError
-from tests.api.conftest import API, assert_contract, operation_for
+from tests.api.conftest import API
+from tests.support.contract import assert_contract, operation_for
 
 
 @pytest.mark.parametrize(

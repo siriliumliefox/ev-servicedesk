@@ -21,12 +21,15 @@ import secrets
 import shlex
 import subprocess
 import sys
-from datetime import datetime, timedelta
+from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
 import httpx
+from jsonschema.exceptions import ValidationError
 
 BACKEND = Path(__file__).resolve().parents[1]
 if str(BACKEND) not in sys.path:
@@ -41,6 +44,8 @@ AGGREGATE = "engine_oil"
 INTERVAL_KM = 10_000
 MILEAGE = 9_500  # осталось 500 км ≤ 1000 — напоминание «скоро замена» (ADR 0019 п. 6)
 
+Headers = dict[str, str]
+
 
 class Failed(Exception):
     pass
@@ -51,8 +56,12 @@ def check(condition: bool, message: str) -> None:
         raise Failed(message)
 
 
-def bearer(token: str) -> dict[str, str]:
+def bearer(token: str) -> Headers:
     return {"Authorization": f"Bearer {token}"}
+
+
+def digits(n: int) -> str:
+    return "".join(secrets.choice("0123456789") for _ in range(n))
 
 
 class Api:
@@ -68,10 +77,8 @@ class Api:
         check(operation_id is not None, f"{method} {path}: операции нет в контракте")
         try:
             assert_contract(response, operation_id)
-        except AssertionError as exc:
-            raise Failed(f"{operation_id}: ответ не по контракту — {exc}") from exc
-        except Exception as exc:  # jsonschema.ValidationError и т. п.
-            raise Failed(f"{operation_id}: тело не по схеме — {exc}".splitlines()[0]) from exc
+        except (AssertionError, ValidationError) as exc:
+            raise Failed(f"{operation_id}: ответ не по контракту — {exc}".splitlines()[0]) from exc
         self.checked += 1
         check(
             response.status_code == expect,
@@ -90,311 +97,267 @@ class Jobs:
     def __init__(self, runner: str) -> None:
         self.prefix = shlex.split(runner)
 
-    def run(self, *command: str, stdin: str | None = None) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
+    def run(self, *command: str, stdin: str | None = None) -> str:
+        result = subprocess.run(
             [*self.prefix, *command], input=stdin, capture_output=True, text=True, timeout=300
         )
-
-    def ok(self, *command: str) -> str:
-        result = self.run(*command)
         check(
             result.returncode == 0,
-            f"{' '.join(command)}: код {result.returncode}\n" f"{result.stdout}{result.stderr}",
+            f"{' '.join(command)}: код {result.returncode}\n{result.stdout}{result.stderr}",
         )
         return result.stdout
 
 
-def random_vin() -> str:
-    return ZEEKR_VIN_PREFIX + "".join(secrets.choice("0123456789") for _ in range(10))
+@dataclass(frozen=True)
+class Client:
+    headers: Headers
+    refresh_token: str
+    user_id: int
+    push_token: str
 
 
-def staff_phone() -> str:
-    return "+3752999" + "".join(secrets.choice("0123456789") for _ in range(5))
+# ---------- Шаги сценария: явные входы и результаты ----------
 
 
-class Scenario:
-    def __init__(self, api: Api, jobs: Jobs, phone: str, code: str) -> None:
-        self.api, self.jobs, self.phone, self.code = api, jobs, phone, code
-        self.today = datetime.now(MINSK).date()
-        self.period = {"date_from": str(self.today), "date_to": str(self.today)}
-        self.s: dict[str, Any] = {}
-
-    # ---- шаги ----
-
-    def health(self) -> None:
-        r = self.api.http.get("/health")
-        check(r.status_code == 200, f"/health → {r.status_code}")
-
-    def admin(self) -> None:
-        phone, password = staff_phone(), secrets.token_urlsafe(24)
-        result = self.jobs.run(
-            "python", "-m", "app.cli", "create-admin", "--phone", phone, stdin=password + "\n"
-        )
-        check(result.returncode == 0, f"create-admin: {result.stdout}{result.stderr}")
-        body = self.api.json(
-            "POST", "/auth/staff/login", json={"phone": phone, "password": password}
-        )
-        self.s["admin"] = bearer(body["access_token"])
-
-    def engineer(self) -> None:
-        phone, password = staff_phone(), secrets.token_urlsafe(24)
-        user = self.api.json(
-            "POST",
-            "/users",
-            201,
-            headers=self.s["admin"],
-            json={"phone": phone, "role": "engineer", "password": password},
-        )
-        check(user["role"] == "engineer" and user["is_active"], "сотрудник создан не инженером")
-        body = self.api.json(
-            "POST", "/auth/staff/login", json={"phone": phone, "password": password}
-        )
-        self.s["engineer"] = bearer(body["access_token"])
-        self.s["engineer_id"] = user["id"]
-
-    def unblock_test_client(self) -> None:
-        """Повторный запуск: клиент прошлого прогона заблокирован в конце — разблокировать."""
-        found = self.api.json(
-            "GET",
-            "/users",
-            headers=self.s["admin"],
-            params={"search": self.phone, "role": "client"},
-        )
-        for user in found["items"]:
-            if user["phone"] == self.phone and not user["is_active"]:
-                self.api.json(
-                    "PATCH",
-                    f"/users/{user['id']}",
-                    headers=self.s["admin"],
-                    json={"is_active": True},
-                )
-
-    def analytics_snapshot(self) -> dict[str, Any]:
-        self.jobs.ok("python", "-m", "app.workers.analytics", "--once")
-        admin = self.s["admin"]
-        resolution = self.api.json(
-            "GET", "/analytics/ticket-resolution", headers=admin, params=self.period
-        )
-        conversion = self.api.json(
-            "GET", "/analytics/maintenance-conversion", headers=admin, params=self.period
-        )
-        models = self.api.json(
-            "GET",
-            "/analytics/problem-models",
-            headers=admin,
-            params=self.period | {"page_size": 100},
-        )
-        zeekr = next(
-            (m for m in models["items"] if m["vehicle_model"]["id"] == self.s["model"]), None
-        )
-        return {
-            "created": resolution["tickets_created"],
-            "resolved": resolution["tickets_resolved"],
-            "tickets": conversion["tickets_total"],
-            "tickets_to": conversion["tickets_with_maintenance"],
-            "recipients": conversion["notifications_recipients"],
-            "opened": conversion["notifications_opened"],
-            "recipients_to": conversion["recipients_with_maintenance"],
-            "model_tickets": zeekr["tickets_total"] if zeekr else 0,
-        }
-
-    def regulation(self) -> None:
-        models = self.api.json(
-            "GET", "/vehicle-models", headers=self.s["admin"], params={"search": "Zeekr"}
-        )
-        check(models["items"], "модели Zeekr нет в справочнике")
-        self.s["model"] = models["items"][0]["id"]
-        self.api.json(
-            "POST",
-            "/maintenance-regulations",
-            201,
-            headers=self.s["admin"],
-            json={
-                "vehicle_model_id": self.s["model"],
-                "aggregate_type_code": AGGREGATE,
-                "interval_km": INTERVAL_KM,
-            },
-        )
-        self.s["before"] = self.analytics_snapshot()
-
-    def register_client(self) -> None:
-        self.api.json("POST", "/auth/phone/request-code", json={"phone": self.phone})
-        body = self.api.json(
-            "POST",
-            "/auth/phone/verify-code",
-            json={
-                "phone": self.phone,
-                "code": self.code,
-                "pd_policy_version": POLICY,
-            },
-        )
-        self.s["client"] = bearer(body["access_token"])
-        self.s["refresh"] = body["refresh_token"]
-        self.s["client_id"] = self.api.json("GET", "/me", headers=self.s["client"])["id"]
-        self.s["push"] = "e2e-fcm-" + secrets.token_hex(24)
-        self.api.call(
-            "POST", "/push-tokens", 201, headers=self.s["client"], json={"token": self.s["push"]}
-        )
-
-    def vehicle(self) -> None:
-        car = self.api.json(
-            "POST", "/vehicles", 201, headers=self.s["client"], json={"vin": random_vin()}
-        )
-        check(car["vehicle_model"]["brand"] == "Zeekr", "VIN не распознан как Zeekr")
-        self.s["vehicle"] = vid = car["id"]
-        # Базовая замена масла (администратор, без тикета) — отсчёт ресурса.
-        self.api.json(
-            "POST",
-            f"/vehicles/{vid}/aggregate-statuses/{AGGREGATE}/replace",
-            headers=self.s["admin"],
-            json={"replaced_at": str(self.today - timedelta(days=60)), "mileage_at_replacement": 0},
-        )
-        self.api.json(
-            "PATCH", f"/vehicles/{vid}/mileage", headers=self.s["client"], json={"mileage": MILEAGE}
-        )
-        statuses = self.api.json(
-            "GET", f"/vehicles/{vid}/aggregate-statuses", headers=self.s["client"]
-        )
-        oil = next(s for s in statuses["items"] if s["aggregate_type_code"] == AGGREGATE)
-        check(oil["status"] == "yellow", f"статус масла {oil['status']}, ожидался yellow")
-
-    def reminder(self) -> None:
-        out = self.jobs.ok("python", "-m", "app.workers.maintenance_reminders")
-        check("создано: 0" not in out, f"напоминание не создано: {out.strip()}")
-        feed = self.api.json("GET", "/notifications", headers=self.s["client"])
-        reminder = next(
-            (
-                n
-                for n in feed["items"]
-                if n["type"] == "maintenance" and n["vehicle_id"] == self.s["vehicle"]
-            ),
-            None,
-        )
-        check(reminder is not None, "напоминания о ТО нет в ленте клиента")
-        self.s["reminder"] = rid = reminder["id"]
-        # Клиент нажал на push на своём устройстве: открытие и прочтение.
-        self.api.call(
-            "POST",
-            f"/notifications/{rid}/opened",
-            204,
-            headers=self.s["client"],
-            json={"token": self.s["push"]},
-        )
-        feed = self.api.json("GET", "/notifications", headers=self.s["client"])
-        item = next(n for n in feed["items"] if n["id"] == rid)
-        check(item["read_at"] is not None, "открытое уведомление не отмечено прочитанным")
-
-    def ticket(self) -> None:
-        ticket = self.api.json(
-            "POST",
-            "/tickets",
-            201,
-            headers=self.s["client"],
-            json={
-                "vehicle_id": self.s["vehicle"],
-                "category": "maintenance",
-                "description": "Пришло напоминание о замене масла",
-            },
-        )
-        self.s["ticket"] = tid = ticket["id"]
-        check(ticket["status"] == "new", "новый тикет не в статусе new")
-        eng = self.s["engineer"]
-        queue = self.api.json("GET", "/tickets", headers=eng, params={"status": "new"})
-        check(any(t["id"] == tid for t in queue["items"]), "тикета нет в очереди инженера")
-        card = self.api.json("GET", f"/tickets/{tid}", headers=eng)
-        oil = next(
-            s
-            for s in card["vehicle_context"]["aggregate_statuses"]
-            if s["aggregate_type_code"] == AGGREGATE
-        )
-        check(oil["status"] == "yellow", "vehicle_context тикета без статуса агрегата")
-        self.api.json("POST", f"/tickets/{tid}/claim", headers=eng)
-        self.api.json(
-            "POST",
-            f"/tickets/{tid}/messages",
-            201,
-            headers=eng,
-            json={"body": "Записали вас на замену масла"},
-        )
-        replaced = self.api.json(
-            "POST",
-            f"/vehicles/{self.s['vehicle']}/aggregate-statuses/{AGGREGATE}/replace",
-            headers=eng,
-            json={
-                "replaced_at": str(self.today),
-                "mileage_at_replacement": MILEAGE,
-                "description": "Замена масла по обращению",
-            },
-        )
-        check(replaced["status"] == "green", f"после замены статус {replaced['status']}")
-        self.api.json("PATCH", f"/tickets/{tid}/status", headers=eng, json={"status": "resolved"})
-
-    def client_sees_result(self) -> None:
-        client, tid = self.s["client"], self.s["ticket"]
-        check(
-            self.api.json("GET", f"/tickets/{tid}", headers=client)["status"] == "resolved",
-            "клиент не видит решённый тикет",
-        )
-        messages = self.api.json("GET", f"/tickets/{tid}/messages", headers=client)
-        check(len(messages["items"]) == 1, "клиент не видит ответ инженера")
-        records = self.api.json(
-            "GET", f"/vehicles/{self.s['vehicle']}/maintenance-records", headers=client
-        )
-        # Привязку работы к тикету показывает аналитика (тикет → ТО), в API истории её нет.
-        check(
-            any(
-                r["aggregate_type_code"] == AGGREGATE and r["mileage_at_service"] == MILEAGE
-                for r in records["items"]
-            ),
-            "замена по тикету не попала в историю ТО авто",
-        )
-
-    def analytics(self) -> None:
-        after, before = self.analytics_snapshot(), self.s["before"]
-        delta = {k: after[k] - before[k] for k in after}
-        expected = {
-            "created": 1,
-            "resolved": 1,
-            "tickets": 1,
-            "tickets_to": 1,
-            "recipients": 1,
-            "opened": 1,
-            "recipients_to": 1,
-            "model_tickets": 1,
-        }
-        check(delta == expected, f"прирост показателей {delta}, ожидался {expected}")
-
-    def integrity(self) -> None:
-        self.jobs.ok("python", "-m", "app.tools.integrity")
-
-    def block_client(self) -> None:
-        self.api.json(
-            "PATCH",
-            f"/users/{self.s['client_id']}",
-            headers=self.s["admin"],
-            json={"is_active": False},
-        )
-        self.api.call("GET", "/me", 401, headers=self.s["client"])
-        self.api.call("POST", "/auth/refresh", 401, json={"refresh_token": self.s["refresh"]})
-        self.api.call("GET", f"/tickets/{self.s['ticket']}", 200, headers=self.s["admin"])
+def check_health(api: Api) -> None:
+    r = api.http.get("/health")
+    check(r.status_code == 200, f"/health → {r.status_code}")
 
 
-STEPS: list[tuple[str, str]] = [
-    ("health", "API отвечает"),
-    ("admin", "CLI создаёт администратора, вход по паролю"),
-    ("engineer", "администратор создаёт инженера (Users), вход"),
-    ("unblock_test_client", "тестовый клиент прошлого прогона разблокирован"),
-    ("regulation", "регламент ТО модели, снимок аналитики «до»"),
-    ("register_client", "регистрация клиента по SMS-коду, согласие ПД, push-токен"),
-    ("vehicle", "авто по VIN, базовая замена, пробег → статус «скоро замена»"),
-    ("reminder", "напоминание о ТО в ленте, открытие push"),
-    ("ticket", "тикет → очередь → взят → ответ → замена по тикету → решён"),
-    ("client_sees_result", "клиент видит решение, переписку и запись ТО"),
-    ("analytics", "витрина обновлена: +1 тикет, решение, обе конверсии, проблемная модель"),
-    ("integrity", "аудит целостности — 0 нарушений"),
-    ("block_client", "блокировка клиента: 401, сессии завершены, тикет сохранён"),
-    ("integrity", "аудит целостности после блокировки — 0 нарушений"),
-]
+def staff_login(api: Api, phone: str, password: str) -> Headers:
+    body = api.json("POST", "/auth/staff/login", json={"phone": phone, "password": password})
+    return bearer(body["access_token"])
+
+
+def bootstrap_admin(api: Api, jobs: Jobs) -> Headers:
+    phone, password = "+3752999" + digits(5), secrets.token_urlsafe(24)
+    jobs.run("python", "-m", "app.cli", "create-admin", "--phone", phone, stdin=password + "\n")
+    return staff_login(api, phone, password)
+
+
+def create_engineer(api: Api, admin: Headers) -> Headers:
+    phone, password = "+3752999" + digits(5), secrets.token_urlsafe(24)
+    body = {"phone": phone, "role": "engineer", "password": password}
+    user = api.json("POST", "/users", 201, headers=admin, json=body)
+    check(user["role"] == "engineer" and user["is_active"], "сотрудник создан не инженером")
+    return staff_login(api, phone, password)
+
+
+def unblock_test_client(api: Api, admin: Headers, phone: str) -> None:
+    """Повторный запуск: клиент прошлого прогона заблокирован в конце — разблокировать."""
+    params = {"search": phone, "role": "client"}
+    for user in api.json("GET", "/users", headers=admin, params=params)["items"]:
+        if user["phone"] == phone and not user["is_active"]:
+            api.json("PATCH", f"/users/{user['id']}", headers=admin, json={"is_active": True})
+
+
+def zeekr_regulation(api: Api, admin: Headers) -> int:
+    models = api.json("GET", "/vehicle-models", headers=admin, params={"search": "Zeekr"})
+    check(models["items"], "модели Zeekr нет в справочнике")
+    model_id = models["items"][0]["id"]
+    body = {
+        "vehicle_model_id": model_id,
+        "aggregate_type_code": AGGREGATE,
+        "interval_km": INTERVAL_KM,
+    }
+    api.json("POST", "/maintenance-regulations", 201, headers=admin, json=body)
+    return model_id
+
+
+def analytics(api: Api, jobs: Jobs, admin: Headers, model_id: int, day: date) -> dict[str, int]:
+    """Показатели за день после обновления витрины (сравниваются как прирост)."""
+    jobs.run("python", "-m", "app.workers.analytics", "--once")
+    period = {"date_from": str(day), "date_to": str(day)}
+    resolution = api.json("GET", "/analytics/ticket-resolution", headers=admin, params=period)
+    conversion = api.json("GET", "/analytics/maintenance-conversion", headers=admin, params=period)
+    models = api.json(
+        "GET", "/analytics/problem-models", headers=admin, params=period | {"page_size": 100}
+    )
+    zeekr = [m["tickets_total"] for m in models["items"] if m["vehicle_model"]["id"] == model_id]
+    return {
+        "tickets_created": resolution["tickets_created"],
+        "tickets_resolved": resolution["tickets_resolved"],
+        "tickets_total": conversion["tickets_total"],
+        "tickets_with_maintenance": conversion["tickets_with_maintenance"],
+        "notifications_recipients": conversion["notifications_recipients"],
+        "notifications_opened": conversion["notifications_opened"],
+        "recipients_with_maintenance": conversion["recipients_with_maintenance"],
+        "problem_model_tickets": sum(zeekr),
+    }
+
+
+def register_client(api: Api, phone: str, code: str) -> Client:
+    api.json("POST", "/auth/phone/request-code", json={"phone": phone})
+    body = {"phone": phone, "code": code, "pd_policy_version": POLICY}
+    tokens = api.json("POST", "/auth/phone/verify-code", json=body)
+    headers = bearer(tokens["access_token"])
+    push_token = "e2e-fcm-" + secrets.token_hex(24)
+    api.call("POST", "/push-tokens", 201, headers=headers, json={"token": push_token})
+    user_id = api.json("GET", "/me", headers=headers)["id"]
+    return Client(headers, tokens["refresh_token"], user_id, push_token)
+
+
+def due_soon_vehicle(api: Api, admin: Headers, client: Client, today: date) -> int:
+    """Авто с базовой заменой масла и пробегом до «скоро замена»; возвращает id авто."""
+    body = {"vin": ZEEKR_VIN_PREFIX + digits(10)}
+    car = api.json("POST", "/vehicles", 201, headers=client.headers, json=body)
+    check(car["vehicle_model"]["brand"] == "Zeekr", "VIN не распознан как Zeekr")
+    vid = car["id"]
+    baseline = {"replaced_at": str(today - timedelta(days=60)), "mileage_at_replacement": 0}
+    replace_path = f"/vehicles/{vid}/aggregate-statuses/{AGGREGATE}/replace"
+    api.json("POST", replace_path, headers=admin, json=baseline)
+    api.json("PATCH", f"/vehicles/{vid}/mileage", headers=client.headers, json={"mileage": MILEAGE})
+    statuses = api.json("GET", f"/vehicles/{vid}/aggregate-statuses", headers=client.headers)
+    oil = [s["status"] for s in statuses["items"] if s["aggregate_type_code"] == AGGREGATE]
+    check(oil == ["yellow"], f"статус масла {oil}, ожидался yellow")
+    return vid
+
+
+def open_reminder(api: Api, jobs: Jobs, client: Client, vid: int) -> None:
+    out = jobs.run("python", "-m", "app.workers.maintenance_reminders")
+    check("создано: 0" not in out, f"напоминание не создано: {out.strip()}")
+    feed = api.json("GET", "/notifications", headers=client.headers)["items"]
+    reminders = [n["id"] for n in feed if n["type"] == "maintenance" and n["vehicle_id"] == vid]
+    check(len(reminders) == 1, "напоминания о ТО нет в ленте клиента")
+    rid = reminders[0]
+    # Клиент нажал на push на своём устройстве: открытие и прочтение.
+    body = {"token": client.push_token}
+    api.call("POST", f"/notifications/{rid}/opened", 204, headers=client.headers, json=body)
+    feed = api.json("GET", "/notifications", headers=client.headers)["items"]
+    read = [n["read_at"] for n in feed if n["id"] == rid]
+    check(read != [None], "открытое уведомление не отмечено прочитанным")
+
+
+def resolve_ticket(api: Api, client: Client, engineer: Headers, vid: int, today: date) -> int:
+    """Тикет клиента → очередь → взят → ответ → замена по тикету → решён; возвращает id."""
+    body = {
+        "vehicle_id": vid,
+        "category": "maintenance",
+        "description": "Пришло напоминание о замене масла",
+    }
+    ticket = api.json("POST", "/tickets", 201, headers=client.headers, json=body)
+    tid = ticket["id"]
+    check(ticket["status"] == "new", "новый тикет не в статусе new")
+    queue = api.json("GET", "/tickets", headers=engineer, params={"status": "new"})["items"]
+    check(any(t["id"] == tid for t in queue), "тикета нет в очереди инженера")
+    context = api.json("GET", f"/tickets/{tid}", headers=engineer)["vehicle_context"]
+    check(
+        any(
+            s["aggregate_type_code"] == AGGREGATE and s["status"] == "yellow"
+            for s in context["aggregate_statuses"]
+        ),
+        "vehicle_context тикета без статуса агрегата",
+    )
+    api.json("POST", f"/tickets/{tid}/claim", headers=engineer)
+    message = {"body": "Записали вас на замену масла"}
+    api.json("POST", f"/tickets/{tid}/messages", 201, headers=engineer, json=message)
+    replacement = {
+        "replaced_at": str(today),
+        "mileage_at_replacement": MILEAGE,
+        "description": "Замена масла по обращению",
+    }
+    replace_path = f"/vehicles/{vid}/aggregate-statuses/{AGGREGATE}/replace"
+    replaced = api.json("POST", replace_path, headers=engineer, json=replacement)
+    check(replaced["status"] == "green", f"после замены статус {replaced['status']}")
+    api.json("PATCH", f"/tickets/{tid}/status", headers=engineer, json={"status": "resolved"})
+    return tid
+
+
+def client_sees_result(api: Api, client: Client, vid: int, tid: int) -> None:
+    ticket = api.json("GET", f"/tickets/{tid}", headers=client.headers)
+    check(ticket["status"] == "resolved", "клиент не видит решённый тикет")
+    messages = api.json("GET", f"/tickets/{tid}/messages", headers=client.headers)["items"]
+    check(len(messages) == 1, "клиент не видит ответ инженера")
+    records = api.json("GET", f"/vehicles/{vid}/maintenance-records", headers=client.headers)
+    # Привязку работы к тикету показывает аналитика (тикет → ТО), в API истории её нет.
+    check(
+        any(
+            r["aggregate_type_code"] == AGGREGATE and r["mileage_at_service"] == MILEAGE
+            for r in records["items"]
+        ),
+        "замена по тикету не попала в историю ТО авто",
+    )
+
+
+def analytics_grew(before: dict[str, int], after: dict[str, int]) -> None:
+    delta = {k: after[k] - before[k] for k in after}
+    check(set(delta.values()) == {1}, f"прирост показателей {delta}, у каждого ожидался +1")
+
+
+def integrity(jobs: Jobs) -> None:
+    jobs.run("python", "-m", "app.tools.integrity")
+
+
+def block_client(api: Api, admin: Headers, client: Client, tid: int) -> None:
+    api.json("PATCH", f"/users/{client.user_id}", headers=admin, json={"is_active": False})
+    api.call("GET", "/me", 401, headers=client.headers)
+    api.call("POST", "/auth/refresh", 401, json={"refresh_token": client.refresh_token})
+    api.call("GET", f"/tickets/{tid}", 200, headers=admin)
+
+
+# ---------- Запуск ----------
+
+
+class StepFailed(Exception):
+    pass
+
+
+def step[T](title: str, run: Callable[..., T], *args: Any) -> T:
+    """Шаг сценария: PASS — и результат дальше по цепочке; любая ошибка — FAIL и стоп."""
+    try:
+        result = run(*args)
+    except (Failed, httpx.HTTPError, subprocess.SubprocessError, OSError) as exc:
+        raise StepFailed(f"FAIL  {title}: {exc}") from exc
+    print(f"PASS  {title}")
+    return result
+
+
+def scenario(api: Api, jobs: Jobs, phone: str, code: str) -> None:
+    today = datetime.now(MINSK).date()
+    step("API отвечает", check_health, api)
+    admin = step("CLI создаёт администратора, вход по паролю", bootstrap_admin, api, jobs)
+    engineer = step("администратор создаёт инженера (Users), вход", create_engineer, api, admin)
+    step("тестовый клиент прошлого прогона разблокирован", unblock_test_client, api, admin, phone)
+    model_id = step("регламент ТО модели", zeekr_regulation, api, admin)
+    before = step("снимок аналитики «до»", analytics, api, jobs, admin, model_id, today)
+    client = step(
+        "регистрация клиента по SMS-коду, согласие ПД, push-токен",
+        register_client,
+        api,
+        phone,
+        code,
+    )
+    vid = step(
+        "авто по VIN, базовая замена, пробег → статус «скоро замена»",
+        due_soon_vehicle,
+        api,
+        admin,
+        client,
+        today,
+    )
+    step("напоминание о ТО в ленте, открытие push", open_reminder, api, jobs, client, vid)
+    tid = step(
+        "тикет → очередь → взят → ответ → замена по тикету → решён",
+        resolve_ticket,
+        api,
+        client,
+        engineer,
+        vid,
+        today,
+    )
+    step("клиент видит решение, переписку и запись ТО", client_sees_result, api, client, vid, tid)
+    after = step("витрина обновлена", analytics, api, jobs, admin, model_id, today)
+    step("+1: тикет, решение, обе конверсии, проблемная модель", analytics_grew, before, after)
+    step("аудит целостности — 0 нарушений", integrity, jobs)
+    step(
+        "блокировка клиента: 401, сессии завершены, тикет сохранён",
+        block_client,
+        api,
+        admin,
+        client,
+        tid,
+    )
+    step("аудит целостности после блокировки — 0 нарушений", integrity, jobs)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -410,20 +373,13 @@ def main(argv: list[str] | None = None) -> int:
     if not (phone and code):
         print("Нужны E2E_PHONE и E2E_CODE (тестовый номер и код стека)")
         return 2
-
     api = Api(args.base_url)
-    scenario = Scenario(api, Jobs(args.job_runner), phone, code)
-    for name, title in STEPS:
-        try:
-            getattr(scenario, name)()
-        except (Failed, httpx.HTTPError, subprocess.SubprocessError, OSError) as exc:
-            print(f"FAIL  {title}: {exc}")
-            return 1
-        print(f"PASS  {title}")
-    print(
-        f"Сквозной сценарий пройден: шагов {len(STEPS)}, ответов сверено с контрактом "
-        f"{api.checked}"
-    )
+    try:
+        scenario(api, Jobs(args.job_runner), phone, code)
+    except StepFailed as exc:
+        print(exc)
+        return 1
+    print(f"Сквозной сценарий пройден, ответов сверено с контрактом: {api.checked}")
     return 0
 
 

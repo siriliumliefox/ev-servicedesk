@@ -2,7 +2,19 @@
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, CheckConstraint, DateTime, ForeignKey, Index, String, func, text
+from sqlalchemy import (
+    BigInteger,
+    CheckConstraint,
+    ColumnElement,
+    DateTime,
+    ForeignKey,
+    Index,
+    String,
+    and_,
+    func,
+    text,
+)
+from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, CreatedAtMixin, IdMixin, TimestampMixin
@@ -29,10 +41,19 @@ class AppUser(IdMixin, TimestampMixin, Base):
     is_active: Mapped[bool] = mapped_column(server_default=text("true"), nullable=False)
     anonymized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
-    @property
+    @hybrid_property
     def is_available(self) -> bool:
-        """Учётная запись может действовать: активна и не анонимизирована."""
+        """Учётная запись может действовать: активна и не анонимизирована.
+
+        То же правило — выражением SQL (`AppUser.is_available` в запросах: аудитория уведомлений,
+        аудит целостности): одно определение для Python и БД.
+        """
         return self.is_active and self.anonymized_at is None
+
+    @is_available.inplace.expression
+    @classmethod
+    def _is_available_sql(cls) -> ColumnElement[bool]:
+        return and_(cls.is_active.is_(True), cls.anonymized_at.is_(None))
 
 
 class RefreshToken(IdMixin, CreatedAtMixin, Base):

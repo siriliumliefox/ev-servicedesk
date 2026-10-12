@@ -26,7 +26,7 @@ def create_admin(phone: str, password: str) -> int:
         return 2
     with get_session_scope()() as db:
         try:
-            user = service.create_admin(db, request.phone, request.password)
+            user = service.create_staff_user(db, request.phone, UserRole.ADMIN, request.password)
         except ApiError as exc:
             print(exc.message)
             return 1

@@ -10,7 +10,7 @@ from fastapi.routing import APIRoute
 
 from app.core.config import Settings
 from app.main import API_PREFIX, create_app
-from tests.api.conftest import _inline, contract, contract_operation
+from tests.support.contract import contract, contract_operation, inline_schema
 
 APP = create_app(Settings(_env_file=None, environment="test"))
 GENERATED = APP.openapi()
@@ -61,7 +61,7 @@ def test_operation_matches_contract(path, method, op):
     if c_body is None:
         assert "requestBody" not in op
     else:
-        c_schema = _inline(c_body)["content"]["application/json"]["schema"]
+        c_schema = inline_schema(c_body)["content"]["application/json"]["schema"]
         ref = op["requestBody"]["content"]["application/json"]["schema"]["$ref"]
         g_schema = GENERATED["components"]["schemas"][ref.rsplit("/", 1)[1]]
         assert set(g_schema.get("required", [])) == set(c_schema.get("required", []))

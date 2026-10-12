@@ -22,15 +22,15 @@ def contract() -> dict:
     return yaml.safe_load((DOCS / "openapi.yaml").read_text(encoding="utf-8"))
 
 
-def _inline(node: Any) -> Any:
+def inline_schema(node: Any) -> Any:
     """Разворачивает $ref в самостоятельную JSON-схему для OAS30Validator."""
     if isinstance(node, dict):
         if "$ref" in node:
             _, kind, group, name = node["$ref"].split("/")
-            return _inline(contract()[kind][group][name])
-        return {k: _inline(v) for k, v in node.items()}
+            return inline_schema(contract()[kind][group][name])
+        return {k: inline_schema(v) for k, v in node.items()}
     if isinstance(node, list):
-        return [_inline(v) for v in node]
+        return [inline_schema(v) for v in node]
     return node
 
 
@@ -69,7 +69,7 @@ def assert_contract(response: httpx.Response, operation_id: str) -> None:
     assert status in op["responses"] or (
         response.status_code >= 500 and "default" in op["responses"]
     ), f"{operation_id}: статус {status} не объявлен в контракте"
-    declared = _inline(op["responses"].get(status) or op["responses"]["default"])
+    declared = inline_schema(op["responses"].get(status) or op["responses"]["default"])
     schema = declared.get("content", {}).get("application/json", {}).get("schema")
     if schema is None:
         assert not response.content, f"{operation_id} {status}: тело не ожидается"

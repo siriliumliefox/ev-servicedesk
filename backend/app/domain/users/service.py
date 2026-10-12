@@ -14,7 +14,7 @@ from sqlalchemy import Select, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.core.db import escape_like, get_by_id
+from app.core.db import constraint_name, escape_like, get_by_id
 from app.core.errors import ApiError
 from app.core.security import hash_password
 from app.domain.auth import tokens
@@ -49,27 +49,22 @@ def get_user(db: Session, user_id: int) -> AppUser:
 
 
 def create_staff_user(db: Session, phone: str, role: UserRole, password: str) -> AppUser:
-    """POST /users: инженер или администратор с паролем argon2id (N-08); телефон занят — 409."""
-    if db.scalar(select(AppUser.id).where(AppUser.phone == phone)) is not None:
-        raise _phone_taken()
+    """POST /users и CLI первого администратора: сотрудник с паролем argon2id (N-08).
+
+    Телефон занят (клиентом или сотрудником, в том числе параллельным запросом) — 409:
+    решает UNIQUE телефона, без предварительного поиска.
+    """
     user = AppUser(phone=phone, role=role, password_hash=hash_password(password))
     db.add(user)
     try:
         db.commit()
-    except IntegrityError as exc:  # параллельное создание того же номера
+    except IntegrityError as exc:
         db.rollback()
-        raise _phone_taken() from exc
+        if constraint_name(exc) != "uq_app_user_phone":
+            raise
+        raise ApiError(409, "PHONE_ALREADY_REGISTERED", "Телефон уже зарегистрирован") from exc
     db.refresh(user)
     return user
-
-
-def _phone_taken() -> ApiError:
-    return ApiError(409, "PHONE_ALREADY_REGISTERED", "Телефон уже зарегистрирован")
-
-
-def create_admin(db: Session, phone: str, password: str) -> AppUser:
-    """Первый администратор чистой среды (CLI `app.cli create-admin`, ADR 0021 п. 7)."""
-    return create_staff_user(db, phone, UserRole.ADMIN, password)
 
 
 def _lock_active_admins(db: Session) -> list[int]:
@@ -92,13 +87,13 @@ def update_user(
     tokens.lock_user(db, user.id)
     db.refresh(user)
 
-    if role is not None and role != user.role:
-        if user.role not in STAFF_ROLES or role not in STAFF_ROLES:
-            raise ApiError(
-                409,
-                "ROLE_CHANGE_NOT_ALLOWED",
-                "Смена роли между клиентом и сотрудником не поддерживается",
-            )
+    # Схема запроса допускает только роли персонала: менять роль нельзя лишь клиенту.
+    if role is not None and role != user.role and user.role not in STAFF_ROLES:
+        raise ApiError(
+            409,
+            "ROLE_CHANGE_NOT_ALLOWED",
+            "Смена роли клиента на роль сотрудника не поддерживается",
+        )
     new_role = role if role is not None else user.role
     new_active = is_active if is_active is not None else user.is_active
 

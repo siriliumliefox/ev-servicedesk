@@ -17,7 +17,8 @@ from starlette.testclient import WebSocketTestSession
 from starlette.websockets import WebSocketDisconnect
 
 from app.domain.tickets.events import TicketEvents
-from tests.api.conftest import API, RUN_CHANNEL_PREFIX, _inline
+from tests.api.conftest import API, RUN_CHANNEL_PREFIX
+from tests.support.contract import inline_schema
 
 RECEIVE_TIMEOUT = 5.0
 READY = {"type": "ready"}
@@ -86,7 +87,7 @@ def close_code(ws: WebSocketTestSession) -> int:
 
 
 def schema(name: str) -> dict:
-    return _inline({"$ref": f"#/components/schemas/{name}"})
+    return inline_schema({"$ref": f"#/components/schemas/{name}"})
 
 
 def assert_frame(frame: dict, event_type: str, schema_name: str) -> dict:

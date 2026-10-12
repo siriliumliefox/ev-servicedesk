@@ -34,14 +34,7 @@ from app.models import AppUser, PdConsent, Ticket
 from app.models.enums import TicketCategory, TicketStatus, UserRole
 from app.workers.notifications import NotificationsWorker
 from tests.conftest import redis_test_url
-from tests.support.contract import (  # noqa: F401 — реэкспорт для тестов
-    API,
-    _inline,
-    assert_contract,
-    contract,
-    contract_operation,
-    operation_for,
-)
+from tests.support.contract import API, assert_contract, operation_for
 from tests.support.storage import FakeObjectStorage
 
 POLICY = "2026-10"

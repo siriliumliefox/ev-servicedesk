@@ -1,19 +1,37 @@
 """Аудит целостности данных между модулями (Глава 17, ADR 0021 п. 8).
 
-`python -m app.tools.integrity` — именованные SQL-проверки инвариантов, которые не выражены
+`python -m app.tools.integrity` — именованные проверки инвариантов, которые не выражены
 ограничениями БД, потому что связывают таблицы разных модулей (Auth, Vehicle, Aggregates,
-Tickets, Notifications). Печатает только имена проверок, число нарушений и id строк — без ПД.
-Код выхода 1 — есть нарушения. Запускается в тестах, на стеке после сквозного сценария и в
-мониторинге (главы 26, 28). Только чтение.
+Tickets, Notifications). Правила берутся из канонических определений домена
+(`AppUser.is_available`, `notifications.service.eligible_client`), а не переписываются заново.
+Печатает только имена проверок, число нарушений и id строк — без ПД. Код выхода 1 — есть
+нарушения. Запускается в тестах, на стеке после сквозного сценария и в мониторинге (главы 26,
+28). Только чтение.
 """
 
 import sys
 from dataclasses import dataclass
 
-from sqlalchemy import text
-from sqlalchemy.orm import Session
+from sqlalchemy import ColumnElement, Select, exists, func, not_, or_, select
+from sqlalchemy.orm import Session, aliased
 
 from app.core.db import get_session_scope
+from app.domain.notifications.service import eligible_client
+from app.models import (
+    AppUser,
+    MaintenanceRecord,
+    MaintenanceReminder,
+    Notification,
+    NotificationDelivery,
+    NotificationRecipient,
+    PushToken,
+    RefreshToken,
+    Ticket,
+    TicketMessage,
+    Vehicle,
+    VehicleAggregateStatus,
+)
+from app.models.enums import NotificationType, UserRole
 
 SAMPLE = 10  # id нарушений в отчёте — не больше
 
@@ -22,138 +40,151 @@ SAMPLE = 10  # id нарушений в отчёте — не больше
 class Check:
     name: str
     description: str
-    sql: str  # SELECT id нарушающих строк
+    violations: Select[tuple[int]]  # id нарушающих строк
 
 
-# Доступный пользователь — как AppUser.is_available; клиент вправе получать уведомления —
-# как notifications.service.eligible_client.
-_UNAVAILABLE = "(u.is_active IS FALSE OR u.anonymized_at IS NOT NULL)"
-_NO_ACTIVE_CONSENT = (
-    "NOT EXISTS (SELECT 1 FROM pd_consent c WHERE c.user_id = u.id AND c.withdrawn_at IS NULL)"
-)
+def _is_client(user_id: ColumnElement[int | None]) -> ColumnElement[bool]:
+    return exists().where(AppUser.id == user_id, AppUser.role == UserRole.CLIENT)
+
+
+def _replacement_without_history() -> Select[tuple[int]]:
+    status = VehicleAggregateStatus
+    record = (
+        select(MaintenanceRecord.id)
+        .where(
+            MaintenanceRecord.vehicle_id == status.vehicle_id,
+            MaintenanceRecord.aggregate_type_id == status.aggregate_type_id,
+            MaintenanceRecord.performed_at == status.last_replaced_at,
+            MaintenanceRecord.mileage_at_service.is_not_distinct_from(status.last_replaced_mileage),
+        )
+        .exists()
+    )
+    return select(status.id).where(status.last_replaced_at.is_not(None), not_(record))
+
+
+def _active_push_token_of_ineligible_user() -> Select[tuple[int]]:
+    eligible = exists().where(AppUser.id == PushToken.user_id, *eligible_client())
+    return select(PushToken.id).where(PushToken.revoked_at.is_(None), not_(eligible))
+
+
+def _reminder_notification_mismatch() -> Select[tuple[int]]:
+    reminder = MaintenanceReminder
+    return (
+        select(reminder.id)
+        .join(Notification, Notification.id == reminder.notification_id)
+        .where(
+            or_(
+                Notification.type != NotificationType.MAINTENANCE,
+                Notification.vehicle_id.is_distinct_from(reminder.vehicle_id),
+                Notification.aggregate_type_id.is_distinct_from(reminder.aggregate_type_id),
+            )
+        )
+    )
+
+
+def _delivery_to_non_recipient() -> Select[tuple[int]]:
+    recipient = exists().where(
+        NotificationRecipient.notification_id == NotificationDelivery.notification_id,
+        NotificationRecipient.user_id == PushToken.user_id,
+    )
+    return (
+        select(NotificationDelivery.id)
+        .join(PushToken, PushToken.id == NotificationDelivery.push_token_id)
+        .where(not_(recipient))
+    )
+
+
+author = aliased(AppUser)
 
 CHECKS: tuple[Check, ...] = (
     Check(
         "replacement_without_history",
         "Последняя замена агрегата без записи в истории ТО (замена пишет оба, ADR 0016)",
-        """
-        SELECT s.id FROM vehicle_aggregate_status s
-        WHERE s.last_replaced_at IS NOT NULL AND NOT EXISTS (
-            SELECT 1 FROM maintenance_record m
-            WHERE m.vehicle_id = s.vehicle_id AND m.aggregate_type_id = s.aggregate_type_id
-              AND m.performed_at = s.last_replaced_at
-              AND m.mileage_at_service IS NOT DISTINCT FROM s.last_replaced_mileage)
-        """,
+        _replacement_without_history(),
     ),
     Check(
         "maintenance_record_of_other_vehicle_ticket",
         "Работа ТО привязана к тикету другого авто",
-        """
-        SELECT m.id FROM maintenance_record m JOIN ticket t ON t.id = m.ticket_id
-        WHERE t.vehicle_id <> m.vehicle_id
-        """,
+        select(MaintenanceRecord.id)
+        .join(Ticket, Ticket.id == MaintenanceRecord.ticket_id)
+        .where(Ticket.vehicle_id != MaintenanceRecord.vehicle_id),
     ),
     Check(
         "maintenance_record_by_client",
         "Работу ТО записал клиент (только инженер или администратор)",
-        """
-        SELECT m.id FROM maintenance_record m JOIN app_user u ON u.id = m.performed_by_user_id
-        WHERE u.role = 'client'
-        """,
+        select(MaintenanceRecord.id).where(_is_client(MaintenanceRecord.performed_by_user_id)),
     ),
     Check(
         "vehicle_owner_not_client",
         "Владелец авто — не клиент",
-        "SELECT v.id FROM vehicle v JOIN app_user u ON u.id = v.user_id WHERE u.role <> 'client'",
+        select(Vehicle.id).where(not_(_is_client(Vehicle.user_id))),
     ),
     Check(
         "ticket_assignee_is_client",
         "Исполнитель тикета — клиент",
-        """
-        SELECT t.id FROM ticket t JOIN app_user u ON u.id = t.assigned_engineer_id
-        WHERE u.role = 'client'
-        """,
+        select(Ticket.id).where(_is_client(Ticket.assigned_engineer_id)),
     ),
     Check(
         "ticket_created_for_deleted_vehicle",
         "Тикет создан после удаления авто",
-        """
-        SELECT t.id FROM ticket t JOIN vehicle v ON v.id = t.vehicle_id
-        WHERE v.deleted_at IS NOT NULL AND t.created_at > v.deleted_at
-        """,
+        select(Ticket.id)
+        .join(Vehicle, Vehicle.id == Ticket.vehicle_id)
+        .where(Ticket.created_at > Vehicle.deleted_at),
     ),
     Check(
         "client_message_in_foreign_ticket",
         "Клиент написал в тикет чужого авто",
-        """
-        SELECT msg.id FROM ticket_message msg
-        JOIN app_user u ON u.id = msg.author_id
-        JOIN ticket t ON t.id = msg.ticket_id
-        JOIN vehicle v ON v.id = t.vehicle_id
-        WHERE u.role = 'client' AND v.user_id <> msg.author_id
-        """,
+        select(TicketMessage.id)
+        .join(author, author.id == TicketMessage.author_id)
+        .join(Ticket, Ticket.id == TicketMessage.ticket_id)
+        .join(Vehicle, Vehicle.id == Ticket.vehicle_id)
+        .where(author.role == UserRole.CLIENT, Vehicle.user_id != TicketMessage.author_id),
     ),
     Check(
         "active_refresh_token_of_unavailable_user",
         "Действующий refresh-токен у заблокированного или анонимизированного",
-        f"""
-        SELECT r.id FROM refresh_token r JOIN app_user u ON u.id = r.user_id
-        WHERE r.revoked_at IS NULL AND r.expires_at > now() AND {_UNAVAILABLE}
-        """,
+        select(RefreshToken.id)
+        .join(AppUser, AppUser.id == RefreshToken.user_id)
+        .where(
+            RefreshToken.revoked_at.is_(None),
+            RefreshToken.expires_at > func.now(),
+            not_(AppUser.is_available),
+        ),
     ),
     Check(
         "active_push_token_of_ineligible_user",
         "Активный push-токен у пользователя, которому уведомления не положены",
-        f"""
-        SELECT p.id FROM push_token p JOIN app_user u ON u.id = p.user_id
-        WHERE p.revoked_at IS NULL
-          AND (u.role <> 'client' OR {_UNAVAILABLE} OR {_NO_ACTIVE_CONSENT})
-        """,
+        _active_push_token_of_ineligible_user(),
     ),
     Check(
         "notification_recipient_not_client",
         "Получатель уведомления — не клиент",
-        """
-        SELECT r.id FROM notification_recipient r JOIN app_user u ON u.id = r.user_id
-        WHERE u.role <> 'client'
-        """,
+        select(NotificationRecipient.id).where(not_(_is_client(NotificationRecipient.user_id))),
     ),
     Check(
         "vehicle_notification_to_non_owner",
         "Уведомление об авто (напоминание о ТО) получил не владелец авто",
-        """
-        SELECT r.id FROM notification_recipient r
-        JOIN notification n ON n.id = r.notification_id
-        JOIN vehicle v ON v.id = n.vehicle_id
-        WHERE r.user_id <> v.user_id
-        """,
+        select(NotificationRecipient.id)
+        .join(Notification, Notification.id == NotificationRecipient.notification_id)
+        .join(Vehicle, Vehicle.id == Notification.vehicle_id)
+        .where(NotificationRecipient.user_id != Vehicle.user_id),
     ),
     Check(
         "reminder_notification_mismatch",
         "Напоминание о ТО не совпадает со своим уведомлением (тип, авто, агрегат)",
-        """
-        SELECT mr.id FROM maintenance_reminder mr JOIN notification n ON n.id = mr.notification_id
-        WHERE n.type <> 'maintenance' OR n.vehicle_id IS DISTINCT FROM mr.vehicle_id
-           OR n.aggregate_type_id IS DISTINCT FROM mr.aggregate_type_id
-        """,
+        _reminder_notification_mismatch(),
     ),
     Check(
         "reminder_for_deleted_vehicle",
         "Напоминание о ТО создано после удаления авто",
-        """
-        SELECT mr.id FROM maintenance_reminder mr JOIN vehicle v ON v.id = mr.vehicle_id
-        WHERE v.deleted_at IS NOT NULL AND mr.created_at > v.deleted_at
-        """,
+        select(MaintenanceReminder.id)
+        .join(Vehicle, Vehicle.id == MaintenanceReminder.vehicle_id)
+        .where(MaintenanceReminder.created_at > Vehicle.deleted_at),
     ),
     Check(
         "delivery_to_non_recipient",
         "Доставка push на устройство пользователя, не входящего в получатели уведомления",
-        """
-        SELECT d.id FROM notification_delivery d JOIN push_token p ON p.id = d.push_token_id
-        WHERE NOT EXISTS (
-            SELECT 1 FROM notification_recipient r
-            WHERE r.notification_id = d.notification_id AND r.user_id = p.user_id)
-        """,
+        _delivery_to_non_recipient(),
     ),
 )
 
@@ -169,7 +200,8 @@ def run_checks(db: Session) -> list[Violation]:
     """Нарушения по всем проверкам (пустой список — данные согласованы)."""
     violations = []
     for check in CHECKS:
-        ids = [row[0] for row in db.execute(text(f"SELECT id FROM ({check.sql}) q ORDER BY id"))]
+        stmt = check.violations
+        ids = list(db.scalars(stmt.order_by(stmt.selected_columns[0])))
         if ids:
             violations.append(Violation(check, len(ids), ids[:SAMPLE]))
     return violations

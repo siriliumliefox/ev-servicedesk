@@ -77,7 +77,8 @@ for svc in notifications-worker analytics-worker; do
   fi
 done
 
-JOB_RUNNER="docker compose -p $PROJECT -f $ROOT/docker-compose.yml -f $ROOT/docker-compose.integration.yml --profile full exec -T backend"
+# Разовые задачи сценария — в контейнере API той же командой compose (shlex-совместимая строка).
+JOB_RUNNER="$(printf '%q ' "${COMPOSE[@]}")exec -T backend"
 if ! (cd "$ROOT/backend" && E2E_PHONE="$E2E_PHONE" E2E_CODE="$E2E_CODE" \
       poetry run python scripts/e2e_backend.py --base-url "http://127.0.0.1:$PORT" \
       --job-runner "$JOB_RUNNER" | redact); then
