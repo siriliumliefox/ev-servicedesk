@@ -35,16 +35,21 @@ E2E на уровне API (`test_api_e2e/`) запускается в CI (`mobil
 (предварительно `docker build -t backend:smoke ../backend`).
 
 ## Проверка на iPhone (бесплатная подпись Personal Team)
-1. iPhone и Mac — в одной сети Wi-Fi; на iPhone включён «Режим разработчика» (Настройки → Конфиденциальность).
-2. Backend на Mac: стек главы 17 или `uvicorn` на `0.0.0.0:8000`. Тестовый номер и код — `SMS_TEST_PHONES`/`SMS_TEST_CODE`
-   в `.env` (ADR 0021 п. 6) или реальная SMS.
-3. `open ios/Runner.xcworkspace` → Runner → Signing & Capabilities → Team: ваш Apple ID (Personal Team).
-4. `flutter run -d <iPhone> --dart-define=API_BASE_URL=http://<имя-mac>.local:8000`
-   (`NSAllowsLocalNetworking` разрешает http только в локальной сети). На iPhone: Настройки → Основные →
-   VPN и управление устройством → доверять разработчику. Профиль бесплатной подписи действует 7 дней.
-5. Сценарий: телефон → код → согласие → VIN → главный экран → карточка (пробег, история ТО) →
-   перезапуск без SMS → профиль → выход; повторить при «Edge» в Network Link Conditioner.
-   Результат — в `docs/reviews/MOBILE_SKELETON_18.md`.
+Один раз (действия владельца — Apple ID и настройки iPhone агент не вводит):
+1. Xcode → Settings → Accounts → «+» → Apple ID (Personal Team появится автоматически).
+2. iPhone — кабелем к Mac, «Доверять этому компьютеру»; Настройки → Конфиденциальность и безопасность →
+   «Режим разработчика» → вкл., перезагрузка. В Xcode → Window → Devices and Simulators у iPhone —
+   «Connect via network» (дальше можно без кабеля, в той же сети Wi-Fi).
+3. `open ios/Runner.xcworkspace` → Runner → Signing & Capabilities → Team: Personal Team.
+
+Прогон: `scripts/device_run.sh` — стек backend из образа-кандидата, открытый в локальной сети
+(`http://<имя-mac>.local:18080`, `NSAllowsLocalNetworking`), release-сборка на iPhone, тестовый номер и код
+на экране. При первом запуске на iPhone: Настройки → Основные → VPN и управление устройством → доверять
+разработчику. Профиль бесплатной подписи действует 7 дней.
+
+Сценарий: телефон → код → согласие → VIN → главный экран → карточка (пробег, история ТО) → перезапуск без SMS →
+профиль → выход; повторить с профилем «Edge» (iPhone: Настройки → Разработчик → Network Link Conditioner).
+Результат — в `docs/reviews/MOBILE_SKELETON_18.md`.
 
 ## Структура
 - `lib/main.dart` — точка входа: прототип или реальный API по `API_BASE_URL`
