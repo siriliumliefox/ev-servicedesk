@@ -1,0 +1,23 @@
+# Интеграционный стек главы 17 (ADR 0021 п. 1): все сервисы backend из ОДНОГО образа-кандидата
+# (BACKEND_IMAGE) в режиме ENVIRONMENT=staging — API, worker'ы, миграции, PostgreSQL, Redis, MinIO.
+# Запускается scripts/integration_stack.sh (CI: backend-ci job integration, cd-staging) под
+# отдельным именем проекта: свои тома и сеть, порты инфраструктуры наружу не публикуются —
+# стек не пересекается с локальным окружением разработчика. API — на INTEGRATION_PORT.
+
+services:
+  postgres:
+    ports: !reset []
+  redis:
+    ports: !reset []
+  minio:
+    ports: !reset []
+  backend:
+    pull_policy: never
+    ports: !override
+      - "127.0.0.1:${INTEGRATION_PORT:-18080}:8000"
+  migrate:
+    pull_policy: never
+  notifications-worker:
+    pull_policy: never
+  analytics-worker:
+    pull_policy: never

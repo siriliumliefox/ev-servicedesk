@@ -22,6 +22,29 @@
 # Обновлять осознанно.
 x-minio-image: &minio-image pgsty/minio:RELEASE.2026-08-04T00-00-00Z@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372
 
+# Общее у сервисов приложения (профиль full): один образ backend — API, worker'ы, миграции.
+# BACKEND_IMAGE — образ-кандидат (интеграционный стек главы 17, ADR 0021 п. 1); без него
+# образ собирается из ./backend. Образ по умолчанию — production (fail closed); локальный
+# профиль — явно local. BACKEND_ENV_FILE — файл переменных вместо .env (секреты стека).
+x-backend-env: &backend-env
+  ENVIRONMENT: ${ENVIRONMENT:-local}
+  DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-ev}:${POSTGRES_PASSWORD:-ev_local_only}@postgres:5432/${POSTGRES_DB:-ev_servicedesk}
+  REDIS_URL: redis://redis:6379/0
+  S3_ENDPOINT: http://minio:9000
+  S3_BUCKET: ${S3_BUCKET:-ev-servicedesk-local}
+  S3_ACCESS_KEY: ${S3_ACCESS_KEY:-ev_local}
+  S3_SECRET_KEY: ${S3_SECRET_KEY:-ev_local_only}
+
+x-backend-app: &backend-app
+  image: ${BACKEND_IMAGE:-ev-servicedesk-backend:local}
+  build:
+    context: ./backend
+  env_file:
+    - path: ${BACKEND_ENV_FILE:-.env}
+      required: false   # не падать, если .env ещё не создан (cp .env.example .env)
+  environment: *backend-env
+  profiles: ["full"]   # docker compose --profile full up — прод-подобный прогон
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -99,82 +122,59 @@ services:
       - postgres
     profiles: ["tools"]   # docker compose --profile tools up
 
-  backend:
-    build:
-      context: ./backend
-    env_file:
-      - path: .env
-        required: false   # не падать, если .env ещё не создан (cp .env.example .env)
-    environment:
-      # Образ по умолчанию — production (fail closed); локальный профиль — явно local.
-      ENVIRONMENT: ${ENVIRONMENT:-local}
-      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-ev}:${POSTGRES_PASSWORD:-ev_local_only}@postgres:5432/${POSTGRES_DB:-ev_servicedesk}
-      REDIS_URL: redis://redis:6379/0
-      # Backend ходит в MinIO по сети compose, а presigned URL подписываются для адреса,
-      # доступного клиентам на хосте (подпись включает хост).
-      S3_ENDPOINT: http://minio:9000
-      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://localhost:9000}
-      S3_BUCKET: ${S3_BUCKET:-ev-servicedesk-local}
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-ev_local}
-      S3_SECRET_KEY: ${S3_SECRET_KEY:-ev_local_only}
-    ports:
-      - "8000:8000"
+  # Схема БД — разовый сервис перед API и worker'ами (Глава 17, ADR 0021 п. 1).
+  migrate:
+    <<: *backend-app
+    command: ["alembic", "upgrade", "head"]
     depends_on:
       postgres:
         condition: service_healthy
+    restart: "no"
+
+  backend:
+    <<: *backend-app
+    environment:
+      <<: *backend-env
+      # Backend ходит в MinIO по сети compose, а presigned URL подписываются для адреса,
+      # доступного клиентам на хосте (подпись включает хост).
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://localhost:9000}
+    ports:
+      - "8000:8000"
+    healthcheck:
+      # В slim-образе нет curl — проверка стандартной библиотекой Python.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       minio-init:
         condition: service_completed_successfully
-    profiles: ["full"]   # docker compose --profile full up — прод-подобный прогон
 
   # Worker уведомлений (Глава 15, ADR 0019): очередь push, напоминания о ТО в 10:00 по Минску,
   # push по событиям тикетов. Тот же образ, что у backend; без FCM-ключа — фейковый push.
   notifications-worker:
-    build:
-      context: ./backend
+    <<: *backend-app
     command: ["python", "-m", "app.workers.notifications"]
-    env_file:
-      - path: .env
-        required: false
-    environment:
-      ENVIRONMENT: ${ENVIRONMENT:-local}
-      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-ev}:${POSTGRES_PASSWORD:-ev_local_only}@postgres:5432/${POSTGRES_DB:-ev_servicedesk}
-      REDIS_URL: redis://redis:6379/0
-      S3_ENDPOINT: http://minio:9000
-      S3_BUCKET: ${S3_BUCKET:-ev-servicedesk-local}
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-ev_local}
-      S3_SECRET_KEY: ${S3_SECRET_KEY:-ev_local_only}
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     restart: unless-stopped
-    profiles: ["full"]
 
   # Worker аналитики (Глава 16, ADR 0020): обновление витрины фактов дашборда раз в
   # ANALYTICS_REFRESH_SECONDS (300). Тот же образ, что у backend; отдельно от уведомлений.
   analytics-worker:
-    build:
-      context: ./backend
+    <<: *backend-app
     command: ["python", "-m", "app.workers.analytics"]
-    env_file:
-      - path: .env
-        required: false
-    environment:
-      ENVIRONMENT: ${ENVIRONMENT:-local}
-      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-ev}:${POSTGRES_PASSWORD:-ev_local_only}@postgres:5432/${POSTGRES_DB:-ev_servicedesk}
-      REDIS_URL: redis://redis:6379/0
-      S3_ENDPOINT: http://minio:9000
-      S3_BUCKET: ${S3_BUCKET:-ev-servicedesk-local}
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-ev_local}
-      S3_SECRET_KEY: ${S3_SECRET_KEY:-ev_local_only}
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     restart: unless-stopped
-    profiles: ["full"]
 
 volumes:
   postgres_data:

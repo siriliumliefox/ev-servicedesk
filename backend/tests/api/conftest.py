@@ -11,16 +11,12 @@ from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from functools import cache
-from pathlib import Path
 from typing import Any
 
 import httpx
 import pytest
-import yaml
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from openapi_schema_validator import OAS30Validator
 from redis import Redis
 from sqlalchemy import Engine
 from sqlalchemy.orm import Session
@@ -38,10 +34,16 @@ from app.models import AppUser, PdConsent, Ticket
 from app.models.enums import TicketCategory, TicketStatus, UserRole
 from app.workers.notifications import NotificationsWorker
 from tests.conftest import redis_test_url
+from tests.support.contract import (  # noqa: F401 — реэкспорт для тестов
+    API,
+    _inline,
+    assert_contract,
+    contract,
+    contract_operation,
+    operation_for,
+)
 from tests.support.storage import FakeObjectStorage
 
-DOCS = Path(__file__).resolve().parents[3] / "docs"
-API = "/v1"
 POLICY = "2026-10"
 STAFF_PASSWORD = "Staff-pass-123"
 # Каналы pub/sub не зависят от номера БД Redis: параллельные прогоны на одном сервере
@@ -232,69 +234,6 @@ def make_client_user(db: Session) -> Callable[..., AppUser]:
 
 def bearer(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
-
-
-# ---------- Сверка ответов с docs/openapi.yaml ----------
-
-
-@cache
-def contract() -> dict:
-    return yaml.safe_load((DOCS / "openapi.yaml").read_text(encoding="utf-8"))
-
-
-def _inline(node: Any) -> Any:
-    """Разворачивает $ref в самостоятельную JSON-схему для OAS30Validator."""
-    if isinstance(node, dict):
-        if "$ref" in node:
-            _, kind, group, name = node["$ref"].split("/")
-            return _inline(contract()[kind][group][name])
-        return {k: _inline(v) for k, v in node.items()}
-    if isinstance(node, list):
-        return [_inline(v) for v in node]
-    return node
-
-
-def contract_operation(operation_id: str) -> tuple[str, str, dict]:
-    for path, item in contract()["paths"].items():
-        for method, op in item.items():
-            if isinstance(op, dict) and op.get("operationId") == operation_id:
-                return path, method, op
-    raise KeyError(operation_id)
-
-
-@cache
-def _operation_patterns() -> list[tuple[str, re.Pattern[str], str]]:
-    """(метод, шаблон пути, operationId); пути без параметров — раньше шаблонных."""
-    patterns = []
-    for path, item in contract()["paths"].items():
-        regex = re.compile(API + re.sub(r"\{[^}]+\}", "[^/]+", path) + "/?")
-        for method, op in item.items():
-            if isinstance(op, dict) and "operationId" in op:
-                patterns.append((path.count("{"), method.upper(), regex, op["operationId"]))
-    return [(m, rx, op) for _, m, rx, op in sorted(patterns, key=lambda p: p[0])]
-
-
-def operation_for(method: str, path: str) -> str | None:
-    """operationId контракта для запроса; None — путь вне контракта."""
-    for op_method, regex, operation_id in _operation_patterns():
-        if op_method == method.upper() and regex.fullmatch(path):
-            return operation_id
-    return None
-
-
-def assert_contract(response: httpx.Response, operation_id: str) -> None:
-    """Статус объявлен в контракте, тело валидно по его схеме."""
-    _, _, op = contract_operation(operation_id)
-    status = str(response.status_code)
-    assert status in op["responses"] or (
-        response.status_code >= 500 and "default" in op["responses"]
-    ), f"{operation_id}: статус {status} не объявлен в контракте"
-    declared = _inline(op["responses"].get(status) or op["responses"]["default"])
-    schema = declared.get("content", {}).get("application/json", {}).get("schema")
-    if schema is None:
-        assert not response.content, f"{operation_id} {status}: тело не ожидается"
-        return
-    OAS30Validator(schema).validate(response.json())
 
 
 # ---------- Авто, персонал и тикеты (Главы 11–12) ----------
