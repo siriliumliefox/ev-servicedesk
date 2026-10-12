@@ -305,7 +305,7 @@ def test_manual_firmware_notification_rules(client, admin, make_owner):
 
 def test_message_is_nfc(client, admin, make_owner):
     owner = make_owner(None)
-    decomposed = "й"
+    decomposed = "\u0438\u0306"  # «й» в NFD — экранировано: исходники только в NFC
     publish(client, admin, type="news", message=f"Новости {decomposed}")
     text = feed(client, owner.headers)["items"][0]["message"]
     assert text == unicodedata.normalize("NFC", f"Новости {decomposed}")

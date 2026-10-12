@@ -6,6 +6,7 @@
 мёртвый токен отзывается.
 """
 
+import logging
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
@@ -23,6 +24,8 @@ TITLES = {
     NotificationType.PROMO: "Акция",
 }
 RETRY_FACTOR = 4
+
+logger = logging.getLogger(__name__)
 
 
 def message_for(notification: Notification, token: str) -> PushMessage:
@@ -72,6 +75,14 @@ def dispatch_due(db: Session, sender: PushSender, settings: Settings) -> int:
             delivery.next_attempt_at = now + retry_delay(settings, delivery.attempts)
         else:
             delivery.failed_at = now
+        if result.outcome is not Outcome.SENT:
+            # Без токена и текста: только id строки журнала и код FCM.
+            logger.warning(
+                "Push не доставлен: delivery %s, %s, попытка %s",
+                delivery.id,
+                result.error_code,
+                delivery.attempts,
+            )
     db.commit()
     return len(rows)
 
