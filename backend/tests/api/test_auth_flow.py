@@ -3,6 +3,8 @@
 Реальные PostgreSQL и Redis; каждый ответ сверяется с docs/openapi.yaml (assert_contract).
 """
 
+from datetime import UTC, datetime
+
 import pytest
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -326,3 +328,22 @@ def test_control_characters_rejected_422(client, login_client):
         headers=bearer(session["access_token"]),
     )
     assert r.status_code == 422
+
+
+def test_anonymized_user_with_phone_cannot_log_in(client, sms, make_client_user, make_staff, db):
+    """Вход проверяет доступность (активен и не анонимизирован), как все запросы (ревью гл. 17)."""
+    phone = "+375296900001"
+    user = make_client_user(phone)
+    user.anonymized_at = datetime.now(UTC)
+    staff = make_staff("+375296900002")
+    staff.anonymized_at = datetime.now(UTC)
+    db.commit()
+    client.post(f"{API}/auth/phone/request-code", json={"phone": phone})
+    r = client.post(
+        f"{API}/auth/phone/verify-code", json={"phone": phone, "code": code_from(sms, phone)}
+    )
+    assert r.status_code == 400 and r.json()["error"]["code"] == "ACCOUNT_DISABLED"
+    r = client.post(
+        f"{API}/auth/staff/login", json={"phone": "+375296900002", "password": STAFF_PASSWORD}
+    )
+    assert r.status_code == 401

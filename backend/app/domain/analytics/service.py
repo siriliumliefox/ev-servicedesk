@@ -13,7 +13,7 @@ from typing import Any
 from sqlalchemy import ColumnElement, Numeric, Select, cast, func, select
 from sqlalchemy.orm import Session
 
-from app.core.errors import ApiError
+from app.core.errors import ApiError, field_error
 from app.domain.analytics.views import reminder_fact, ticket_fact, vehicle_model_fact
 from app.models import AnalyticsRefresh, VehicleModel
 from app.models.enums import TicketCategory
@@ -40,7 +40,7 @@ class Period:
 
 
 def _period_error(field: str, code: str, message: str) -> ApiError:
-    return ApiError(422, code, message, details={"fields": [{"loc": ["query", field]}]})
+    return field_error(field, code, message, location="query")
 
 
 def _filters(

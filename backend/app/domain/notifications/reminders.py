@@ -19,7 +19,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.db import constraint_name
-from app.domain.aggregates.service import get_thresholds, today_in_business_tz
+from app.core.time import today_in_business_tz
+from app.domain.aggregates.service import get_thresholds
 from app.domain.aggregates.status import (
     AggregateStatusResult,
     Regulation,

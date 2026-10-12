@@ -11,10 +11,10 @@ from datetime import UTC, date, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.domain.aggregates.service import today_in_business_tz
+from app.core.time import today_in_business_tz
 from app.domain.notifications.push import Outcome, PushResult
 from app.models import (
     AppUser,
@@ -519,3 +519,16 @@ def test_withdrawn_user_excluded_from_new_publications(client, admin, make_owner
         .values(withdrawn_at=datetime.now(UTC))
     )
     assert preview(client, admin, type="news", message="x") == {"recipients": 0, "devices": 0}
+
+
+def test_push_token_requires_active_consent(client, make_owner, db):
+    """После отзыва согласия access-токен ещё действует, но новый push-токен не регистрируется
+    (ревью главы 17: правило записи = правило аудита active_push_token_of_ineligible_user)."""
+    owner = make_owner(None, token=False)
+    assert client.delete(f"{API}/auth/pd-consent", headers=owner.headers).status_code == 202
+    r = client.post(
+        f"{API}/push-tokens", json={"token": "fcm-x:" + "y" * 40}, headers=owner.headers
+    )
+    assert r.status_code == 422
+    assert r.json()["error"]["code"] == "PD_CONSENT_REQUIRED"
+    assert db.scalar(select(func.count()).select_from(PushToken)) == 0

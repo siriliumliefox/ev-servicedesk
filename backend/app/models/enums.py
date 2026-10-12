@@ -15,6 +15,10 @@ class UserRole(enum.StrEnum):
     ADMIN = "admin"
 
 
+# Сотрудники (вход по паролю, работа с тикетами) — единое множество ролей персонала.
+STAFF_ROLES = frozenset({UserRole.ENGINEER, UserRole.ADMIN})
+
+
 class TicketCategory(enum.StrEnum):
     NAVIGATION = "navigation"
     AUDIO = "audio"

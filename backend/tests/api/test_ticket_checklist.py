@@ -22,7 +22,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
-from app.domain.aggregates.service import today_in_business_tz
+from app.core.time import today_in_business_tz
 from app.models import (
     AppUser,
     FirmwareRelease,

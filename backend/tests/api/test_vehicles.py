@@ -102,13 +102,15 @@ def test_unrecognized_vin_requires_manual_model(client, as_client):
     vehicle = add_vehicle(client, owner, UNKNOWN_VIN, vehicle_model_id=voyah)
     assert vehicle["vehicle_model"] == {"brand": "Voyah", "model": "Free", "trim": None}
 
-    r = client.post(
-        f"{API}/vehicles",
-        json={"vin": "LSVAU2183R2100002", "vehicle_model_id": 10**9},
-        headers=owner,
-    )
-    assert r.status_code == 422
-    assert r.json()["error"]["code"] == "VEHICLE_MODEL_NOT_FOUND"
+    # 2**63 — вне BIGINT: тоже «модели нет», а не ошибка БД и 500 (ревью главы 17).
+    for missing in (10**9, 2**63):
+        r = client.post(
+            f"{API}/vehicles",
+            json={"vin": "LSVAU2183R2100002", "vehicle_model_id": missing},
+            headers=owner,
+        )
+        assert r.status_code == 422, r.text
+        assert r.json()["error"]["code"] == "VEHICLE_MODEL_NOT_FOUND"
 
 
 @pytest.mark.parametrize(

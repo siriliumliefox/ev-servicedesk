@@ -34,11 +34,10 @@ from app.api.schemas.tickets import (
 )
 from app.core.db import BIGINT_MAX
 from app.domain.tickets import service
-from app.models.enums import TicketCategory, TicketStatus, UserRole
+from app.models.enums import STAFF_ROLES, TicketCategory, TicketStatus, UserRole
 
 router = APIRouter(tags=["Tickets"])
 
-STAFF = (UserRole.ENGINEER, UserRole.ADMIN)
 
 # Диапазон BIGINT проверяет access (вне диапазона — 404, как у несуществующего id).
 TicketId = Annotated[int, Path(alias="ticketId")]
@@ -108,7 +107,7 @@ def get_ticket(
     return ticket_detail_out(card, presign)
 
 
-@router.patch("/tickets/{ticketId}/status", operation_id="updateTicketStatus", **rbac(*STAFF))
+@router.patch("/tickets/{ticketId}/status", operation_id="updateTicketStatus", **rbac(*STAFF_ROLES))
 def update_ticket_status(
     ticket_id: TicketId,
     body: TicketStatusUpdateRequest,

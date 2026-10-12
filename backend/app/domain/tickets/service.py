@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.core import rate_limit
 from app.core.config import Settings
 from app.core.db import get_by_id, is_db_id
-from app.core.errors import ApiError
+from app.core.errors import ApiError, field_error
 from app.core.storage import ObjectStorage
 from app.domain.aggregates.service import current_statuses
 from app.domain.knowledge import service as knowledge
@@ -32,7 +32,7 @@ from app.models import (
     TicketSlaPolicy,
     Vehicle,
 )
-from app.models.enums import TicketCategory, TicketStatus, UserRole
+from app.models.enums import STAFF_ROLES, TicketCategory, TicketStatus, UserRole
 
 TICKET_OUT = (selectinload(Ticket.vehicle).selectinload(Vehicle.vehicle_model),)
 TICKET_DETAIL = (
@@ -41,8 +41,6 @@ TICKET_DETAIL = (
     selectinload(Ticket.source_article),
 )
 MESSAGE_OUT = (selectinload(TicketMessage.author), selectinload(TicketMessage.attachments))
-
-STAFF = frozenset({UserRole.ENGINEER, UserRole.ADMIN})
 
 
 def _card(db: Session, ticket_id: int) -> TicketCard:
@@ -93,7 +91,7 @@ def list_tickets_stmt(
         stmt = stmt.where(Ticket.assigned_engineer_id == assigned_engineer_id)
     if overdue is not None:
         stmt = stmt.where(Ticket.is_overdue if overdue else not_(Ticket.is_overdue))
-    if user.role in STAFF:
+    if user.role in STAFF_ROLES:
         return stmt.order_by(Ticket.sla_due_at, Ticket.id)
     return stmt.order_by(Ticket.created_at.desc(), Ticket.id.desc())
 
@@ -224,11 +222,10 @@ def claim_ticket(db: Session, events: TicketEvents, user: AppUser, ticket_id: in
 def _assignee(db: Session, engineer_id: int) -> AppUser:
     engineer = get_by_id(db, AppUser, engineer_id)
     if engineer is None or engineer.role is not UserRole.ENGINEER or not engineer.is_available:
-        raise ApiError(
-            422,
+        raise field_error(
+            "assigned_engineer_id",
             "ASSIGNEE_NOT_ENGINEER",
             "Назначить можно только активного инженера",
-            details={"fields": [{"loc": ["body", "assigned_engineer_id"]}]},
         )
     return engineer
 
@@ -313,7 +310,7 @@ def create_message(
             db.add(message)
             db.flush()
             attach(created_at=now, ticket_message_id=message.id)
-            if user.role in STAFF:
+            if user.role in STAFF_ROLES:
                 # Первичный ответ — однократно (метрика аналитики, ADR 0017 п. 1).
                 db.execute(
                     update(Ticket)

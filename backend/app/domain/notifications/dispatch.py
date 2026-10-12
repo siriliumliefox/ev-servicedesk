@@ -112,7 +112,8 @@ def _lease(db: Session, settings: Settings) -> tuple[list[_Leased], int]:
     return leased, closed
 
 
-def _send(sender: PushSender, message: PushMessage) -> PushResult:
+def send_safely(sender: PushSender, message: PushMessage) -> PushResult:
+    """Отправка без исключений: сбой отправителя — повтор (RETRY), worker не падает."""
     try:
         return sender.send(message)
     except Exception:  # noqa: BLE001 — сбой отправителя не должен ронять worker
@@ -181,7 +182,7 @@ def dispatch_due(
             )
         else:
             db.commit()  # не держать транзакцию открытой во время сетевого вызова
-            _record(db, settings, item, _send(sender, item.message))
+            _record(db, settings, item, send_safely(sender, item.message))
         done += 1
     return done
 

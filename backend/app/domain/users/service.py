@@ -18,11 +18,9 @@ from app.core.db import escape_like, get_by_id
 from app.core.errors import ApiError
 from app.core.security import hash_password
 from app.domain.auth import tokens
-from app.domain.notifications.service import revoke_all_tokens as revoke_all_push_tokens
+from app.domain.auth.service import end_all_sessions
 from app.models import AppUser
-from app.models.enums import UserRole
-
-STAFF_ROLES = {UserRole.ENGINEER, UserRole.ADMIN}
+from app.models.enums import STAFF_ROLES, UserRole
 
 
 def _not_found() -> ApiError:
@@ -114,8 +112,7 @@ def update_user(
     user.role = new_role
     user.is_active = new_active
     if blocking:
-        tokens.revoke_all(db, user.id)
-        revoke_all_push_tokens(db, user.id)
+        end_all_sessions(db, user.id)
     db.commit()
     db.refresh(user)
     return user

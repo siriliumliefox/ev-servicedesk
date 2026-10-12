@@ -15,9 +15,7 @@ from app.core.security import verify_password
 from app.domain.auth import codes, tokens
 from app.domain.notifications.service import revoke_all_tokens as revoke_all_push_tokens
 from app.models import AppUser, PdConsent
-from app.models.enums import UserRole
-
-STAFF_ROLES = {UserRole.ENGINEER, UserRole.ADMIN}
+from app.models.enums import STAFF_ROLES, UserRole
 
 
 @dataclass(frozen=True)
@@ -55,7 +53,7 @@ def verify_phone_code(
         if user.role in STAFF_ROLES:
             # Персонал входит только по паролю: SMS не должен обходить второй фактор.
             raise ApiError(400, "STAFF_PASSWORD_LOGIN", "Для сотрудников — вход по паролю")
-        if not user.is_active:
+        if not user.is_available:  # заблокирован или анонимизирован (ревью главы 17)
             raise ApiError(400, "ACCOUNT_DISABLED", "Вход заблокирован администратором")
 
     if user is not None:
@@ -119,7 +117,7 @@ def staff_login(
     user = db.scalars(select(AppUser).where(AppUser.phone == phone)).one_or_none()
     password_hash = user.password_hash if user is not None else None
     ok = verify_password(password, password_hash)  # считаем всегда — время не выдаёт номер
-    if not ok or user is None or user.role not in STAFF_ROLES or not user.is_active:
+    if not ok or user is None or user.role not in STAFF_ROLES or not user.is_available:
         raise unauthorized("Неверный телефон или пароль")
 
     rate_limit.reset(redis, phone_key)
@@ -127,6 +125,12 @@ def staff_login(
     pair = tokens.issue_pair(db, user, settings)
     db.commit()
     return LoginResult(tokens=pair, user=user)
+
+
+def end_all_sessions(db: Session, user_id: int) -> None:
+    """Отзыв согласия и блокировка: все refresh-токены и push-токены (без COMMIT)."""
+    tokens.revoke_all(db, user_id)
+    revoke_all_push_tokens(db, user_id)
 
 
 def withdraw_pd_consent(db: Session, user: AppUser) -> None:
@@ -145,8 +149,7 @@ def withdraw_pd_consent(db: Session, user: AppUser) -> None:
     if consent is None:
         raise ApiError(409, "PD_CONSENT_NOT_ACTIVE", "Действующего согласия нет")
     consent.withdrawn_at = datetime.now(UTC)
-    tokens.revoke_all(db, user.id)
-    revoke_all_push_tokens(db, user.id)  # ADR 0019 п. 8
+    end_all_sessions(db, user.id)  # ADR 0019 п. 8
     db.commit()
 
 

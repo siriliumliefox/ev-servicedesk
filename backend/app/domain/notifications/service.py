@@ -26,8 +26,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
 
 from app.core.db import constraint_name, get_by_id, is_db_id
-from app.core.errors import ApiError
-from app.domain.aggregates.service import today_in_business_tz
+from app.core.errors import ApiError, field_error
+from app.core.time import today_in_business_tz
+from app.domain.auth.tokens import lock_user
 from app.domain.notifications.outbox import Outbox
 from app.domain.vehicles import access
 from app.domain.vehicles.service import VEHICLE_OUT
@@ -47,10 +48,6 @@ from app.models.enums import NotificationType, UserRole
 PUBLISHED_TYPES = (NotificationType.FIRMWARE, NotificationType.NEWS, NotificationType.PROMO)
 
 
-def _field_error(field: str, code: str, message: str) -> ApiError:
-    return ApiError(422, code, message, details={"fields": [{"loc": ["body", field]}]})
-
-
 def _now() -> datetime:
     return datetime.now(UTC)
 
@@ -63,8 +60,22 @@ def register_token(db: Session, user: AppUser, token: str) -> None:
 
     Активная строка токена блокируется; в гонке двух регистраций одного токена вторая
     упирается в `uq_push_token_token_active` и повторяет попытку уже с найденной строкой.
+
+    Токен регистрирует только клиент, которому положены уведомления (`eligible_client`):
+    без действующего согласия ПД — 422 PD_CONSENT_REQUIRED (ревью главы 17, ADR 0021 п. 5).
+    Проверка — под блокировкой пользователя, как отзыв согласия: параллельный отзыв не
+    оставит активный токен.
     """
     for _ in range(2):
+        lock_user(db, user.id)
+        allowed = db.scalar(select(AppUser.id).where(AppUser.id == user.id, *eligible_client()))
+        if allowed is None:
+            db.rollback()
+            raise ApiError(
+                422,
+                "PD_CONSENT_REQUIRED",
+                "Уведомления недоступны без согласия на обработку персональных данных",
+            )
         current = db.scalars(
             select(PushToken)
             .where(PushToken.token == token, PushToken.revoked_at.is_(None))
@@ -182,7 +193,7 @@ def resolve_target(
 ) -> Target:
     """Проверки createNotification и previewNotificationAudience (ADR 0019 п. 4, 6)."""
     if type_ is NotificationType.MAINTENANCE:
-        raise _field_error(
+        raise field_error(
             "type",
             "NOTIFICATION_TYPE_RESERVED",
             "Напоминания о ТО создаёт система, публиковать их нельзя",
@@ -191,28 +202,28 @@ def resolve_target(
     if target_vehicle_model_id is not None:
         model = db.get(VehicleModel, target_vehicle_model_id)
         if model is None:
-            raise _field_error(
+            raise field_error(
                 "target_vehicle_model_id", "VEHICLE_MODEL_NOT_FOUND", "Модель не найдена"
             )
     if type_ is not NotificationType.FIRMWARE:
         if firmware_release_id is not None:
-            raise _field_error(
+            raise field_error(
                 "firmware_release_id",
                 "FIRMWARE_RELEASE_NOT_ALLOWED",
                 "Релиз прошивки указывается только для уведомления о прошивке",
             )
         return Target(type_, model, None)
     if firmware_release_id is None:
-        raise _field_error(
+        raise field_error(
             "firmware_release_id", "FIRMWARE_RELEASE_REQUIRED", "Укажите релиз прошивки"
         )
     firmware = db.get(FirmwareRelease, firmware_release_id)
     if firmware is None:
-        raise _field_error(
+        raise field_error(
             "firmware_release_id", "FIRMWARE_RELEASE_NOT_FOUND", "Релиз прошивки не найден"
         )
     if model is not None and model.id != firmware.vehicle_model_id:
-        raise _field_error(
+        raise field_error(
             "firmware_release_id",
             "FIRMWARE_MODEL_MISMATCH",
             "Релиз относится к другой модели",
@@ -438,9 +449,9 @@ def create_firmware_release(
     today = today or today_in_business_tz()
     model = db.get(VehicleModel, vehicle_model_id) if is_db_id(vehicle_model_id) else None
     if model is None:
-        raise _field_error("vehicle_model_id", "VEHICLE_MODEL_NOT_FOUND", "Модель не найдена")
+        raise field_error("vehicle_model_id", "VEHICLE_MODEL_NOT_FOUND", "Модель не найдена")
     if released_at > today:
-        raise _field_error("released_at", "RELEASED_AT_IN_FUTURE", "Дата выпуска в будущем")
+        raise field_error("released_at", "RELEASED_AT_IN_FUTURE", "Дата выпуска в будущем")
     release = FirmwareRelease(vehicle_model_id=model.id, version=version, released_at=released_at)
     db.add(release)
     try:
@@ -449,7 +460,7 @@ def create_firmware_release(
         db.rollback()
         if constraint_name(exc) != "uq_firmware_release_vehicle_model_id_version":
             raise
-        raise _field_error(
+        raise field_error(
             "version", "FIRMWARE_VERSION_EXISTS", "Такая версия прошивки модели уже есть"
         ) from exc
     _publish(
@@ -471,7 +482,7 @@ def set_vehicle_firmware(
     vehicle = access.for_change(db, user, vehicle_id).vehicle
     release = get_by_id(db, FirmwareRelease, firmware_release_id)
     if release is None or release.vehicle_model_id != vehicle.vehicle_model_id:
-        raise _field_error(
+        raise field_error(
             "firmware_release_id",
             "FIRMWARE_RELEASE_NOT_FOUND",
             "Релиз прошивки этой модели не найден",

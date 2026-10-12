@@ -17,6 +17,7 @@ from redis import Redis
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.domain.notifications.dispatch import send_safely
 from app.domain.notifications.push import Outcome, PushMessage, PushSender
 from app.domain.notifications.service import active_tokens, eligible_client
 from app.domain.tickets.events import MessageCreated, TicketUpdated
@@ -93,7 +94,8 @@ class TicketPush:
             return 0
         sent = 0
         for token in active_tokens(db, client_id):
-            result = self.sender.send(
+            result = send_safely(
+                self.sender,
                 PushMessage(
                     token.token, TITLE, body, {"type": "ticket", "ticket_id": str(ticket_id)}
                 ),
