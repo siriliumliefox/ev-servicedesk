@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Smoke-тест образа backend (Главы 10–16, ADR 0013, 0014, 0016–0020): запуск как в
+# Smoke-тест образа backend (Главы 10–17, ADR 0013, 0014, 0016–0021): запуск как в
 # staging, Auth, Vehicle, Aggregates, Tickets/Uploads, WebSocket событий тикета, Knowledge Base,
 # Notifications и worker уведомлений, Analytics — сверка с контрольным набором (ADR 0020 п. 9).
 # Нужен Redis на localhost:6379 (в CI — service container, локально — docker compose up -d redis).
@@ -102,6 +102,14 @@ if [ "$r" = refused ] && ! grep -q 'ENVIRONMENT=production: PUSH_PROVIDER=fake' 
 fi
 check "worker уведомлений в production без FCM не стартует" "$r" refused
 
+# Тестовые номера SMS (ADR 0021 п. 6) в production запрещены — отказ на проверке настроек.
+out=$(docker run --rm -e SMS_TEST_PHONES=+375290009001 -e SMS_TEST_CODE=1234 \
+        "$IMAGE" python -c "import app.main" 2>&1) && r=started || r=refused
+if [ "$r" = refused ] && ! grep -q 'SMS_TEST_PHONES запрещены в production' <<<"$out"; then
+  r="refused-other-reason"
+fi
+check "тестовые номера SMS в production — образ не стартует" "$r" refused
+
 # Сайдкар MinIO: внутренняя сеть (без выхода наружу и без порта на хосте).
 docker network create --internal "$NET" >/dev/null
 docker run -d --name "$MINIO" --network "$NET" --network-alias minio \
@@ -159,11 +167,12 @@ done
 
 check "/health отвечает, окружение staging" \
   "$(curl -fsS "$BASE/health" | python3 -c 'import json,sys; print(json.load(sys.stdin)["environment"])')" staging
-check "Swagger: все операции Auth, /me, Vehicle, Aggregates, Tickets, Uploads, KnowledgeBase, Notifications, Analytics" \
+check "Swagger: все операции Auth, Users, Vehicle, Aggregates, Tickets, Uploads, KnowledgeBase, Notifications, Analytics" \
   "$(curl -fsS "$BASE/openapi.json" | python3 -c '
 import json, sys
 need = {"requestPhoneCode", "verifyPhoneCode", "refreshToken", "logout", "withdrawPdConsent",
         "staffLogin", "linkTelegram", "getCurrentUser",
+        "listUsers", "createStaffUser", "getUser", "updateUser",
         "searchVehicleModels", "listVehicles", "createVehicle", "getVehicle", "deleteVehicle",
         "updateVehicleMileage", "correctVehicleMileage", "listMaintenanceRecords",
         "createMaintenanceRecord",
