@@ -1,5 +1,6 @@
 """Миграции: полный цикл up/down/up, соответствие ORM ↔ БД, объекты вне autogenerate."""
 
+import pytest
 from sqlalchemy import CheckConstraint, Engine, create_engine, inspect, text
 from sqlalchemy.engine import URL
 from sqlalchemy.pool import NullPool
@@ -11,6 +12,7 @@ from alembic.script import ScriptDirectory
 from app.models import Base
 from app.models.enums import PG_ENUMS
 from tests.db.conftest import alembic_config
+from tests.db.factories import make_ticket
 
 EXPECTED_TABLES = set(Base.metadata.tables)
 EXPECTED_FUNCTIONS = {
@@ -49,7 +51,7 @@ def _snapshot(engine: Engine) -> dict[str, set[str]]:
 def test_upgrade_downgrade_upgrade(migrated_engine: Engine, db_url: URL) -> None:
     cfg = alembic_config(db_url)
     head = ScriptDirectory.from_config(cfg).get_current_head()
-    assert head == "0009"
+    assert head == "0011"
 
     command.downgrade(cfg, "base")
     empty = _snapshot(migrated_engine)
@@ -84,6 +86,54 @@ def test_downgrade_sla_policy_keeps_ticket_category(migrated_engine: Engine, db_
     command.upgrade(cfg, "head")
     with migrated_engine.connect() as c:
         assert c.execute(text("SELECT count(*) FROM ticket_sla_policy")).scalar_one() == 5
+
+
+def test_downgrade_knowledge_base(migrated_engine: Engine, db_url: URL) -> None:
+    """0011 удаляет только свои сценарии, 0010 — свои колонки и таблицу версий (ADR 0018)."""
+    cfg = alembic_config(db_url)
+    count = "SELECT count(*) FROM knowledge_article WHERE article_type = 'troubleshooting'"
+    with migrated_engine.connect() as c:
+        assert c.execute(text(count)).scalar_one() == 5
+    command.downgrade(cfg, "0010")
+    with migrated_engine.connect() as c:
+        assert c.execute(text(count)).scalar_one() == 0
+        assert c.execute(text("SELECT count(*) FROM decision_tree_node")).scalar_one() == 0
+    command.downgrade(cfg, "0009")
+    snapshot = _snapshot(migrated_engine)
+    assert "knowledge_article_revision" not in snapshot["tables"]
+    assert "ticket_category" in snapshot["enums"], "тип нужен ticket.category (0001)"
+    command.upgrade(cfg, "head")
+    with migrated_engine.connect() as c:
+        assert c.execute(text(count)).scalar_one() == 5
+        assert c.execute(text("SELECT count(*) FROM knowledge_article_revision")).scalar_one() == 5
+
+
+def test_downgrade_scenarios_refuses_when_tickets_reference_them(
+    migrated_engine: Engine, db_url: URL
+) -> None:
+    """Тикет с «пометкой» сценария — откат 0011 останавливается, данные не теряются молча."""
+    cfg = alembic_config(db_url)
+    with migrated_engine.begin() as c:
+        article = c.execute(
+            text("SELECT id FROM knowledge_article ORDER BY id LIMIT 1")
+        ).scalar_one()
+        ticket = make_ticket(c, source_article_id=article, source_article_version=1)
+    try:
+        with pytest.raises(Exception, match="ссылаются тикеты"):
+            command.downgrade(cfg, "0010")
+        with migrated_engine.connect() as c:
+            assert MigrationContext.configure(c).get_current_revision() == "0011"
+    finally:
+        with migrated_engine.begin() as c:
+            vehicle = c.execute(
+                text("DELETE FROM ticket WHERE id = :t RETURNING vehicle_id"), {"t": ticket}
+            ).scalar_one()
+            user, model = c.execute(
+                text("DELETE FROM vehicle WHERE id = :v RETURNING user_id, vehicle_model_id"),
+                {"v": vehicle},
+            ).one()
+            c.execute(text("DELETE FROM app_user WHERE id = :u"), {"u": user})
+            c.execute(text("DELETE FROM vehicle_model WHERE id = :m"), {"m": model})
 
 
 def test_orm_matches_migrations(migrated_engine: Engine) -> None:

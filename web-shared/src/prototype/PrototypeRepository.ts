@@ -356,15 +356,21 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
           throw validation("Прошивка должна относиться к выбранной модели", "firmware_release_id");
         }
       }
+      const category = body.category ?? null;
+      if (body.article_type === "troubleshooting" && category === null) {
+        throw validation("Выберите категорию ошибки", "category");
+      }
       const created: KnowledgeArticle = {
         id: this.nextId++,
         article_type: body.article_type,
+        category,
         title: body.title.trim(),
         content: body.content,
         vehicle_model_id: body.vehicle_model_id ?? null,
         firmware_release_id: body.firmware_release_id ?? null,
         version: 1,
         is_published: false,
+        updated_at: new Date().toISOString(),
       };
       this.articles.unshift(created);
       return created;
@@ -381,12 +387,19 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
         const result = this.validateTree(articleId);
         if (!result.is_valid) throw validation("В дереве решений есть ошибки — исправьте перед публикацией", "is_published");
       }
-      const changed = title !== a.title || content !== a.content;
+      const category = body.category === undefined ? a.category : body.category;
+      if (a.article_type === "troubleshooting" && category === null) throw validation("Выберите категорию ошибки", "category");
+      // Версия — опубликованная редакция (ADR 0018 п. 1): правка опубликованной статьи — +1,
+      // правки черновика версий не создают. Упрощение: снимков и истории версий в прототипе нет.
+      const changed = title.trim() !== a.title || content !== a.content || category !== a.category;
+      const wasPublished = a.is_published;
       Object.assign(a, {
         title: title.trim(),
         content,
+        category,
         is_published: body.is_published ?? a.is_published,
-        version: changed ? a.version + 1 : a.version,
+        version: wasPublished && changed ? a.version + 1 : a.version,
+        updated_at: new Date().toISOString(),
       });
       return a;
     });
@@ -593,6 +606,8 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
       description: t.seed.description,
       // Снимок прошивки при создании (N-09); в прототипе прошивка авто не меняется — совпадает с текущей.
       firmware_version_at_creation: vehicle.current_firmware_version ?? null,
+      // Эскалация из дерева решений (ADR 0018 п. 11) — тикеты фикстур созданы не из базы знаний.
+      source_article: null,
       attachments: [],
       vehicle_context: { vehicle, aggregate_statuses: AGGREGATE_STATUSES[vehicle.id] ?? [] },
     };
@@ -614,29 +629,43 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
     if (!content.trim()) throw validation("Введите текст статьи", "content");
   }
 
-  /** Предварительные правила проверки дерева (финальные — глава 14). */
+  /**
+   * Проверка дерева — правила backend (ADR 0018 п. 3–4): финал — эскалация или шаг без вариантов;
+   * тупик — шаг, из которого финал недостижим (в т. ч. цикл). Упрощение прототипа: вариант без
+   * перехода (null) допускается в форме и считается тупиковым — backend отклоняет его сразу (422).
+   */
   private validateTree(articleId: number): DecisionTreeValidationResult {
     const nodes = this.treeNodes.filter((n) => n.article_id === articleId);
+    if (nodes.length === 0) return { is_valid: false, issues: [{ problem: "NO_ROOT" }] };
     const ids = new Set(nodes.map((n) => n.id));
     const issues: DecisionTreeValidationResult["issues"] = [];
     const roots = nodes.filter((n) => n.is_root);
+    if (roots.length === 0) issues.push({ problem: "NO_ROOT" });
     if (roots.length > 1) for (const r of roots) issues.push({ node_id: r.id, problem: "MULTIPLE_ROOTS" });
+    const edges = new Map<number, number[]>();
     for (const n of nodes) {
-      for (const o of n.options ?? []) {
-        if (o.next_node_id === null && !n.is_escalation) issues.push({ node_id: n.id, problem: "DEAD_END" });
-        if (o.next_node_id !== null && !ids.has(o.next_node_id)) issues.push({ node_id: n.id, problem: "BROKEN_REFERENCE" });
+      const targets = (n.options ?? []).map((o) => o.next_node_id).filter((t): t is number => t !== null);
+      if (targets.some((t) => !ids.has(t))) issues.push({ node_id: n.id, problem: "BROKEN_REFERENCE" });
+      edges.set(n.id, targets.filter((t) => ids.has(t)));
+    }
+    const reach = (start: number[], next: (id: number) => number[]) => {
+      const seen = new Set<number>();
+      const queue = [...start];
+      while (queue.length) {
+        const id = queue.shift()!;
+        if (seen.has(id)) continue;
+        seen.add(id);
+        queue.push(...next(id));
       }
-    }
-    const reachable = new Set<number>();
-    const queue = roots.map((r) => r.id);
-    while (queue.length) {
-      const id = queue.shift()!;
-      if (reachable.has(id)) continue;
-      reachable.add(id);
-      const n = nodes.find((x) => x.id === id);
-      for (const o of n?.options ?? []) if (o.next_node_id !== null && ids.has(o.next_node_id)) queue.push(o.next_node_id);
-    }
-    for (const n of nodes) if (!reachable.has(n.id)) issues.push({ node_id: n.id, problem: "UNREACHABLE" });
+      return seen;
+    };
+    const fromRoot = reach(roots.map((r) => r.id), (id) => edges.get(id) ?? []);
+    if (roots.length) for (const n of nodes) if (!fromRoot.has(n.id)) issues.push({ node_id: n.id, problem: "UNREACHABLE" });
+    const isFinal = (n: DecisionTreeNode) => n.is_escalation || (n.options ?? []).length === 0;
+    const incoming = (id: number) => nodes.filter((n) => edges.get(n.id)!.includes(id)).map((n) => n.id);
+    const leadsToFinal = reach(nodes.filter(isFinal).map((n) => n.id), incoming);
+    for (const n of nodes) if (!leadsToFinal.has(n.id)) issues.push({ node_id: n.id, problem: "DEAD_END" });
+    if (roots.length && !nodes.some((n) => n.is_escalation && fromRoot.has(n.id))) issues.push({ problem: "NO_ESCALATION" });
     return { is_valid: issues.length === 0, issues };
   }
 

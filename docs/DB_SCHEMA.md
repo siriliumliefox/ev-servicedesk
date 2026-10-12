@@ -14,11 +14,11 @@
 | MaintenanceRegulation | `maintenance_regulation`, `aggregate_status_thresholds` (пороги «светофора», ADR 0009) |
 | Ticket | `ticket`, `ticket_attachment`, `ticket_sla_policy` (нормативы SLA, ADR 0017) |
 | TicketMessage | `ticket_message` |
-| KnowledgeArticle | `knowledge_article`, `decision_tree_node` |
+| KnowledgeArticle | `knowledge_article`, `decision_tree_node`, `knowledge_article_revision` (версии — снимки опубликованных редакций, ADR 0018) |
 | Notification | `notification`, `notification_recipient`, `push_token`, `notification_delivery` |
 | FirmwareRelease | `firmware_release` |
 
-Итого 22 таблицы, 6 ENUM; триггеры: `trg_vehicle_guard`, `trg_set_updated_at` (на каждой таблице с `updated_at`), корректировка пробега и защита `pd_consent` (ADR 0006), `trg_singleton_row_guard` (ADR 0009). Связи 1:N — все FK; M:N —
+Итого 23 таблицы, 6 ENUM; триггеры: `trg_vehicle_guard`, `trg_set_updated_at` (на каждой таблице с `updated_at`), корректировка пробега и защита `pd_consent` (ADR 0006), `trg_singleton_row_guard` (ADR 0009), `trg_append_only` на `knowledge_article_revision` (ADR 0018). Связи 1:N — все FK; M:N —
 `notification_recipient` (notification × user), `notification_delivery` (notification × push_token).
 
 ## Бэклог baseline v1 → данные
@@ -30,7 +30,7 @@
 | C-03 | `vehicle.mileage`, `maintenance_record`, `vehicle_mileage_correction` (ADR 0006) |
 | C-04, C-05 | `vehicle_aggregate_status`, `maintenance_regulation`, `aggregate_status_thresholds` (расчёт — `docs/specs/AGGREGATE_STATUS_ALGORITHM.md`) |
 | C-06 | `knowledge_article.vehicle_model_id`, `.firmware_release_id`, `vehicle.current_firmware_release_id` |
-| C-07 | `decision_tree_node`, `ticket.source_article_id`, `ticket.source_node_id` |
+| C-07 | `decision_tree_node`, `knowledge_article.category`, `ticket.source_article_id`, `ticket.source_article_version`, `ticket.source_node_id` |
 | C-08, X-03 | `ticket`, `ticket_attachment` (object_key, ADR 0004; upload_name — имя исходной загрузки, UNIQUE, ADR 0017) |
 | C-09 | `ticket_message`; история — `ticket` по `vehicle.user_id` |
 | C-10, C-11, C-14, A-03 | `notification` (type, таргетинг по модели), `firmware_release`, `push_token` |
@@ -39,12 +39,12 @@
 | C-15, X-06 | `app_user.telegram_id` (UNIQUE) |
 | E-01 | `ticket.status`, `ticket.sla_due_at` (= `created_at` + норматив `ticket_sla_policy` категории, ADR 0017), `ticket.category`, индекс `(status, sla_due_at)` |
 | E-02 | `ticket.status`, `resolved_at` (CHECK согласованности) |
-| E-03 | `knowledge_article` |
+| E-03 | `knowledge_article` (поиск — `search_vector`, GIN, ADR 0018) |
 | E-04, N-09 | `ticket.vehicle_id` → `vehicle`; `ticket.firmware_release_id` (снимок прошивки) |
 | E-05 | `vehicle_aggregate_status` + `maintenance_record.performed_by_user_id` |
 | E-06, N-01…N-05 | UI, данных в БД не требуют |
 | A-01 | `maintenance_regulation` (версии через `is_archived`) |
-| A-02 | `knowledge_article`, `decision_tree_node` |
+| A-02 | `knowledge_article`, `decision_tree_node`, `knowledge_article_revision` |
 | A-04 | `app_user.role`, `is_active` |
 | A-05 | `ticket.created_at`, `first_response_at`, `resolved_at` |
 | A-06 | `ticket` × `vehicle_model`; конверсия — `maintenance_record.ticket_id`, `notification_recipient` |
@@ -110,4 +110,8 @@
 | Только хэши секретов | `ck_refresh_token_token_hash_sha256`, `ck_app_user_staff_password` | `test_refresh_token_stores_only_sha256`, `test_staff_requires_password_hash` |
 | Вложение и сообщение — одного тикета | `fk_ticket_attachment_message_same_ticket` | `test_attachment_message_must_belong_to_same_ticket` |
 | Одна загрузка — одно вложение, и при одновременных привязках (миграция 0009, ADR 0017) | `uq_ticket_attachment_upload_name` | `test_upload_becomes_one_attachment`, `test_second_binding_of_upload_waits_for_first` |
+| «Устранение неполадок» — с категорией ошибки (миграция 0010, ADR 0018) | `ck_knowledge_article_troubleshooting_has_category` | `test_create_validation`, `test_update_validation` |
+| Номера версий статьи уникальны и идут подряд, снимок неизменен | `uq_knowledge_article_revision_article_id_version`, `knowledge_article_revision_append_only`, блокировка строки статьи | `test_parallel_edits_number_versions_in_order`, `test_revisions_are_append_only` |
+| Тикет помечен существующей версией статьи (эскалация) | `fk_ticket_source_article_revision` | `test_source_reference_validation`, `test_decision_tree_escalation_creates_marked_ticket` |
+| Пять сценариев «Устранение неполадок» без тупиков (seed 0011) | data-миграция, откат — только без тикетов | `test_seeded_scenarios_cover_every_category_without_dead_ends`, `test_downgrade_scenarios_refuses_when_tickets_reference_them` |
 | ORM ≡ миграции; DDL/ERD синхронны | autogenerate, export-скрипты | `test_orm_matches_migrations`, `test_ddl_file_in_sync_with_migrations`, `test_erd_file_in_sync_with_models` |

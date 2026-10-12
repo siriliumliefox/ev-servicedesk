@@ -3,6 +3,8 @@
 # Базовая версия — релиз (X.Y.Z): ломающее изменение = ошибка.
 # Базовая версия — пререлиз (X.Y.Z-rcN): только отчёт (до заморозки v1).
 # Использование: scripts/check_api_breaking.sh [base-ref]   (по умолчанию origin/develop)
+# Одобренные исключения — docs/api-breaking-allowed.txt (oasdiff --err-ignore): только новые
+# значения ENUM в ответах с оговоркой в описании (политика ADR 0007).
 set -eu
 
 BASE_REF="${1:-origin/develop}"
@@ -15,12 +17,14 @@ if ! git show "$BASE_REF:docs/openapi.yaml" > "$TMP/base.yaml" 2>/dev/null; then
     exit 0
 fi
 cp docs/openapi.yaml "$TMP/head.yaml"
+cp docs/api-breaking-allowed.txt "$TMP/allowed.txt"
 
 BASE_VERSION="$(sed -n 's/^  version: "\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' "$TMP/base.yaml" | head -n 1)"
 echo "Базовый контракт: $BASE_REF, версия $BASE_VERSION"
 
 run_oasdiff() {
-    docker run --rm -v "$TMP:/specs:ro" "$OASDIFF_IMAGE" breaking /specs/base.yaml /specs/head.yaml "$@"
+    docker run --rm -v "$TMP:/specs:ro" "$OASDIFF_IMAGE" breaking /specs/base.yaml /specs/head.yaml \
+        --err-ignore /specs/allowed.txt "$@"
 }
 
 case "$BASE_VERSION" in

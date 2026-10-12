@@ -50,12 +50,26 @@ erDiagram
         bigint vehicle_model_id FK "nullable"
         bigint firmware_release_id FK "nullable"
         kb_article_type article_type
+        ticket_category category "nullable"
         varchar_200 title
         text content
         integer version
         boolean is_published
+        tsvector search_vector
         timestamptz created_at
         timestamptz updated_at
+    }
+    knowledge_article_revision {
+        bigint id PK
+        bigint article_id FK
+        integer version
+        varchar_200 title
+        text content
+        ticket_category category "nullable"
+        bigint vehicle_model_id FK "nullable"
+        bigint firmware_release_id FK "nullable"
+        jsonb decision_tree
+        timestamptz created_at
     }
     maintenance_record {
         bigint id PK
@@ -135,6 +149,7 @@ erDiagram
         timestamptz sla_due_at
         bigint firmware_release_id FK "nullable"
         bigint source_article_id FK "nullable"
+        integer source_article_version FK "nullable"
         bigint source_node_id FK "nullable"
         timestamptz first_response_at "nullable"
         timestamptz resolved_at "nullable"
@@ -209,6 +224,9 @@ erDiagram
     vehicle_model ||--o{ firmware_release : "vehicle_model_id (RESTRICT)"
     firmware_release |o--o{ knowledge_article : "firmware_release_id, vehicle_model_id (RESTRICT)"
     vehicle_model |o--o{ knowledge_article : "vehicle_model_id (RESTRICT)"
+    knowledge_article ||--o{ knowledge_article_revision : "article_id (CASCADE)"
+    firmware_release |o--o{ knowledge_article_revision : "firmware_release_id (RESTRICT)"
+    vehicle_model |o--o{ knowledge_article_revision : "vehicle_model_id (RESTRICT)"
     aggregate_type |o--o{ maintenance_record : "aggregate_type_id (RESTRICT)"
     app_user |o--o{ maintenance_record : "performed_by_user_id (RESTRICT)"
     ticket |o--o{ maintenance_record : "ticket_id (SET NULL)"
@@ -227,6 +245,7 @@ erDiagram
     app_user |o--o{ ticket : "assigned_engineer_id (RESTRICT)"
     firmware_release |o--o{ ticket : "firmware_release_id (RESTRICT)"
     knowledge_article |o--o{ ticket : "source_article_id (SET NULL)"
+    knowledge_article_revision |o--o{ ticket : "source_article_id, source_article_version (SET NULL)"
     decision_tree_node |o--o{ ticket : "source_node_id (SET NULL)"
     vehicle ||--o{ ticket : "vehicle_id (RESTRICT)"
     ticket_message |o--o{ ticket_attachment : "ticket_message_id, ticket_id (RESTRICT)"

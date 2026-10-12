@@ -23,6 +23,7 @@ from sqlalchemy.orm import Mapped, column_property, mapped_column, relationship
 from app.models.auth import AppUser
 from app.models.base import Base, CreatedAtMixin, IdMixin, TimestampMixin
 from app.models.enums import AttachmentType, TicketCategory, TicketStatus, pg_enum
+from app.models.knowledge import KnowledgeArticleRevision
 from app.models.vehicles import FirmwareRelease, Vehicle, VehicleModel
 
 SUMMARY_LENGTH = 140  # Ticket.summary контракта (1.4.0, ADR 0017 п. 13)
@@ -42,6 +43,14 @@ class Ticket(IdMixin, TimestampMixin, Base):
             "(status = 'resolved') = (resolved_at IS NOT NULL)", name="resolved_at_consistent"
         ),
         CheckConstraint("btrim(description) <> ''", name="description_not_blank"),
+        CheckConstraint("source_article_version >= 1", name="source_article_version_positive"),
+        # Версия статьи, из которой эскалирован тикет (ADR 0018 п. 11), — существующий снимок.
+        ForeignKeyConstraint(
+            ["source_article_id", "source_article_version"],
+            ["knowledge_article_revision.article_id", "knowledge_article_revision.version"],
+            name="fk_ticket_source_article_revision",
+            ondelete="SET NULL",
+        ),
         Index("ix_ticket_status_sla_due_at", "status", "sla_due_at"),
     )
 
@@ -65,6 +74,7 @@ class Ticket(IdMixin, TimestampMixin, Base):
     source_article_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("knowledge_article.id", ondelete="SET NULL"), index=True
     )
+    source_article_version: Mapped[int | None] = mapped_column(Integer)
     source_node_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("decision_tree_node.id", ondelete="SET NULL"), index=True
     )
@@ -73,6 +83,10 @@ class Ticket(IdMixin, TimestampMixin, Base):
 
     # Связи только явной загрузкой (selectinload), ленивая подгрузка — ошибка (ADR 0015).
     vehicle: Mapped[Vehicle] = relationship(lazy="raise")
+    # «Пометка» эскалации — версия статьи, которую видел клиент (ADR 0018 п. 11).
+    source_article: Mapped[KnowledgeArticleRevision | None] = relationship(
+        viewonly=True, lazy="raise"
+    )
     # Вложения самого тикета; вложения сообщений — TicketMessage.attachments.
     attachments: Mapped[list["TicketAttachment"]] = relationship(
         primaryjoin="and_(Ticket.id == TicketAttachment.ticket_id, "

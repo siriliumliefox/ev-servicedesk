@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Smoke-тест образа backend (Главы 10–13, ADR 0013, 0014, 0016, 0017): запуск как в staging,
-# Auth, Vehicle, Aggregates, Tickets/Uploads и WebSocket событий тикета.
+# Smoke-тест образа backend (Главы 10–14, ADR 0013, 0014, 0016, 0017, 0018): запуск как в
+# staging, Auth, Vehicle, Aggregates, Tickets/Uploads, WebSocket событий тикета, Knowledge Base.
 # Нужен Redis на localhost:6379 (в CI — service container, локально — docker compose up -d redis).
 # БД Redis 14 отведена smoke-тесту и очищается перед запуском. S3 — собственный сайдкар MinIO
 # во внутренней docker-сети smoke-теста (без порта на хосте; MinIO из docker compose не
@@ -126,7 +126,7 @@ done
 
 check "/health отвечает, окружение staging" \
   "$(curl -fsS "$BASE/health" | python3 -c 'import json,sys; print(json.load(sys.stdin)["environment"])')" staging
-check "Swagger: все операции Auth Service, /me, Vehicle, Aggregates, Tickets и Uploads" \
+check "Swagger: все операции Auth Service, /me, Vehicle, Aggregates, Tickets, Uploads и KnowledgeBase" \
   "$(curl -fsS "$BASE/openapi.json" | python3 -c '
 import json, sys
 need = {"requestPhoneCode", "verifyPhoneCode", "refreshToken", "logout", "withdrawPdConsent",
@@ -139,7 +139,11 @@ need = {"requestPhoneCode", "verifyPhoneCode", "refreshToken", "logout", "withdr
         "replaceAggregateStatus", "getAggregateStatusThresholds",
         "updateAggregateStatusThresholds",
         "listTickets", "createTicket", "getTicket", "updateTicketStatus", "claimTicket",
-        "assignTicket", "listTicketMessages", "createTicketMessage", "createPresignedUpload"}
+        "assignTicket", "listTicketMessages", "createTicketMessage", "createPresignedUpload",
+        "listKnowledgeArticles", "createKnowledgeArticle", "getKnowledgeArticle",
+        "updateKnowledgeArticle", "unpublishKnowledgeArticle", "listKnowledgeArticleRevisions",
+        "getKnowledgeArticleRevision", "listDecisionTreeNodes", "createDecisionTreeNode",
+        "validateDecisionTree", "updateDecisionTreeNode", "deleteDecisionTreeNode"}
 ops = {o["operationId"] for p in json.load(sys.stdin)["paths"].values() for o in p.values()}
 print("ok" if need <= ops else sorted(need - ops))')" ok
 check "POST /v1/auth/phone/request-code → 200" \
@@ -158,6 +162,11 @@ check "POST /v1/vehicles с подделанным токеном → 401" \
       -d '{"vin":"L6TZ0010000000001"}')" 401
 check "GET /v1/aggregate-types без токена → 401" "$(status "$BASE/v1/aggregate-types")" 401
 check "GET /v1/tickets без токена → 401" "$(status "$BASE/v1/tickets")" 401
+check "GET /v1/knowledge-articles без токена → 401" "$(status "$BASE/v1/knowledge-articles")" 401
+check "PATCH /v1/decision-tree-nodes/1 с подделанным токеном → 401" \
+  "$(status -X PATCH "$BASE/v1/decision-tree-nodes/1" -H 'Content-Type: application/json' \
+      -H "Authorization: Bearer $FORGED" \
+      -d '{"question_text":"x","is_root":true,"is_escalation":false}')" 401
 check "POST /v1/uploads/presign без токена → 401" \
   "$(status -X POST "$BASE/v1/uploads/presign" -H 'Content-Type: application/json' \
       -d '{"file_name":"photo.jpg","file_type":"photo"}')" 401

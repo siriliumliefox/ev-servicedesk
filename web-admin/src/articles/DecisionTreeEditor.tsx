@@ -1,5 +1,5 @@
 // Дерево решений статьи «Устранение неполадок» (ТЗ, блок 2): шаги с вариантами ответа, корень, эскалация в
-// тикет; проверка на тупики перед публикацией (validateDecisionTree). Правила проверки — глава 14.
+// тикет; проверка на тупики перед публикацией (validateDecisionTree). Правила проверки — ADR 0018.
 import { useState, type FormEvent } from 'react'
 import {
   Badge,
@@ -18,10 +18,12 @@ import {
 import { useAdmin } from '../repo.ts'
 
 const PROBLEM_LABELS: Record<NonNullable<DecisionTreeValidationResult['issues'][number]['problem']>, string> = {
-  DEAD_END: 'тупик: вариант никуда не ведёт, а шаг не эскалация',
+  DEAD_END: 'тупик: с этого шага не дойти ни до решения, ни до обращения',
   UNREACHABLE: 'шаг недостижим из корня',
   MULTIPLE_ROOTS: 'несколько корневых шагов',
   BROKEN_REFERENCE: 'вариант ссылается на удалённый шаг',
+  NO_ROOT: 'нет корневого шага',
+  NO_ESCALATION: 'из дерева нельзя создать обращение — нет достижимого шага эскалации',
 }
 
 type Option = { label: string; next: string }
@@ -97,6 +99,14 @@ export function DecisionTreeEditor({
           {result.is_valid
             ? 'Ошибок нет — статью можно публиковать.'
             : `Найдено ошибок: ${result.issues.length}. Шаги с ошибками отмечены ниже.`}
+          {/* Проблемы дерева целиком (без node_id): нет корня, нет достижимой эскалации. */}
+          {result.issues
+            .filter((i) => i.node_id === undefined && i.problem)
+            .map((i) => (
+              <span key={i.problem} className="block">
+                {PROBLEM_LABELS[i.problem!]}
+              </span>
+            ))}
         </p>
       )}
 
