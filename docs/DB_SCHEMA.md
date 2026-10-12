@@ -12,13 +12,13 @@
 | Vehicle | `vehicle`, `vehicle_model`, `vehicle_mileage_correction` |
 | Aggregate | `aggregate_type`, `vehicle_aggregate_status`, `maintenance_record` |
 | MaintenanceRegulation | `maintenance_regulation`, `aggregate_status_thresholds` (пороги «светофора», ADR 0009) |
-| Ticket | `ticket`, `ticket_attachment` |
+| Ticket | `ticket`, `ticket_attachment`, `ticket_sla_policy` (нормативы SLA, ADR 0017) |
 | TicketMessage | `ticket_message` |
 | KnowledgeArticle | `knowledge_article`, `decision_tree_node` |
 | Notification | `notification`, `notification_recipient`, `push_token`, `notification_delivery` |
 | FirmwareRelease | `firmware_release` |
 
-Итого 21 таблица, 6 ENUM; триггеры: `trg_vehicle_guard`, `trg_set_updated_at` (на каждой таблице с `updated_at`), корректировка пробега и защита `pd_consent` (ADR 0006), `trg_singleton_row_guard` (ADR 0009). Связи 1:N — все FK; M:N —
+Итого 22 таблицы, 6 ENUM; триггеры: `trg_vehicle_guard`, `trg_set_updated_at` (на каждой таблице с `updated_at`), корректировка пробега и защита `pd_consent` (ADR 0006), `trg_singleton_row_guard` (ADR 0009). Связи 1:N — все FK; M:N —
 `notification_recipient` (notification × user), `notification_delivery` (notification × push_token).
 
 ## Бэклог baseline v1 → данные
@@ -31,13 +31,13 @@
 | C-04, C-05 | `vehicle_aggregate_status`, `maintenance_regulation`, `aggregate_status_thresholds` (расчёт — `docs/specs/AGGREGATE_STATUS_ALGORITHM.md`) |
 | C-06 | `knowledge_article.vehicle_model_id`, `.firmware_release_id`, `vehicle.current_firmware_release_id` |
 | C-07 | `decision_tree_node`, `ticket.source_article_id`, `ticket.source_node_id` |
-| C-08, X-03 | `ticket`, `ticket_attachment` (object_key, ADR 0004) |
+| C-08, X-03 | `ticket`, `ticket_attachment` (object_key, ADR 0004; upload_name — имя исходной загрузки, UNIQUE, ADR 0017) |
 | C-09 | `ticket_message`; история — `ticket` по `vehicle.user_id` |
 | C-10, C-11, C-14, A-03 | `notification` (type, таргетинг по модели), `firmware_release`, `push_token` |
 | C-12 | `vehicle.user_id` 1:N |
 | C-13 | `notification_recipient.read_at` |
 | C-15, X-06 | `app_user.telegram_id` (UNIQUE) |
-| E-01 | `ticket.status`, `ticket.sla_due_at`, `ticket.category`, индекс `(status, sla_due_at)` |
+| E-01 | `ticket.status`, `ticket.sla_due_at` (= `created_at` + норматив `ticket_sla_policy` категории, ADR 0017), `ticket.category`, индекс `(status, sla_due_at)` |
 | E-02 | `ticket.status`, `resolved_at` (CHECK согласованности) |
 | E-03 | `knowledge_article` |
 | E-04, N-09 | `ticket.vehicle_id` → `vehicle`; `ticket.firmware_release_id` (снимок прошивки) |
@@ -82,7 +82,7 @@
 | Объект | Правило | Опора в схеме |
 |---|---|---|
 | vehicle | client — свои; engineer — из назначенного тикета (RBAC-01); admin — все | `vehicle.user_id` (неизменяем), `ticket(vehicle_id, assigned_engineer_id)` |
-| ticket | client — тикеты своих авто; engineer — все/назначенные | `ticket.vehicle_id → vehicle.user_id`, `assigned_engineer_id` |
+| ticket | client — тикеты своих авто; engineer — очередь (`new` без исполнителя) и назначенные ему (RBAC-04, ADR 0017); admin — все | `ticket.vehicle_id → vehicle.user_id`, `assigned_engineer_id`, `status` |
 | attachment | как у тикета; публичных ссылок нет | `ticket_attachment.ticket_id`, `object_key` (ADR 0004) |
 
 Реализация проверок — сервисный слой глав 11–13; здесь доказано только наличие данных
@@ -106,6 +106,8 @@
 | Один активный регламент на (модель, агрегат) | `uq_maintenance_regulation_active` | `test_regulation_interval_rules` |
 | Пороги «светофора»: одна строка 70/100, `1 ≤ yellow < red ≤ 200`, не удаляется | `ck_aggregate_status_thresholds_*`, `trg_singleton_row_guard` | `test_thresholds.py` |
 | Атомарный claim тикета | условный UPDATE + row lock | `test_concurrent_claim_has_single_winner` |
+| Норматив SLA у каждой категории тикета, срок > 0, один на категорию (seed 0008) | `pk_ticket_sla_policy`, `ck_ticket_sla_policy_resolution_minutes_positive` | `test_sla_policy.py` |
 | Только хэши секретов | `ck_refresh_token_token_hash_sha256`, `ck_app_user_staff_password` | `test_refresh_token_stores_only_sha256`, `test_staff_requires_password_hash` |
 | Вложение и сообщение — одного тикета | `fk_ticket_attachment_message_same_ticket` | `test_attachment_message_must_belong_to_same_ticket` |
+| Одна загрузка — одно вложение, и при одновременных привязках (миграция 0009, ADR 0017) | `uq_ticket_attachment_upload_name` | `test_upload_becomes_one_attachment`, `test_second_binding_of_upload_waits_for_first` |
 | ORM ≡ миграции; DDL/ERD синхронны | autogenerate, export-скрипты | `test_orm_matches_migrations`, `test_ddl_file_in_sync_with_migrations`, `test_erd_file_in_sync_with_models` |

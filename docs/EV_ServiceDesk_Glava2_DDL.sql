@@ -630,5 +630,34 @@ UPDATE aggregate_type SET name = normalize(name, NFC) WHERE name IS NOT NFC NORM
 
 UPDATE alembic_version SET version_num='0007' WHERE alembic_version.version_num = '0006';
 
+-- Running upgrade 0007 -> 0008
+
+CREATE TABLE ticket_sla_policy (
+    category ticket_category NOT NULL, 
+    resolution_minutes INTEGER NOT NULL, 
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
+    CONSTRAINT pk_ticket_sla_policy PRIMARY KEY (category), 
+    CONSTRAINT ck_ticket_sla_policy_resolution_minutes_positive CHECK (resolution_minutes > 0)
+);
+
+INSERT INTO ticket_sla_policy (category, resolution_minutes) VALUES ('app_crash', 240), ('navigation', 480), ('sim', 480), ('audio', 1440), ('maintenance', 2880);
+
+CREATE TRIGGER trg_set_updated_at BEFORE UPDATE ON ticket_sla_policy FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+UPDATE alembic_version SET version_num='0008' WHERE alembic_version.version_num = '0007';
+
+-- Running upgrade 0008 -> 0009
+
+ALTER TABLE ticket_attachment ADD COLUMN upload_name VARCHAR(64);
+
+UPDATE ticket_attachment SET upload_name = regexp_replace(object_key, '^.*/', '');
+
+ALTER TABLE ticket_attachment ALTER COLUMN upload_name SET NOT NULL;
+
+ALTER TABLE ticket_attachment ADD CONSTRAINT uq_ticket_attachment_upload_name UNIQUE (upload_name);
+
+UPDATE alembic_version SET version_num='0009' WHERE alembic_version.version_num = '0008';
+
 COMMIT;
 

@@ -1,6 +1,6 @@
 # EV-ServiceDesk — локальное окружение (Глава 4, шаг 3)
 #
-# Поднимает ТОЛЬКО инфраструктуру (Postgres, Redis, Adminer) — backend/web
+# Поднимает ТОЛЬКО инфраструктуру (Postgres, Redis, MinIO, Adminer) — backend/web
 # запускаются нативно на хосте (poetry run / npm run dev) для быстрого
 # hot-reload. Контейнеризация самого backend — опциональный профиль "full",
 # пригодится для симуляции prod-подобного окружения перед Главой 26.
@@ -14,6 +14,13 @@
 # образы мультиархитектурные. Реально не запускала — в этой среде нет
 # доступа к Docker registry (см. ограничения сети), проверила только
 # структуру и синтаксис файла.
+
+# S3-хранилище вложений тикетов (Глава 13, ADR 0004, ADR 0017 п. 11). Официальные образы
+# minio/minio и minio/mc больше не публикуются — сборка сообщества pgsty/minio (тот же
+# MinIO, AGPLv3; внутри есть mc и curl). Версия закреплена тегом и digest — только здесь:
+# backend-ci поднимает сервис minio этого файла, smoke-тест образа берёт образ отсюда же.
+# Обновлять осознанно.
+x-minio-image: &minio-image pgsty/minio:RELEASE.2026-08-04T00-00-00Z@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372
 
 services:
   postgres:
@@ -42,6 +49,48 @@ services:
       timeout: 5s
       retries: 10
 
+  # S3 (образ — x-minio-image выше). API — http://localhost:9000, веб-консоль —
+  # http://localhost:9001 (логин/пароль — S3_* из .env).
+  minio:
+    image: *minio-image
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-ev_local}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-ev_local_only}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Однократная настройка (идемпотентна): бакет и правило жизненного цикла — загрузки
+  # uploads/ старше суток удаляются («сиротские» объекты, ADR 0017 п. 10). Тот же образ:
+  # mc в нём есть, второй сторонний образ не нужен.
+  minio-init:
+    image: *minio-image
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-ev_local}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-ev_local_only}
+      S3_BUCKET: ${S3_BUCKET:-ev-servicedesk-local}
+    entrypoint: ["/bin/sh", "-ec"]
+    # $$ — подстановка внутри контейнера, а не docker compose.
+    command:
+      - |
+        mc alias set local http://minio:9000 "$$S3_ACCESS_KEY" "$$S3_SECRET_KEY" >/dev/null
+        mc mb --ignore-existing "local/$$S3_BUCKET"
+        echo '{"Rules":[{"ID":"expire-uploads","Status":"Enabled","Filter":{"Prefix":"uploads/"},"Expiration":{"Days":1}}]}' \
+          | mc ilm import "local/$$S3_BUCKET"
+        mc ilm rule ls "local/$$S3_BUCKET"
+    restart: "no"
+
   adminer:
     image: adminer:4
     ports:
@@ -61,6 +110,13 @@ services:
       ENVIRONMENT: ${ENVIRONMENT:-local}
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-ev}:${POSTGRES_PASSWORD:-ev_local_only}@postgres:5432/${POSTGRES_DB:-ev_servicedesk}
       REDIS_URL: redis://redis:6379/0
+      # Backend ходит в MinIO по сети compose, а presigned URL подписываются для адреса,
+      # доступного клиентам на хосте (подпись включает хост).
+      S3_ENDPOINT: http://minio:9000
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://localhost:9000}
+      S3_BUCKET: ${S3_BUCKET:-ev-servicedesk-local}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-ev_local}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-ev_local_only}
     ports:
       - "8000:8000"
     depends_on:
@@ -68,7 +124,10 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
     profiles: ["full"]   # docker compose --profile full up — прод-подобный прогон
 
 volumes:
   postgres_data:
+  minio_data:

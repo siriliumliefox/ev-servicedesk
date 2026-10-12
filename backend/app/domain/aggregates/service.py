@@ -14,7 +14,7 @@ from sqlalchemy import Select, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
-from app.core.db import BIGINT_MAX, constraint_name
+from app.core.db import constraint_name, is_db_id
 from app.core.errors import ApiError
 from app.core.time import BUSINESS_TZ
 from app.domain.aggregates.status import (
@@ -154,7 +154,7 @@ def revise_regulation(
 def archive_regulation(db: Session, regulation_id: int) -> None:
     """DELETE /maintenance-regulations/{id} (admin): архивная или несуществующая — 404."""
     not_found = ApiError(404, "REGULATION_NOT_FOUND", "Активный регламент не найден")
-    if not 1 <= regulation_id <= BIGINT_MAX:
+    if not is_db_id(regulation_id):
         raise not_found
     regulation = db.scalars(
         select(MaintenanceRegulation)
@@ -238,15 +238,19 @@ def _view(
     )
 
 
-def statuses_stmt(db: Session, user: AppUser, vehicle_id: int) -> tuple[Vehicle, Select]:
-    """Авто (видимое `user`, иначе 404) и запрос его активных регламентов по порядку схемы."""
-    vehicle = access.get_vehicle(db, user, vehicle_id)
-    stmt = (
-        _active_regulations(vehicle.vehicle_model_id)
+def _regulations_stmt(vehicle_model_id: int) -> Select:
+    """Активные регламенты модели по порядку схемы со связями для ответа."""
+    return (
+        _active_regulations(vehicle_model_id)
         .order_by(MaintenanceRegulation.aggregate_type_id)
         .options(*REGULATION_OUT)
     )
-    return vehicle, stmt
+
+
+def statuses_stmt(db: Session, user: AppUser, vehicle_id: int) -> tuple[Vehicle, Select]:
+    """Авто (видимое `user`, иначе 404) и запрос его активных регламентов по порядку схемы."""
+    vehicle = access.get_vehicle(db, user, vehicle_id)
+    return vehicle, _regulations_stmt(vehicle.vehicle_model_id)
 
 
 def statuses_for(
@@ -274,6 +278,15 @@ def statuses_for(
         )
         for r in regulations
     ]
+
+
+def current_statuses(db: Session, vehicle: Vehicle) -> list[AggregateStatusView]:
+    """Все статусы авто без пагинации — контекст карточки тикета (Глава 13, ADR 0017).
+
+    Доступ к авто проверяет вызывающий (видимость тикета).
+    """
+    regulations = list(db.scalars(_regulations_stmt(vehicle.vehicle_model_id)))
+    return statuses_for(db, vehicle, regulations)
 
 
 def replace_aggregate(

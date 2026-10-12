@@ -12,22 +12,13 @@
 
 from typing import NamedTuple
 
-from sqlalchemy import (
-    ColumnElement,
-    ScalarSelect,
-    and_,
-    exists,
-    false,
-    null,
-    or_,
-    select,
-    true,
-)
+from sqlalchemy import ColumnElement, ScalarSelect, and_, exists, false, null, select, true
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.base import ExecutableOption
 
-from app.core.db import BIGINT_MAX
+from app.core.db import is_db_id
 from app.core.errors import ApiError, forbidden
+from app.domain.tickets import access as ticket_access
 from app.models import AppUser, Ticket, Vehicle
 from app.models.enums import TicketStatus, UserRole
 
@@ -44,7 +35,7 @@ def not_found() -> ApiError:
 
 
 def _check_id(vehicle_id: int) -> None:
-    if not 1 <= vehicle_id <= BIGINT_MAX:
+    if not is_db_id(vehicle_id):
         raise not_found()  # вне BIGINT такого id нет; без проверки — ошибка драйвера и 500
 
 
@@ -55,9 +46,8 @@ def _visible(user: AppUser) -> ColumnElement[bool]:
     if user.role is UserRole.CLIENT:
         return and_(Vehicle.user_id == user.id, Vehicle.deleted_at.is_(None))
     if user.role is UserRole.ENGINEER:
-        mine = Ticket.assigned_engineer_id == user.id
-        queue = and_(Ticket.assigned_engineer_id.is_(None), Ticket.status == TicketStatus.NEW)
-        return exists().where(Ticket.vehicle_id == Vehicle.id, or_(mine, queue))
+        # Авто, по которому есть видимый инженеру тикет: свой или из очереди.
+        return exists().where(Ticket.vehicle_id == Vehicle.id, ticket_access.visible(user))
     return false()  # неизвестная роль — deny by default
 
 
@@ -90,6 +80,25 @@ def get_vehicle(db: Session, user: AppUser, vehicle_id: int, *options: Executabl
     _check_id(vehicle_id)
     vehicle = db.scalars(
         select(Vehicle).where(Vehicle.id == vehicle_id, _visible(user)).options(*options)
+    ).one_or_none()
+    if vehicle is None:
+        raise not_found()
+    return vehicle
+
+
+def for_new_ticket(db: Session, user: AppUser, vehicle_id: int) -> Vehicle:
+    """Активное видимое авто под SELECT ... FOR SHARE — запись нового тикета, иначе 404.
+
+    Тикет создаётся только на активное авто (ADR 0017 п. 6): удаление и передача авто
+    (soft-delete под FOR UPDATE, ADR 0003) ждут commit тикета, а создание, дождавшись
+    удаления, видит deleted_at — 404.
+    """
+    _check_id(vehicle_id)
+    vehicle = db.scalars(
+        select(Vehicle)
+        .where(Vehicle.id == vehicle_id, Vehicle.deleted_at.is_(None), _visible(user))
+        .with_for_update(read=True, of=Vehicle)
+        .execution_options(populate_existing=True)
     ).one_or_none()
     if vehicle is None:
         raise not_found()

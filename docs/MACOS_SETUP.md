@@ -224,12 +224,17 @@ cp .env.example .env
 рабочие (`ev_local_only` и т.п. — это **только** для local, не переносите в
 staging/production, см. `docs/ENVIRONMENTS.md`).
 
-Поднимите Postgres + Redis (Docker Desktop должен быть уже открыт и запущен — см. пункт 3):
+Поднимите Postgres, Redis и MinIO (Docker Desktop должен быть уже открыт и запущен — см. пункт 3):
 ```bash
 docker compose up -d
 docker compose ps
 ```
-Оба сервиса должны быть `healthy` (может занять секунд 10).
+`postgres`, `redis` и `minio` должны быть `healthy` (может занять секунд 10), а однократный
+`minio-init` — завершиться с кодом 0: он создаёт бакет вложений и правило «загрузки `uploads/`
+старше суток удаляются» (Глава 13). MinIO — S3-хранилище вложений тикетов: API
+`http://localhost:9000`, веб-консоль `http://localhost:9001` (логин/пароль — `S3_ACCESS_KEY`/`S3_SECRET_KEY`
+из `.env`). Если `.env` скопирован до Главы 13 и в нём пустые `S3_ACCESS_KEY=`/`S3_SECRET_KEY=` —
+впишите значения из `.env.example`.
 
 Опционально — веб-интерфейс для просмотра БД:
 ```bash

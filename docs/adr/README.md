@@ -20,3 +20,4 @@
 | [0014](0014-vehicle-service-implementation.md) | Vehicle Service: мок VIN-декодера за `VinDecoder`, конфликт VIN (два кода 409, восстановление своего авто), лимит добавления, доступ инженера по тикетам, история работ |
 | [0015](0015-orm-relationships-explicit-loading.md) | ORM-связи только с явной загрузкой: `relationship(lazy="raise")` + `selectinload`, ответы API через `from_attributes`, производные поля — `column_property` |
 | [0016](0016-aggregates-maintenance-service.md) | Aggregates & Maintenance Service: счётчик сбрасывает только замена агрегата, замена без регламента фиксируется, 409 при пробеге выше текущего, версии регламентов, сценарии главы 5 через сервис |
+| [0017](0017-tickets-service.md) | Tickets Service: SLA — срок решения по категории, граф статусов и claim, доступ инженера (очередь + свои), чат на WebSocket + Redis, вложения через S3 (MinIO), контракт 1.4.0 аддитивно |

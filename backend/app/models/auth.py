@@ -29,6 +29,11 @@ class AppUser(IdMixin, TimestampMixin, Base):
     is_active: Mapped[bool] = mapped_column(server_default=text("true"), nullable=False)
     anonymized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
+    @property
+    def is_available(self) -> bool:
+        """Учётная запись может действовать: активна и не анонимизирована."""
+        return self.is_active and self.anonymized_at is None
+
 
 class RefreshToken(IdMixin, CreatedAtMixin, Base):
     """Хранится только SHA-256 токена; сам токен в БД не попадает (ADR 0005)."""

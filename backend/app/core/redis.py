@@ -1,4 +1,7 @@
-"""Клиент Redis: SMS-коды и счётчики rate limiting (ADR 0005)."""
+"""Клиент Redis: SMS-коды, счётчики rate limiting (ADR 0005), публикация событий тикетов.
+
+Подписка на события (WebSocket) — асинхронное соединение `app.core.pubsub`.
+"""
 
 from functools import lru_cache
 

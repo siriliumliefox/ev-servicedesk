@@ -169,7 +169,14 @@ def test_a1_requires_credentials():
 
 def test_staging_with_real_secrets_ok():
     strong = "z" * 40
-    s = Settings(_env_file=None, environment="staging", jwt_secret=strong, sms_code_secret=strong)
+    s = Settings(
+        _env_file=None,
+        environment="staging",
+        jwt_secret=strong,
+        sms_code_secret=strong,
+        s3_access_key="staging-access-key",  # ключи S3 обязательны вне local/test (ADR 0017)
+        s3_secret_key=strong,
+    )
     assert s.sms_provider == "fake"
 
 

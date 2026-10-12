@@ -41,6 +41,10 @@ jobs:
       - name: Lint OpenAPI (Spectral)
         run: npm run lint:api
 
+      # WebSocket тикета (Глава 13, ADR 0017): payload — схемы openapi.yaml по $ref.
+      - name: Lint AsyncAPI (Spectral)
+        run: npm run lint:asyncapi
+
       - name: Generated API types in sync (web-shared/src/api/schema.ts)
         run: |
           npm run gen:api

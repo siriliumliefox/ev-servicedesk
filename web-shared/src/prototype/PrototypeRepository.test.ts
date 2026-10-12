@@ -33,6 +33,18 @@ describe("фикстуры тикетов", () => {
     }
   });
 
+  it("элемент списка — модель авто и начало описания (OpenAPI 1.4.0)", async () => {
+    const repo = engineer();
+    const { items } = await repo.listTickets();
+    const t = items.find((x) => x.id === 1042)!;
+    expect(t.vehicle_model).toEqual({ brand: "Li Auto", model: "L7", trim: "Max" });
+    expect(t.summary).toBe("Яндекс Навигатор не показывает пробки");
+    for (const x of items) {
+      const { description } = await repo.getTicket(x.id);
+      expect(x.summary).toBe(description?.slice(0, 140));
+    }
+  });
+
   it("фильтры listTickets: status, category, overdue, assigned_engineer_id", async () => {
     const repo = engineer();
     expect((await repo.listTickets({ status: "new" })).items.every((t) => t.status === "new")).toBe(true);
@@ -79,6 +91,7 @@ describe("тикет: claim, статусы, сообщения", () => {
   it("контекст авто в карточке тикета", async () => {
     const t = await engineer().getTicket(1042);
     expect(t.vehicle_context?.vehicle?.vin).toBe("LLXAB3CF7SA067890");
+    expect(t.firmware_version_at_creation).toBe("RU 2.4.1");
     expect(t.vehicle_context?.aggregate_statuses?.map((s) => s.status)).toContain("red");
   });
 

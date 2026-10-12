@@ -16,7 +16,7 @@ from app.models.notifications import (
     NotificationRecipient,
     PushToken,
 )
-from app.models.tickets import Ticket, TicketAttachment, TicketMessage
+from app.models.tickets import Ticket, TicketAttachment, TicketMessage, TicketSlaPolicy
 from app.models.vehicles import FirmwareRelease, Vehicle, VehicleMileageCorrection, VehicleModel
 
 __all__ = [
@@ -38,6 +38,7 @@ __all__ = [
     "Ticket",
     "TicketAttachment",
     "TicketMessage",
+    "TicketSlaPolicy",
     "Vehicle",
     "VehicleAggregateStatus",
     "VehicleMileageCorrection",

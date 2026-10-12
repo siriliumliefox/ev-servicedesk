@@ -48,6 +48,13 @@ describe('канбан-доска', () => {
     expect(await card(1057)).toHaveTextContent('Осталось 40 мин')
   })
 
+  it('карточка — модель авто и начало описания (OpenAPI 1.4.0, ADR 0012 п. 5)', async () => {
+    setup()
+    const first = await card(1042)
+    expect(first).toHaveTextContent('Li Auto L7')
+    expect(first).toHaveTextContent('Яндекс Навигатор не показывает пробки')
+  })
+
   it('фильтр по категории и «Без исполнителя»', async () => {
     const { user, click } = setup()
     await card(1042)

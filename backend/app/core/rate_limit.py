@@ -1,10 +1,12 @@
 """Счётчики попыток в Redis (N-06): фиксированное окно, атомарно через MULTI/EXEC."""
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 
 from redis import Redis
 
-from app.core.errors import rate_limited
+from app.core.errors import ApiError, rate_limited
 
 # Префикс исторический (Глава 10): смена сбросила бы действующие счётчики при выкладке.
 PREFIX = "auth:rl:"
@@ -60,3 +62,25 @@ return 0
 def undo_hit(redis: Redis, key: str) -> None:
     """Возвращает одно обращение в окно (событие не состоялось или было успешным)."""
     redis.register_script(_UNDO)(keys=[PREFIX + key])
+
+
+@contextmanager
+def reserve(
+    redis: Redis, key: str, window_seconds: int, limit: int, message: str
+) -> Iterator[None]:
+    """Лимит на созданные объекты, а не на попытки (ADR 0017 п. 7–8: «10 тикетов в час»).
+
+    Попытка учитывается сразу (параллельные запросы не обойдут лимит), а отказ — ошибка
+    проверки или сбой — возвращает её в окно: исправленный запрос клиент повторит без 429.
+    Отказ 429 тоже возвращает свою попытку: счётчик = успешные + выполняющиеся.
+    """
+    try:
+        enforce(redis, key, window_seconds, limit, message)
+    except ApiError:
+        undo_hit(redis, key)
+        raise
+    try:
+        yield
+    except BaseException:
+        undo_hit(redis, key)
+        raise

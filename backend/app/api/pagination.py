@@ -8,6 +8,12 @@ from pydantic import BaseModel
 from sqlalchemy import Select, func, select
 from sqlalchemy.orm import Session
 
+from app.core.db import BIGINT_MAX
+
+PAGE_SIZE_MAX = 100
+# OFFSET = (page - 1) * page_size — BIGINT в PostgreSQL: больше — ошибка БД и 500, а не 422.
+PAGE_MAX = BIGINT_MAX // PAGE_SIZE_MAX + 1
+
 
 class PaginationMeta(BaseModel):
     page: int
@@ -23,8 +29,8 @@ class Page:
 
 
 def page_params(
-    page: Annotated[int, Query(ge=1)] = 1,
-    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
+    page: Annotated[int, Query(ge=1, le=PAGE_MAX)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=PAGE_SIZE_MAX)] = 20,
 ) -> Page:
     return Page(page=page, page_size=page_size)
 

@@ -1,0 +1,21 @@
+# Spectral — стиль docs/asyncapi.yaml (Глава 13, ADR 0017 п. 9).
+# Payload событий — схемы docs/openapi.yaml в формате OpenAPI 3.0 (schemaFormat
+# application/vnd.oai.openapi): структуру схем и $ref проверяет asyncapi-3-document-resolved,
+# примеры сообщений — backend/tests/contract/test_asyncapi_contract.py (Spectral для AsyncAPI 3
+# примеры не проверяет).
+# Запуск: npm run lint:asyncapi
+extends: ["spectral:asyncapi"]
+
+rules:
+  # Как в .spectral.yaml: обязательные описания — ошибки.
+  asyncapi-info-contact: error
+  asyncapi-info-description: error
+  asyncapi-3-operation-description: error
+  asyncapi-parameter-description: error
+
+  # Версия спецификации — AsyncAPI 3.0 (решение ADR 0017); переход на 3.1 — отдельным решением.
+  asyncapi-latest-version: off
+  # Лицензии нет и в docs/openapi.yaml.
+  asyncapi-info-license: off
+  # Схемы OpenAPI 3.0 (nullable, общие с REST) Spectral не валидирует — только сообщает об этом.
+  asyncapi-3-payload-unsupported-schemaFormat: off

@@ -5,7 +5,10 @@ SAVEPOINT (join_transaction_mode="create_savepoint").
 """
 
 import re
+import threading
+import uuid
 from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager, contextmanager
 from datetime import UTC, datetime, timedelta
 from functools import cache
 from pathlib import Path
@@ -23,18 +26,24 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_sms_provider
 from app.core.config import Settings, get_settings
-from app.core.db import get_db
+from app.core.db import get_db, get_session_scope
 from app.core.redis import get_redis
 from app.core.security import hash_password
+from app.core.storage import ObjectStorage, S3ObjectStorage, get_storage
 from app.domain.auth.sms import FakeSmsProvider
 from app.main import create_app
 from app.models import AppUser, PdConsent, Ticket
 from app.models.enums import TicketCategory, TicketStatus, UserRole
+from tests.conftest import redis_test_url
+from tests.support.storage import FakeObjectStorage
 
 DOCS = Path(__file__).resolve().parents[3] / "docs"
 API = "/v1"
 POLICY = "2026-10"
 STAFF_PASSWORD = "Staff-pass-123"
+# Каналы pub/sub не зависят от номера БД Redis: параллельные прогоны на одном сервере
+# разделяются префиксом каналов, своим у каждого прогона.
+RUN_CHANNEL_PREFIX = f"test-{uuid.uuid4().hex[:12]}"
 
 
 def api_settings(**overrides: Any) -> Settings:
@@ -44,6 +53,8 @@ def api_settings(**overrides: Any) -> Settings:
         "jwt_secret": "api-test-secret-" + "q" * 32,
         "sms_code_secret": "api-test-sms-secret-" + "w" * 32,
         "sms_provider": "fake",
+        "redis_url": redis_test_url(),  # подписка WebSocket (lifespan) — на тестовом Redis
+        "redis_channel_prefix": RUN_CHANNEL_PREFIX,
     }
     return Settings(_env_file=None, **(values | overrides))
 
@@ -71,18 +82,69 @@ def sms() -> FakeSmsProvider:
 
 
 @pytest.fixture
-def app(settings: Settings, db: Session, real_redis: Redis, sms: FakeSmsProvider) -> FastAPI:
+def storage(fake_storage: FakeObjectStorage) -> ObjectStorage:
+    """Хранилище вложений API-тестов: в памяти; тест с MinIO берёт фикстуру `minio`."""
+    return fake_storage
+
+
+@pytest.fixture
+def minio(s3_storage: S3ObjectStorage, app: FastAPI) -> S3ObjectStorage:
+    """Вложения приложения — на настоящем S3 API (MinIO) с пустым тестовым бакетом."""
+    app.dependency_overrides[get_storage] = lambda: s3_storage
+    return s3_storage
+
+
+DbOverrides = tuple[Callable[[], Iterator[Session]], Callable[[], AbstractContextManager[Session]]]
+
+
+@pytest.fixture
+def db_overrides(db: Session) -> DbOverrides:
+    """Подмены get_db и get_session_scope: сессия запроса и фабрика сессий WebSocket.
+
+    Одна сессия теста на одном соединении: запросы REST и обращения WebSocket к БД (в пуле
+    потоков) идут к ней по очереди. В приложении у каждого запроса и каждого обращения
+    WebSocket — своя сессия (так — в tests/api/test_ticket_concurrency.py).
+    """
+    lock = threading.Lock()
+
+    def shared_db() -> Iterator[Session]:
+        with lock:
+            yield db
+
+    @contextmanager
+    def session_scope() -> Iterator[Session]:
+        with lock:
+            yield db
+
+    return shared_db, session_scope
+
+
+@pytest.fixture
+def app(
+    settings: Settings,
+    db_overrides: DbOverrides,
+    real_redis: Redis,
+    sms: FakeSmsProvider,
+    storage: ObjectStorage,
+) -> FastAPI:
     application = create_app(settings)
+    request_db, session_scope = db_overrides
     application.dependency_overrides[get_settings] = lambda: settings
-    application.dependency_overrides[get_db] = lambda: db
+    application.dependency_overrides[get_db] = request_db
+    application.dependency_overrides[get_session_scope] = lambda: session_scope
     application.dependency_overrides[get_redis] = lambda: real_redis
     application.dependency_overrides[get_sms_provider] = lambda: sms
+    application.dependency_overrides[get_storage] = lambda: storage
     return application
 
 
 @pytest.fixture
-def client(app: FastAPI) -> TestClient:
-    return TestClient(app)
+def client(app: FastAPI) -> Iterator[TestClient]:
+    """Запущенное приложение (lifespan): запросы и WebSocket — в одном цикле событий, как в
+    процессе uvicorn; общая подписка pub/sub — `app.state.pubsub_hub`.
+    """
+    with TestClient(app) as running:
+        yield running
 
 
 def code_from(sms: FakeSmsProvider, phone: str) -> str:

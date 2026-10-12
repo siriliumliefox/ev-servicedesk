@@ -22,6 +22,7 @@ on:
       - "web-admin/**"
       - "web-shared/**"
       - "scripts/smoke_backend_image.sh"
+      - "docker-compose.yml"   # образ MinIO smoke-теста (x-minio-image)
       - ".github/workflows/cd-staging.yml"
   workflow_dispatch:
     inputs:
@@ -44,7 +45,8 @@ jobs:
   build-backend-image:
     if: github.ref == 'refs/heads/develop' && (github.event_name == 'push' || inputs.git_sha == '')
     runs-on: ubuntu-latest
-    # Redis для smoke-теста образа (Auth Service, Глава 10).
+    # Redis для smoke-теста образа (Auth Service, Глава 10); MinIO-сайдкар (Глава 13)
+    # поднимает и удаляет сам скрипт во внутренней docker-сети.
     services:
       redis:
         image: redis:7-alpine
@@ -76,7 +78,7 @@ jobs:
           tags: backend:smoke
           cache-from: type=gha
 
-      - name: Smoke-тест образа (ENVIRONMENT=staging, ADR 0013)
+      - name: Smoke-тест образа (ENVIRONMENT=staging, ADR 0013, 0017)
         run: scripts/smoke_backend_image.sh backend:smoke
 
       - uses: docker/build-push-action@v6

@@ -49,7 +49,7 @@ def _snapshot(engine: Engine) -> dict[str, set[str]]:
 def test_upgrade_downgrade_upgrade(migrated_engine: Engine, db_url: URL) -> None:
     cfg = alembic_config(db_url)
     head = ScriptDirectory.from_config(cfg).get_current_head()
-    assert head == "0007"
+    assert head == "0009"
 
     command.downgrade(cfg, "base")
     empty = _snapshot(migrated_engine)
@@ -72,6 +72,18 @@ def test_downgrade_seed_only(migrated_engine: Engine, db_url: URL) -> None:
     command.upgrade(cfg, "head")
     with migrated_engine.connect() as c:
         assert c.execute(text("SELECT count(*) FROM aggregate_type")).scalar_one() == 6
+
+
+def test_downgrade_sla_policy_keeps_ticket_category(migrated_engine: Engine, db_url: URL) -> None:
+    """0008 удаляет только свою таблицу: тип ticket_category нужен ticket.category (0001)."""
+    cfg = alembic_config(db_url)
+    command.downgrade(cfg, "0007")
+    snapshot = _snapshot(migrated_engine)
+    assert "ticket_sla_policy" not in snapshot["tables"]
+    assert "ticket_category" in snapshot["enums"]
+    command.upgrade(cfg, "head")
+    with migrated_engine.connect() as c:
+        assert c.execute(text("SELECT count(*) FROM ticket_sla_policy")).scalar_one() == 5
 
 
 def test_orm_matches_migrations(migrated_engine: Engine) -> None:

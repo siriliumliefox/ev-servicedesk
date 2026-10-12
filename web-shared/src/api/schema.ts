@@ -434,7 +434,7 @@ export interface paths {
         put?: never;
         /**
          * Получить presigned URL для прямой загрузки файла в S3
-         * @description Клиент загружает файл напрямую в S3 по upload_url, минуя API-сервер (не гоняем бинарные данные через backend). file_url затем передаётся в теле создания тикета/сообщения как ссылка на вложение.
+         * @description Клиент загружает файл напрямую в S3 по upload_url, минуя API-сервер (не гоняем бинарные данные через backend). file_url затем передаётся в теле создания тикета/сообщения как ссылка на вложение. Уточнено в 1.4.0 (ADR 0017): upload_url — presigned PUT на 15 минут (expires_at) в uploads/{user_id}/{uuid}{расширение}; из file_name берётся только расширение (имя может содержать ПД и не хранится); MIME к подписи не привязан. admin загружает вложения для сообщений в чате любого тикета (RBAC-04). При привязке к тикету или сообщению backend проверяет объект в S3 (HEAD): загружен текущим пользователем, MIME и размер — из S3, а не со слов клиента; затем копирует в хранилище тикета ровно проверенную версию объекта (ETag) с проверенным MIME. Допустимо: photo — image/jpeg, image/png, image/heic, image/webp до 20 МБ; video — video/mp4, video/quicktime до 200 МБ; до 10 вложений на тикет или сообщение. Ошибки привязки (422 у createTicket и createTicketMessage): ATTACHMENT_NOT_FOUND — объект не найден среди загрузок текущего пользователя или перезаписан после проверки; ATTACHMENT_ALREADY_USED — объект уже привязан (одновременный запрос, проигравший привязку, получает этот код или ATTACHMENT_NOT_FOUND, если исходный объект уже удалён после привязки); ATTACHMENT_TYPE_NOT_ALLOWED — MIME не из списка или не соответствует file_type; ATTACHMENT_TOO_LARGE — размер больше лимита; TOO_MANY_ATTACHMENTS — больше 10 вложений. Непривязанные загрузки удаляются через 24 ч. При чтении file_url вложения — presigned GET на 15 минут; Content-Type ответа — проверенный MIME вложения (входит в подпись). 429 RATE_LIMITED — больше 60 запросов в час на пользователя, заголовок Retry-After.
          */
         post: operations["createPresignedUpload"];
         delete?: never;
@@ -452,13 +452,13 @@ export interface paths {
         };
         /**
          * Список тикетов (канбан-доска инженера / история клиента)
-         * @description client — только свои тикеты. engineer/admin — фильтры по status/category/overdue для канбана (Глава 21).
+         * @description client — только свои тикеты. engineer/admin — фильтры по status/category/overdue для канбана (Глава 21). Уточнено в 1.4.0 (ADR 0017, RBAC-04): client — тикеты своих авто; engineer — очередь (status=new без исполнителя) и тикеты, назначенные ему; admin — все. Фильтры сужают видимую выборку. Порядок: engineer/admin — по sla_due_at по возрастанию (приоритет следует из категории через срок SLA), client — по created_at по убыванию. Просрочка (is_overdue, фильтр overdue) вычисляется при чтении: now() > sla_due_at и статус не resolved. Элемент списка содержит vehicle_model и summary — для карточки канбана (закрывает ADR 0012 п. 5).
          */
         get: operations["listTickets"];
         put?: never;
         /**
          * Создать тикет
-         * @description source_article_id/source_node_id — при эскалации из дерева решений (Knowledge Base), иначе null. Вложения — через /uploads/presign заранее.
+         * @description source_article_id/source_node_id — при эскалации из дерева решений (Knowledge Base), иначе null. Вложения — через /uploads/presign заранее. Уточнено в 1.4.0 (ADR 0017): только на своё активное авто, иначе 404. Тикет создаётся в статусе new без исполнителя (очередь); sla_due_at = created_at + норматив категории (тег Tickets); firmware_version_at_creation — снимок текущей прошивки авто (N-09). description — 1…4000 символов после обрезки пробелов по краям. Статья и узел должны существовать, узел — принадлежать статье, узел без статьи запрещён — иначе 422 INVALID_SOURCE_REFERENCE. Вложения — до 10, правила и коды ошибок 422 — createPresignedUpload. 429 RATE_LIMITED — больше 10 тикетов в час на клиента, заголовок Retry-After. Ограничения на число открытых тикетов нет.
          */
         post: operations["createTicket"];
         delete?: never;
@@ -478,7 +478,7 @@ export interface paths {
         };
         /**
          * Карточка тикета с автопривязанным контекстом авто
-         * @description vehicle_context собирается из Vehicle Service и Aggregates Service (модель, текущая прошивка, статусы агрегатов на момент обращения) — межсервисная агрегация на уровне Tickets Service (Глава 17).
+         * @description vehicle_context собирается из Vehicle Service и Aggregates Service (модель, текущая прошивка, статусы агрегатов на момент обращения) — межсервисная агрегация на уровне Tickets Service (Глава 17). Уточнено в 1.4.0 (ADR 0017, RBAC-04): client — тикеты своих авто; engineer — очередь (status=new без исполнителя) и тикеты, назначенные ему; admin — все. Невидимый тикет — 404 (как доступ к авто, минимизация ПД). firmware_version_at_creation — прошивка на момент создания тикета (снимок, N-09), в отличие от текущей vehicle_context.vehicle.current_firmware_version. file_url вложений — presigned GET на 15 минут.
          */
         get: operations["getTicket"];
         put?: never;
@@ -506,7 +506,7 @@ export interface paths {
         head?: never;
         /**
          * Сменить статус тикета
-         * @description Валидирует допустимость перехода между статусами на сервере.
+         * @description Валидирует допустимость перехода между статусами на сервере. Уточнено в 1.4.0 (ADR 0017). Граф: new → in_progress — только claimTicket или assignTicket, не этим методом; in_progress ↔ waiting_vendor; in_progress | waiting_vendor → resolved (resolved_at = now()); resolved → in_progress — переоткрытие (resolved_at = null, срок SLA не продлевается). В new тикет возвращает только assignTicket с null. Статус меняет назначенный инженер или admin (по тому же графу); тикет, видимый инженеру, но не назначенный ему (очередь), — 403; невидимый — 404. Переход вне графа — 409 INVALID_STATUS_TRANSITION; запрос текущего статуса — 200 без изменений. Подписчики WebSocket получают ticket.updated (docs/asyncapi.yaml).
          */
         patch: operations["updateTicketStatus"];
         trace?: never;
@@ -524,7 +524,7 @@ export interface paths {
         put?: never;
         /**
          * Инженер берёт тикет в работу (самоназначение)
-         * @description Оптимистичная блокировка: если тикет уже назначен другим инженером — 409, а не тихая перезапись (тест конкурентного доступа, Глава 21).
+         * @description Оптимистичная блокировка: если тикет уже назначен другим инженером — 409, а не тихая перезапись (тест конкурентного доступа, Глава 21). Уточнено в 1.4.0 (ADR 0017): claim атомарен — тикет из очереди (status=new без исполнителя) назначается текущему инженеру и переходит в in_progress. Тикет уже у другого инженера (в т. ч. проигрыш в гонке) — 409 TICKET_ALREADY_CLAIMED; повторный claim своего тикета — 200 без изменений. Подписчики WebSocket получают ticket.updated.
          */
         post: operations["claimTicket"];
         delete?: never;
@@ -550,7 +550,7 @@ export interface paths {
         head?: never;
         /**
          * Переназначить тикет (административно, в обход claim)
-         * @description Позволяет администратору назначить или снять инженера с тикета.
+         * @description Позволяет администратору назначить или снять инженера с тикета. Уточнено в 1.4.0 (ADR 0017): назначить можно только активного пользователя с ролью engineer, иначе 422 ASSIGNEE_NOT_ENGINEER. Назначение на тикет в статусе new переводит его в in_progress; переназначение статус не меняет; null возвращает нерешённый тикет в new (в очередь). Решённый тикет (status=resolved) — 409 TICKET_RESOLVED. Подписчики WebSocket получают ticket.updated; открытые подключения, потерявшие доступ к тикету, закрываются с кодом 4403 (docs/asyncapi.yaml).
          */
         patch: operations["assignTicket"];
         trace?: never;
@@ -566,13 +566,13 @@ export interface paths {
         };
         /**
          * История чата тикета
-         * @description REST — персистентная история и фallback (long-polling). Реал-тайм доставка — по WebSocket, вне зоны OpenAPI-контракта (описывается отдельно, напр. AsyncAPI, в Главе 13/17).
+         * @description REST — персистентная история и fallback (long-polling). Реал-тайм доставка — по WebSocket /v1/tickets/{ticketId}/ws (только сервер → клиент), описание — docs/asyncapi.yaml (AsyncAPI 3.0, Глава 13). Уточнено в 1.4.0 (ADR 0017): история — по id по возрастанию; after_id — только сообщения с id > after_id (догрузка после переподключения WebSocket), page/page_size — к отфильтрованной выборке. Доступ — как у getTicket (engineer читает и тикет из очереди), невидимый тикет — 404. Клиенту автор-сотрудник отдаётся с phone и telegram_id = null (ADR 0017 п. 12). file_url вложений — presigned GET на 15 минут.
          */
         get: operations["listTicketMessages"];
         put?: never;
         /**
          * Отправить сообщение в тикет
-         * @description Добавляет сообщение в чат тикета; доступно всем сторонам диалога.
+         * @description Добавляет сообщение в чат тикета; доступно всем сторонам диалога. Уточнено в 1.4.0 (ADR 0017): единственный способ отправки (WebSocket — только доставка). client — в тикет своего авто (в т. ч. в статусе new); engineer — только в назначенный ему тикет (тикет из очереди — сначала claimTicket, иначе 403); admin — в любой. Невидимый тикет — 404. В решённый тикет (status=resolved) не пишет никто — 409 TICKET_RESOLVED; продолжить диалог можно после переоткрытия (updateTicketStatus). body — 1…4000 символов после обрезки пробелов по краям; вложения — до 10, правила и коды ошибок 422 — createPresignedUpload. Первое сообщение engineer/admin фиксирует первичный ответ (метрика аналитики). Подписчики WebSocket получают message.created (docs/asyncapi.yaml). 429 RATE_LIMITED — больше 30 сообщений в минуту на пользователя, заголовок Retry-After.
          */
         post: operations["createTicketMessage"];
         delete?: never;
@@ -1033,12 +1033,16 @@ export interface components {
         };
         UserPublic: {
             id: number;
-            /** @description E.164; null — пользователь анонимизирован (ПД удалены по 99-З, ADR 0006). */
-            phone: components["schemas"]["PhoneE164"] | null;
+            /**
+             * @description E.164 (как PhoneE164); null — анонимизирован (ПД удалены по 99-З, ADR 0006) или скрыт от клиента: автор-сотрудник в TicketMessage.author (ADR 0017 п. 12). Уточнено в 1.4.0.
+             * @example +375291234567
+             */
+            phone: string | null;
             /** @enum {string} */
             role: "client" | "engineer" | "admin";
             /** @description false — вход заблокирован администратором */
             is_active: boolean;
+            /** @description null — не привязан, анонимизирован или скрыт от клиента: автор-сотрудник в TicketMessage.author (ADR 0017 п. 12). Уточнено в 1.4.0. */
             telegram_id?: string | null;
             /** Format: date-time */
             created_at: string;
@@ -1172,21 +1176,27 @@ export interface components {
             description?: string | null;
         };
         PresignRequest: {
-            /** @example photo.jpg */
+            /**
+             * @description Используется только расширение — ключ объекта uploads/{user_id}/{uuid}{расширение}; имя может содержать ПД и не хранится (ADR 0017). Уточнено в 1.4.0.
+             * @example photo.jpg
+             */
             file_name: string;
             /** @enum {string} */
             file_type: "photo" | "video";
         };
         PresignResponse: {
-            /** @description PUT сюда бинарные данные напрямую в S3 */
+            /** @description PUT сюда бинарные данные напрямую в S3. Presigned PUT, действует до expires_at (15 минут); MIME к подписи не привязан (уточнено в 1.4.0). */
             upload_url: string;
             /** @description Идентификатор загруженного объекта — передать в attachments. Не публичная ссылка: backend хранит ключ объекта S3 (ticket_attachment.object_key) и выдаёт presigned URL при чтении (ADR 0004). */
             file_url: string;
-            /** Format: date-time */
+            /**
+             * Format: date-time
+             * @description Срок действия upload_url — 15 минут
+             */
             expires_at: string;
         };
         TicketAttachmentInput: {
-            /** @description file_url из PresignResponse. Backend проверяет, что объект загружен текущим пользователем, и сохраняет ключ объекта, MIME и размер (ADR 0004). */
+            /** @description file_url из PresignResponse. Backend проверяет, что объект загружен текущим пользователем, и сохраняет ключ объекта, MIME и размер (ADR 0004). В ответах (TicketDetail, TicketMessage) — presigned GET URL на 15 минут (ADR 0017, уточнено в 1.4.0). */
             file_url: string;
             /** @enum {string} */
             file_type: "photo" | "video";
@@ -1195,20 +1205,28 @@ export interface components {
             vehicle_id: number;
             /** @enum {string} */
             category: "navigation" | "audio" | "sim" | "app_crash" | "maintenance";
+            /** @description 1…4000 символов после обрезки пробелов по краям, иначе 422 (проверяет сервер, ADR 0017 п. 13). Уточнено в 1.4.0. */
             description: string;
             source_article_id?: number | null;
             source_node_id?: number | null;
             attachments?: components["schemas"]["TicketAttachmentInput"][];
         };
+        /** @description Элемент списка тикетов. vehicle_model (модель авто тикета) и summary — для карточки канбана и списка клиента; добавлены в 1.4.0 (ADR 0017, закрывает ADR 0012 п. 5). */
         Ticket: {
             id: number;
             vehicle_id?: number;
+            vehicle_model: components["schemas"]["VehicleModelInfo"];
+            /** @description Первые 140 символов описания тикета (description). Добавлено в 1.4.0. */
+            summary: string;
             /** @enum {string} */
             category: "navigation" | "audio" | "sim" | "app_crash" | "maintenance";
             /** @enum {string} */
             status: "new" | "in_progress" | "waiting_vendor" | "resolved";
             assigned_engineer_id?: number | null;
-            /** Format: date-time */
+            /**
+             * Format: date-time
+             * @description Срок решения: created_at + норматив категории (тег Tickets); вычисляется при создании и не меняется (ADR 0017). Уточнено в 1.4.0.
+             */
             sla_due_at: string;
             /** @description Вычисляемое поле: now() > sla_due_at и status != resolved */
             is_overdue: boolean;
@@ -1227,6 +1245,8 @@ export interface components {
         };
         TicketDetail: components["schemas"]["Ticket"] & {
             description?: string;
+            /** @description Версия прошивки авто на момент создания тикета (снимок, N-09); null — прошивка не была зафиксирована. Текущая прошивка — vehicle_context.vehicle.current_firmware_version. Добавлено в 1.4.0 (ADR 0017). */
+            firmware_version_at_creation: string | null;
             attachments?: components["schemas"]["TicketAttachmentInput"][];
             vehicle_context?: components["schemas"]["VehicleContext"];
         };
@@ -1235,9 +1255,11 @@ export interface components {
             meta: components["schemas"]["PaginationMeta"];
         };
         TicketMessageCreateRequest: {
+            /** @description 1…4000 символов после обрезки пробелов по краям, иначе 422 (проверяет сервер, ADR 0017 п. 13). Уточнено в 1.4.0. */
             body: string;
             attachments?: components["schemas"]["TicketAttachmentInput"][];
         };
+        /** @description Сообщение чата тикета. Клиенту автор-сотрудник (engineer/admin) отдаётся с phone и telegram_id = null (ADR 0017 п. 12). Уточнено в 1.4.0. */
         TicketMessage: {
             id: number;
             author: components["schemas"]["UserPublic"];
@@ -2271,6 +2293,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             422: components["responses"]["ValidationError"];
+            429: components["responses"]["RateLimited"];
             default: components["responses"]["ServerError"];
         };
     };
@@ -2329,7 +2352,9 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
             422: components["responses"]["ValidationError"];
+            429: components["responses"]["RateLimited"];
             default: components["responses"]["ServerError"];
         };
     };
@@ -2386,6 +2411,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
             422: components["responses"]["ValidationError"];
             default: components["responses"]["ServerError"];
         };
@@ -2444,6 +2470,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
             422: components["responses"]["ValidationError"];
             default: components["responses"]["ServerError"];
         };
@@ -2451,6 +2478,8 @@ export interface operations {
     listTicketMessages: {
         parameters: {
             query?: {
+                /** @description Только сообщения с id > after_id, по возрастанию id — догрузка пропущенного после переподключения WebSocket. Добавлено в 1.4.0. */
+                after_id?: number;
                 page?: components["parameters"]["PageParam"];
                 page_size?: components["parameters"]["PageSizeParam"];
             };
@@ -2504,7 +2533,9 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
             422: components["responses"]["ValidationError"];
+            429: components["responses"]["RateLimited"];
             default: components["responses"]["ServerError"];
         };
     };

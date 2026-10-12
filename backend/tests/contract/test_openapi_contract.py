@@ -152,6 +152,18 @@ def test_names_are_snake_case() -> None:
     assert not bad
 
 
+def test_nullable_has_type() -> None:
+    """OpenAPI 3.0.3: nullable работает только рядом с type; с одним allOf/$ref null отвергается."""
+    bad = [
+        f"{name}.{prop}"
+        for name, schema in spec()["components"]["schemas"].items()
+        for part in [schema, *schema.get("allOf", [])]
+        for prop, body in part.get("properties", {}).items()
+        if body.get("nullable") and "type" not in body
+    ]
+    assert not bad
+
+
 # --- RBAC ------------------------------------------------------------------------------------
 
 
@@ -223,7 +235,8 @@ SCHEMA_TABLE = {
     ),
     "AggregateStatusThresholds": ("aggregate_status_thresholds", set()),
     "AggregateStatusThresholdsUpdateRequest": ("aggregate_status_thresholds", set()),
-    "Ticket": ("ticket", {"is_overdue"}),
+    # vehicle_model — из vehicle → vehicle_model, summary — начало description (1.4.0, ADR 0017).
+    "Ticket": ("ticket", {"is_overdue", "vehicle_model", "summary"}),
     "TicketCreateRequest": ("ticket", {"attachments"}),
     "TicketMessage": ("ticket_message", {"author", "attachments"}),
     "TicketMessageCreateRequest": ("ticket_message", {"attachments"}),
