@@ -13,6 +13,7 @@ from app.core.config import Settings
 from app.core.errors import ApiError, rate_limited, unauthorized
 from app.core.security import verify_password
 from app.domain.auth import codes, tokens
+from app.domain.notifications.service import revoke_all_tokens as revoke_all_push_tokens
 from app.models import AppUser, PdConsent
 from app.models.enums import UserRole
 
@@ -129,7 +130,7 @@ def staff_login(
 
 
 def withdraw_pd_consent(db: Session, user: AppUser) -> None:
-    """DELETE /auth/pd-consent (99-З, ст. 10): отзыв + завершение всех сессий.
+    """DELETE /auth/pd-consent (99-З, ст. 10): отзыв + завершение всех сессий и push-токенов.
 
     Очередь анонимизации (≤ 15 дней, глава 25) — пользователи БЕЗ действующего согласия,
     по последнему withdrawn_at: строка с withdrawn_at бывает и у согласия, заменённого
@@ -145,6 +146,7 @@ def withdraw_pd_consent(db: Session, user: AppUser) -> None:
         raise ApiError(409, "PD_CONSENT_NOT_ACTIVE", "Действующего согласия нет")
     consent.withdrawn_at = datetime.now(UTC)
     tokens.revoke_all(db, user.id)
+    revoke_all_push_tokens(db, user.id)  # ADR 0019 п. 8
     db.commit()
 
 

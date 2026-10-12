@@ -30,7 +30,7 @@ IDS = [op["operationId"] for _, _, op in implemented()]
 
 
 @pytest.mark.parametrize(
-    "tag", ["Auth", "Vehicle", "Aggregates", "Tickets", "Uploads", "KnowledgeBase"]
+    "tag", ["Auth", "Vehicle", "Aggregates", "Tickets", "Uploads", "KnowledgeBase", "Notifications"]
 )
 def test_service_fully_implemented(tag):
     tagged = {

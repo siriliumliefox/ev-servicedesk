@@ -86,6 +86,10 @@ class AggregateStatusThresholds(TimestampMixin, Base):
             "AND red_above_percent <= 200",
             name="percent_order",
         ),
+        CheckConstraint(
+            "reminder_before_km BETWEEN 1 AND 100000 AND reminder_before_days BETWEEN 1 AND 365",
+            name="reminder_range",
+        ),
     )
 
     id: Mapped[int] = mapped_column(
@@ -100,6 +104,13 @@ class AggregateStatusThresholds(TimestampMixin, Base):
     )
     red_above_percent: Mapped[int] = mapped_column(
         SmallInteger, server_default=text("100"), nullable=False
+    )
+    # Напоминание о ТО «за N км / N дней» до порога «требуется замена» (N-10, ADR 0019 п. 5).
+    reminder_before_km: Mapped[int] = mapped_column(
+        Integer, server_default=text("1000"), nullable=False
+    )
+    reminder_before_days: Mapped[int] = mapped_column(
+        SmallInteger, server_default=text("14"), nullable=False
     )
     updated_by_user_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("app_user.id", ondelete="RESTRICT"), index=True

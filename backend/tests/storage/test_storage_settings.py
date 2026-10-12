@@ -23,6 +23,9 @@ def _settings(environment: str, **overrides: Any) -> Settings:
         "sms_provider": "a1",
         "sms_provider_user": "375290000000",
         "sms_provider_api_key": "k",
+        # В production фейковый push запрещён (ADR 0019); ключ разбирает worker при старте.
+        "push_provider": "fcm",
+        "fcm_service_account_json": "{}",
     }
     return Settings(_env_file=None, **(values | overrides))
 

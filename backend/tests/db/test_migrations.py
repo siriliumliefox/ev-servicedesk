@@ -52,7 +52,7 @@ def _snapshot(engine: Engine) -> dict[str, set[str]]:
 def test_upgrade_downgrade_upgrade(migrated_engine: Engine, db_url: URL) -> None:
     cfg = alembic_config(db_url)
     head = ScriptDirectory.from_config(cfg).get_current_head()
-    assert head == "0011"
+    assert head == "0012"
 
     command.downgrade(cfg, "base")
     empty = _snapshot(migrated_engine)
@@ -147,7 +147,9 @@ def test_downgrade_scenarios_refuses_when_tickets_reference_them(
         with pytest.raises(Exception, match="ссылаются тикеты"):
             command.downgrade(cfg, "0010")
         with migrated_engine.connect() as c:
-            assert MigrationContext.configure(c).get_current_revision() == "0011"
+            # Откат идёт одной транзакцией: отказ 0011 оставляет схему на head.
+            head = ScriptDirectory.from_config(cfg).get_current_head()
+            assert MigrationContext.configure(c).get_current_revision() == head
     finally:
         with migrated_engine.begin() as c:
             vehicle = c.execute(

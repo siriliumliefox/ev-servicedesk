@@ -9,6 +9,7 @@ import threading
 import uuid
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from functools import cache
 from pathlib import Path
@@ -31,9 +32,11 @@ from app.core.redis import get_redis
 from app.core.security import hash_password
 from app.core.storage import ObjectStorage, S3ObjectStorage, get_storage
 from app.domain.auth.sms import FakeSmsProvider
+from app.domain.notifications.push import FakePushSender
 from app.main import create_app
 from app.models import AppUser, PdConsent, Ticket
 from app.models.enums import TicketCategory, TicketStatus, UserRole
+from app.workers.notifications import NotificationsWorker
 from tests.conftest import redis_test_url
 from tests.support.storage import FakeObjectStorage
 
@@ -310,3 +313,70 @@ def add_vehicle(client: TestClient, headers: Headers, vin: str = ZEEKR_VIN, **ex
     assert r.status_code == 201, r.text
     assert_contract(r, "createVehicle")
     return r.json()
+
+
+# ---------- Уведомления (Глава 15, ADR 0019) ----------
+
+ZEEKR_PREFIX = "L6TZ001"  # мок-декодер распознаёт как Zeekr 001
+OTHER_PREFIX = "LSVAU21"  # не распознаётся — модель вручную
+
+
+@dataclass
+class Client:
+    headers: Headers
+    vehicle_id: int | None
+    token: str | None
+
+
+def vin(prefix: str, n: int) -> str:
+    return f"{prefix}{n:010d}"
+
+
+def register(client: TestClient, headers: Headers, token: str) -> None:
+    r = client.post(f"{API}/push-tokens", json={"token": token}, headers=headers)
+    assert r.status_code == 201, r.text
+    assert_contract(r, "registerPushToken")
+
+
+@pytest.fixture
+def make_owner(client: TestClient, as_client) -> Callable[..., Client]:
+    """Клиент с авто модели (`Zeekr` / `Voyah` / None — без авто) и push-токеном."""
+    counter = iter(range(1, 1000))
+
+    def _make(model: str | None = "Zeekr", token: bool = True) -> Client:
+        n = next(counter)
+        headers = as_client(f"+37529330{n:04d}")
+        vehicle_id = None
+        if model == "Zeekr":
+            vehicle_id = add_vehicle(client, headers, vin(ZEEKR_PREFIX, n))["id"]
+        elif model is not None:
+            mid = model_id(client, headers, model)
+            vehicle_id = add_vehicle(client, headers, vin(OTHER_PREFIX, n), vehicle_model_id=mid)[
+                "id"
+            ]
+        push = f"fcm-token-{n:04d}:" + "x" * 40 if token else None
+        if push:
+            register(client, headers, push)
+        return Client(headers, vehicle_id, push)
+
+    return _make
+
+
+@pytest.fixture
+def sender() -> FakePushSender:
+    return FakePushSender()
+
+
+@pytest.fixture
+def make_worker(
+    settings: Settings, db: Session, real_redis: Redis, sender: FakePushSender
+) -> Callable[..., NotificationsWorker]:
+    @contextmanager
+    def scope() -> Iterator[Session]:
+        yield db
+
+    def _make(now: Callable[[], datetime] | None = None) -> NotificationsWorker:
+        kwargs = {"now": now} if now else {}
+        return NotificationsWorker(settings, scope, real_redis, sender, **kwargs)
+
+    return _make

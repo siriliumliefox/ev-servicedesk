@@ -178,12 +178,24 @@ def get_thresholds(db: Session) -> AggregateStatusThresholds:
 
 
 def update_thresholds(
-    db: Session, user: AppUser, yellow_from_percent: int, red_above_percent: int
+    db: Session,
+    user: AppUser,
+    yellow_from_percent: int,
+    red_above_percent: int,
+    reminder_before_km: int | None = None,
+    reminder_before_days: int | None = None,
 ) -> AggregateStatusThresholds:
-    """PUT /aggregate-status-thresholds (admin); порядок порогов проверила схема запроса."""
+    """PUT /aggregate-status-thresholds (admin); порядок порогов проверила схема запроса.
+
+    Порог напоминания о ТО (ADR 0019 п. 5) необязателен: не передан — не меняется.
+    """
     thresholds = db.get_one(AggregateStatusThresholds, THRESHOLDS_ID, with_for_update=True)
     thresholds.yellow_from_percent = yellow_from_percent
     thresholds.red_above_percent = red_above_percent
+    if reminder_before_km is not None:
+        thresholds.reminder_before_km = reminder_before_km
+    if reminder_before_days is not None:
+        thresholds.reminder_before_days = reminder_before_days
     thresholds.updated_by_user_id = user.id
     db.commit()
     # updated_at выставляет триггер set_updated_at.

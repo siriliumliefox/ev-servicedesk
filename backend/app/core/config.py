@@ -106,6 +106,20 @@ class Settings(BaseSettings):
     ws_max_sockets_per_user: int = Field(10, ge=1)  # одновременно, на процесс; сверх — 4429
     ws_connects_per_ip_minute: int = Field(60, ge=1)  # попыток подключения; сверх — 4429
 
+    # --- Push и worker уведомлений (Глава 15, ADR 0019) ---
+    # fake — local/test/staging без Firebase-проекта; fcm — FCM HTTP v1 по сервисному аккаунту.
+    push_provider: Literal["fake", "fcm"] = "fake"
+    # Содержимое JSON-ключа сервисного аккаунта Firebase (не путь к файлу); вводит владелец.
+    fcm_service_account_json: str = ""
+    fcm_timeout_seconds: float = Field(10, gt=0, le=60)
+    # Worker: опрос очереди, если сигнал Redis потерян; размер пачки; повторы (ADR 0019 п. 9).
+    notifications_poll_seconds: float = Field(5, gt=0, le=300)
+    notifications_batch_size: int = Field(100, ge=1, le=1000)
+    push_max_attempts: int = Field(5, ge=1, le=20)
+    push_retry_base_seconds: float = Field(10, gt=0, le=3600)
+    # Напоминания о ТО — раз в сутки, час по Europe/Minsk (ADR 0019 п. 7).
+    maintenance_reminder_hour: int = Field(10, ge=0, le=23)
+
     @model_validator(mode="after")
     def _default_channel_prefix(self) -> "Settings":
         if not self.redis_channel_prefix:
@@ -114,7 +128,8 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _check_real_environment(self) -> "Settings":
-        """Вне local/test заглушки секретов, фейковый SMS-провайдер и S3 без ключей запрещены.
+        """Вне local/test заглушки секретов, фейковые SMS и push в production, S3 без ключей
+        и FCM без ключа запрещены.
 
         Доступность бакета проверяется при старте приложения (app.main, ADR 0017 п. 11).
         """
@@ -136,6 +151,10 @@ class Settings(BaseSettings):
             DEFAULT_S3_SECRET_KEY,
         ):
             problems.append("S3_ACCESS_KEY/S3_SECRET_KEY")
+        if self.push_provider == "fcm" and not self.fcm_service_account_json:
+            problems.append("FCM_SERVICE_ACCOUNT_JSON")
+        if self.environment == "production" and self.push_provider == "fake":
+            problems.append("PUSH_PROVIDER=fake")
         if problems:
             raise ValueError(
                 f"Недопустимые настройки для ENVIRONMENT={self.environment}: {', '.join(problems)}"

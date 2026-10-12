@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: EV-ServiceDesk API
-  version: "1.5.0"
+  version: "1.6.0"
   description: >
     API дипломного проекта «EV-ServiceDesk» (ООО «ЕТСавтоГомель»).
     Контракты сервисов: Auth, Vehicle, Aggregates & Maintenance, Tickets,
@@ -61,6 +61,10 @@ tags:
       эскалация (is_escalation=true, «Создать обращение» — createTicket с source_article_id и
       source_node_id). Content — Markdown (CommonMark) без HTML.
   - name: Notifications
+    description: >
+      Уведомления клиента: прошивки, напоминания о ТО, новости и акции (ADR 0019). Аудитория
+      фиксируется в момент публикации; push — доставка через FCM из исходящей очереди
+      (notification_delivery), открытие push — markNotificationOpened. Тексты push без ПД.
   - name: Users
   - name: Analytics
 
@@ -1460,7 +1464,11 @@ paths:
       tags: [Notifications]
       summary: Зарегистрировать FCM push-токен устройства
       operationId: registerPushToken
-      description: Сохраняет токен устройства для последующей push-рассылки.
+      description: >-
+        Сохраняет токен устройства для последующей push-рассылки. Повторная регистрация своего
+        токена — 201; токен, привязанный к другому пользователю (сменили аккаунт на телефоне),
+        перепривязывается к текущему — 201, 409 не возвращается. Токен длиннее 1024 символов —
+        422. Уточнено в 1.6.0 (ADR 0019 п. 8).
       x-required-roles: [client]
       x-rbac-action: ["Получение push-уведомлений"]
       requestBody:
@@ -1483,7 +1491,10 @@ paths:
       tags: [Notifications]
       summary: Удалить push-токен (логаут с устройства/отключение уведомлений)
       operationId: deletePushToken
-      description: Прекращает отправку push-уведомлений на данное устройство.
+      description: >-
+        Прекращает отправку push-уведомлений на данное устройство (токен отзывается, журнал
+        доставок сохраняется). 404 — нет активного токена с этим значением у текущего
+        пользователя. Уточнено в 1.6.0 (ADR 0019 п. 8).
       x-required-roles: [client]
       x-rbac-action: ["Получение push-уведомлений"]
       responses:
@@ -1498,7 +1509,9 @@ paths:
       tags: [Notifications]
       summary: Центр уведомлений клиента
       operationId: listNotifications
-      description: Постраничная лента уведомлений (прошивки/ТО/новости/акции).
+      description: >-
+        Постраничная лента уведомлений (прошивки/ТО/новости/акции), новые первыми. В ленте —
+        только уведомления, в аудиторию которых клиент вошёл в момент публикации (ADR 0019 п. 3).
       x-required-roles: [client]
       x-rbac-action: ["Получение push-уведомлений"]
       parameters:
@@ -1523,7 +1536,12 @@ paths:
       description: >
         target_vehicle_model_id — единственный источник таргетинга (Глава 2,
         3НФ). Для type=firmware обычно создаётся автоматически через
-        POST /firmware-releases, но ручная публикация тоже разрешена.
+        POST /firmware-releases, но ручная публикация тоже разрешена: релиз той же модели
+        обязателен, аудитория — владельцы авто модели с более ранней или неизвестной прошивкой.
+        Уточнено в 1.6.0 (ADR 0019): type=maintenance — только системные напоминания о ТО
+        (422 NOTIFICATION_TYPE_RESERVED); message — 1–1000 символов после обрезки пробелов (422);
+        аудитория — активные клиенты с действующим согласием ПД и неудалёнными авто модели
+        (null — все клиенты). Перед отправкой — previewNotificationAudience.
       requestBody:
         required: true
         content:
@@ -1559,12 +1577,100 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
+  /notifications/{notificationId}/opened:
+    parameters:
+      - { name: notificationId, in: path, required: true, schema: { type: integer } }
+    post:
+      tags: [Notifications]
+      summary: Отметить открытие push-уведомления
+      operationId: markNotificationOpened
+      x-required-roles: [client]
+      x-rbac-action: ["Получение push-уведомлений"]
+      description: >-
+        Вызывается приложением при нажатии на push: пишет NotificationDelivery.opened_at доставки
+        на устройство с этим токеном (аналитика открываемости, Глава 16) и read_at, если
+        уведомление ещё не прочитано. Токен без доставки этого уведомления — только read_at.
+        404 — уведомления нет в ленте текущего пользователя. Добавлено в 1.6.0 (ADR 0019 п. 12).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/NotificationOpenedRequest' }
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '204': { description: Отмечено }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /notifications/published:
+    get:
+      tags: [Notifications]
+      summary: Лента публикаций (админ-панель)
+      operationId: listPublishedNotifications
+      x-required-roles: [admin]
+      x-rbac-action: ["Публикация новостей/акций/прошивок"]
+      description: >-
+        Публикации администратора (firmware, news, promo; напоминания о ТО не входят), новые
+        первыми, со счётчиками аудитории, доставки и открытий. Добавлено в 1.6.0 (ADR 0019 п. 12,
+        закрывает ADR 0012 п. 5).
+      parameters:
+        - name: type
+          in: query
+          schema: { type: string, enum: [firmware, news, promo] }
+        - name: target_vehicle_model_id
+          in: query
+          schema: { type: integer }
+          description: Публикации для этой модели (без публикаций «для всех моделей»).
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '200':
+          description: Страница публикаций
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PublishedNotificationList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /notifications/audience-preview:
+    post:
+      tags: [Notifications]
+      summary: Проверить аудиторию публикации без отправки
+      operationId: previewNotificationAudience
+      x-required-roles: [admin]
+      x-rbac-action: ["Публикация новостей/акций/прошивок"]
+      description: >-
+        Число клиентов и устройств, которые получат публикацию с таким телом, по тем же правилам,
+        что createNotification (включая его проверки и 422). Ничего не создаёт и не отправляет.
+        Добавлено в 1.6.0 (ADR 0019 п. 12, U-45).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/NotificationCreateRequest' }
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '200':
+          description: Размер аудитории
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NotificationAudiencePreview' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
   /firmware-releases:
     get:
       tags: [Notifications]
       summary: Список релизов прошивок
       operationId: listFirmwareReleases
-      description: Возвращает релизы, опционально отфильтрованные по модели авто.
+      description: >-
+        Возвращает релизы, опционально отфильтрованные по модели авто; новые первыми
+        (released_at, затем id по убыванию).
       x-required-roles: [client, engineer, admin]
       x-rbac-action: ["Получение push-уведомлений", "Фиксация текущей прошивки авто", "Публикация новостей/акций/прошивок"]
       parameters:
@@ -1588,7 +1694,12 @@ paths:
       operationId: createFirmwareRelease
       x-required-roles: [admin]
       x-rbac-action: ["Публикация новостей/акций/прошивок"]
-      description: Атомарно создаёт FirmwareRelease и триггерит Notification(type=firmware) с targeting по vehicle_model_id.
+      description: >-
+        Атомарно создаёт FirmwareRelease и триггерит Notification(type=firmware) с targeting по
+        vehicle_model_id. Уточнено в 1.6.0 (ADR 0019 п. 4): текст уведомления формирует сервер;
+        аудитория — владельцы авто модели, у которых прошивка не указана или выпущена раньше
+        (released_at, при равенстве — id). Неизвестная модель, повтор версии модели, дата в
+        будущем — 422.
       requestBody:
         required: true
         content:
@@ -1612,7 +1723,9 @@ paths:
       tags: [Notifications]
       summary: Зафиксировать текущую прошивку авто (после русификации/визита)
       operationId: setVehicleFirmware
-      description: Обновляет current_firmware_release_id автомобиля.
+      description: >-
+        Обновляет current_firmware_release_id автомобиля; уведомлений не создаёт. Доступ — как у
+        записи работ по авто (инженер — по своему тикету в работе, ADR 0014). Уточнено в 1.6.0.
       x-required-roles: [engineer, admin]
       x-rbac-action: ["Фиксация текущей прошивки авто"]
       requestBody:
@@ -2173,14 +2286,32 @@ components:
           type: integer
           nullable: true
           description: Кто изменил последним; null — значения по умолчанию из миграции.
+        reminder_before_km:
+          type: integer
+          minimum: 1
+          maximum: 100000
+          example: 1000
+          description: >-
+            Напоминание о ТО, когда до порога «требуется замена» осталось не больше N км
+            (N-10). Добавлено в 1.6.0 (ADR 0019 п. 5).
+        reminder_before_days:
+          type: integer
+          minimum: 1
+          maximum: 365
+          example: 14
+          description: То же по времени — не больше N дней. Добавлено в 1.6.0.
 
     AggregateStatusThresholdsUpdateRequest:
       type: object
       required: [yellow_from_percent, red_above_percent]
-      description: 1 ≤ yellow_from_percent < red_above_percent ≤ 200, иначе 422.
+      description: >-
+        1 ≤ yellow_from_percent < red_above_percent ≤ 200, иначе 422. reminder_before_km и
+        reminder_before_days необязательны (не переданы — не меняются), добавлены в 1.6.0.
       properties:
         yellow_from_percent: { type: integer, minimum: 1, maximum: 199 }
         red_above_percent: { type: integer, minimum: 2, maximum: 200 }
+        reminder_before_km: { type: integer, minimum: 1, maximum: 100000 }
+        reminder_before_days: { type: integer, minimum: 1, maximum: 365 }
 
     AggregateReplaceRequest:
       type: object
@@ -2554,6 +2685,14 @@ components:
         type: { type: string, enum: [firmware, maintenance, news, promo] }
         target_vehicle_model_id: { type: integer, nullable: true }
         firmware_release_id: { type: integer, nullable: true }
+        vehicle_id:
+          type: integer
+          nullable: true
+          description: Авто напоминания о ТО (type=maintenance), иначе null. Добавлено в 1.6.0.
+        aggregate_type_id:
+          type: integer
+          nullable: true
+          description: Агрегат напоминания о ТО (type=maintenance), иначе null. Добавлено в 1.6.0.
         message: { type: string }
         created_at: { type: string, format: date-time }
 
@@ -2572,6 +2711,48 @@ components:
           type: array
           items: { $ref: '#/components/schemas/NotificationListItem' }
         meta: { $ref: '#/components/schemas/PaginationMeta' }
+
+    NotificationOpenedRequest:
+      type: object
+      required: [token]
+      properties:
+        token: { type: string, minLength: 1, maxLength: 4096, description: "FCM-токен устройства, на котором открыт push" }
+
+    NotificationDeliveryStats:
+      type: object
+      required: [recipients, delivered, failed, opened, read]
+      description: Добавлено в 1.6.0 (ADR 0019 п. 12).
+      properties:
+        recipients: { type: integer, description: Клиентов в аудитории }
+        delivered: { type: integer, description: "Доставок, принятых FCM" }
+        failed: { type: integer, description: Доставок с окончательной ошибкой }
+        opened: { type: integer, description: "Доставок, открытых на устройстве" }
+        read: { type: integer, description: "Клиентов, прочитавших уведомление" }
+
+    PublishedNotification:
+      allOf:
+        - $ref: '#/components/schemas/Notification'
+        - type: object
+          required: [stats]
+          properties:
+            stats: { $ref: '#/components/schemas/NotificationDeliveryStats' }
+
+    PublishedNotificationList:
+      type: object
+      required: [items, meta]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/PublishedNotification' }
+        meta: { $ref: '#/components/schemas/PaginationMeta' }
+
+    NotificationAudiencePreview:
+      type: object
+      required: [recipients, devices]
+      description: Добавлено в 1.6.0 (ADR 0019 п. 12, U-45).
+      properties:
+        recipients: { type: integer, description: Клиентов получат уведомление в ленту }
+        devices: { type: integer, description: Активных push-токенов этих клиентов }
 
     FirmwareReleaseCreateRequest:
       type: object
