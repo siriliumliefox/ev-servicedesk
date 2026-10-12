@@ -52,8 +52,10 @@ export BACKEND_IMAGE="$IMAGE" BACKEND_ENV_FILE="$ENV_FILE" ENVIRONMENT=staging \
 COMPOSE=(docker compose -p "$PROJECT" -f "$ROOT/docker-compose.yml"
          -f "$ROOT/docker-compose.integration.yml" --profile full)
 
+# Построчный вывод (BSD sed — -l, GNU — -u): строки команды после «--» видны сразу, а не в конце.
+if sed --version >/dev/null 2>&1; then SED_LINE=-u; else SED_LINE=-l; fi
 redact() {
-  sed -e "s/$JWT_SECRET/***/g" -e "s/$SMS_CODE_SECRET/***/g" -e "s/$S3_SECRET_KEY/***/g" \
+  sed "$SED_LINE" -e "s/$JWT_SECRET/***/g" -e "s/$SMS_CODE_SECRET/***/g" -e "s/$S3_SECRET_KEY/***/g" \
       -e "s/$S3_ACCESS_KEY/***/g" -e "s/$POSTGRES_PASSWORD/***/g"
 }
 # shellcheck disable=SC2329  # вызывается из trap

@@ -40,7 +40,9 @@ E2E на уровне API (`test_api_e2e/`) запускается в CI (`mobil
 2. iPhone — кабелем к Mac, «Доверять этому компьютеру»; Настройки → Конфиденциальность и безопасность →
    «Режим разработчика» → вкл., перезагрузка. В Xcode → Window → Devices and Simulators у iPhone —
    «Connect via network» (дальше можно без кабеля, в той же сети Wi-Fi).
-3. `open ios/Runner.xcworkspace` → Runner → Signing & Capabilities → Team: Personal Team.
+3. ID Personal Team — в локальный `ios/Flutter/DeveloperTeam.xcconfig` (в git не попадает, в `project.pbxproj` команду
+   не сохранять): `DEVELOPMENT_TEAM = <id>`; id — `defaults read com.apple.dt.Xcode | grep teamID`. Первый раз
+   сертификат и профиль выпускает `xcodebuild … -allowProvisioningUpdates -allowProvisioningDeviceRegistration build`.
 
 Прогон: `scripts/device_run.sh` — стек backend из образа-кандидата, открытый в локальной сети
 (`http://<имя-mac>.local:18080`, `NSAllowsLocalNetworking`), release-сборка на iPhone, тестовый номер и код

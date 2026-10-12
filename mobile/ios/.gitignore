@@ -32,3 +32,6 @@ Runner/GeneratedPluginRegistrant.*
 !default.mode2v3
 !default.pbxuser
 !default.perspectivev3
+
+# Команда подписи разработчика — локальная (глава 18)
+Flutter/DeveloperTeam.xcconfig

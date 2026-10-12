@@ -23,14 +23,16 @@ docker build -q -t backend:smoke "$ROOT/backend" >/dev/null
 INTEGRATION_BIND=0.0.0.0 INTEGRATION_PORT="$PORT" "$ROOT/scripts/integration_stack.sh" backend:smoke -- bash -c '
   set -e
   cd "$1/mobile"
-  flutter run --release -d "$2" --dart-define=API_BASE_URL="http://$3:$4" </dev/null >/tmp/ev-device-run.log 2>&1 &
-  echo "Приложение собирается и устанавливается на iPhone (лог: /tmp/ev-device-run.log)"
-  echo "API для iPhone: http://$3:$4"
+  echo "Сборка release для iPhone (лог: /tmp/ev-device-run.log)"
+  flutter build ios --release --dart-define=API_BASE_URL="http://$3:$4" >/tmp/ev-device-run.log 2>&1
+  xcrun devicectl device install app --device "$2" build/ios/iphoneos/Runner.app >>/tmp/ev-device-run.log 2>&1
+  xcrun devicectl device process launch --device "$2" com.etsavtogomel.evServicedesk >>/tmp/ev-device-run.log 2>&1 ||
+    echo "Не запустилось: на iPhone — Настройки → Основные → VPN и управление устройством → доверять разработчику"
+  echo "Приложение установлено. API для iPhone: http://$3:$4"
   echo "Тестовый номер: ${E2E_PHONE#+375}  код: $E2E_CODE"
   if [ -n "${HOLD_SECONDS:-}" ]; then
     echo "Стек работает $HOLD_SECONDS с (HOLD_SECONDS)"; sleep "$HOLD_SECONDS"
   else
     read -r -p "Пройдите сценарий на iPhone и нажмите Enter, чтобы остановить стек… " _ </dev/tty
   fi
-  kill %1 2>/dev/null || true
 ' _ "$ROOT" "$DEVICE" "$HOST" "$PORT"
