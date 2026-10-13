@@ -1,14 +1,19 @@
 // Дашборд аналитики (ТЗ 4.4, A-05/A-06): время реакции и закрытия тикетов, проблемные модели, конверсия
-// в ТО. Только операции `/analytics/*` контракта (ADR 0012 п. 4); формулы и свежесть данных — ADR 0020.
+// в ТО. Только операции `/analytics/*` контракта; формулы и свежесть данных — ADR 0020. Глава 22 (ADR 0026
+// п. 11): свой период (сверка с контрольным набором), фильтры модели и категории — там, где их принимает
+// операция; при смене фильтров прежние цифры не показываются (U-41).
 import { useState } from 'react'
 import {
+  Button,
   Card,
   Chip,
   EmptyState,
   ErrorState,
   LoadingState,
+  Select,
   TICKET_CATEGORIES,
   TICKET_CATEGORY_LABELS,
+  TextField,
   formatHours,
   formatInt,
   formatRate,
@@ -17,44 +22,94 @@ import {
   type DateRange,
   type MaintenanceConversionStats,
   type ProblemModelStats,
+  type TicketCategory,
   type TicketResolutionStats,
 } from '@ev-servicedesk/web-shared'
-import { useAdmin } from '../repo.ts'
+import { modelName, useAdmin } from '../repo.ts'
 
 const PERIODS = [7, 30, 90] as const
+type Period = (typeof PERIODS)[number] | 'custom'
 
 export function Dashboard() {
-  const { repo, now } = useAdmin()
-  const [days, setDays] = useState<(typeof PERIODS)[number]>(30)
+  const { repo, now, models } = useAdmin()
+  const [period, setPeriod] = useState<Period>(30)
   const today = now()
-  const range: DateRange = {
-    date_from: toIsoDate(new Date(today.getFullYear(), today.getMonth(), today.getDate() - days + 1)),
-    date_to: toIsoDate(today),
-  }
+  const daysAgo = (n: number) => toIsoDate(new Date(today.getFullYear(), today.getMonth(), today.getDate() - n))
+  const [custom, setCustom] = useState<DateRange>(() => ({ date_from: daysAgo(29), date_to: toIsoDate(today) }))
+  const [model, setModel] = useState('')
+  const [category, setCategory] = useState<TicketCategory | ''>('')
+  const range: DateRange = period === 'custom' ? custom : { date_from: daysAgo(period - 1), date_to: toIsoDate(today) }
+  const modelFilter = model ? { vehicle_model_id: Number(model) } : {}
   const data = useAsync(
     () =>
       Promise.all([
-        repo.getTicketResolutionStats(range),
+        repo.getTicketResolutionStats({ ...range, ...modelFilter, ...(category ? { category } : {}) }),
         repo.listProblemModels(range),
-        repo.getMaintenanceConversionStats(range),
+        repo.getMaintenanceConversionStats({ ...range, ...modelFilter }),
       ]),
-    [repo, range.date_from, range.date_to],
+    [repo, range.date_from, range.date_to, model, category],
   )
 
   return (
     <div className="grid gap-6">
-      <div role="group" aria-label="Период" className="flex items-center gap-2">
-        <span className="text-label text-fg-muted">Период</span>
-        {PERIODS.map((p) => (
-          <Chip key={p} selected={days === p} onClick={() => setDays(p)}>
-            {p} дней
+      <div className="flex flex-wrap items-end gap-x-6 gap-y-3">
+        <div role="group" aria-label="Период" className="flex items-center gap-2 pb-1">
+          <span className="text-label text-fg-muted">Период</span>
+          {PERIODS.map((p) => (
+            <Chip key={p} selected={period === p} onClick={() => setPeriod(p)}>
+              {p} дней
+            </Chip>
+          ))}
+          <Chip selected={period === 'custom'} onClick={() => setPeriod('custom')}>
+            Свой период
           </Chip>
-        ))}
+        </div>
+        {period === 'custom' && (
+          <div className="flex items-end gap-2">
+            <TextField
+              label="С"
+              type="date"
+              value={custom.date_from}
+              onChange={(e) => e.target.value && setCustom((c) => ({ ...c, date_from: e.target.value }))}
+            />
+            <TextField
+              label="По"
+              type="date"
+              value={custom.date_to}
+              onChange={(e) => e.target.value && setCustom((c) => ({ ...c, date_to: e.target.value }))}
+            />
+          </div>
+        )}
+        <Select label="Модель" value={model} onChange={(e) => setModel(e.target.value)}>
+          <option value="">Все модели</option>
+          {models.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.brand} {m.model}
+            </option>
+          ))}
+        </Select>
+        <Select label="Категория тикета" value={category} onChange={(e) => setCategory(e.target.value as TicketCategory | '')}>
+          <option value="">Все категории</option>
+          {TICKET_CATEGORIES.map((c) => (
+            <option key={c} value={c}>
+              {TICKET_CATEGORY_LABELS[c]}
+            </option>
+          ))}
+        </Select>
+        <Button variant="secondary" size="sm" className="mb-1" onClick={data.reload} disabled={data.loading}>
+          Обновить
+        </Button>
       </div>
+      <p className="text-caption text-fg-muted">
+        Даты — по времени Минска, включительно; тикет относится к периоду по дате создания.
+        {model ? ` Модель: ${modelName(models, Number(model))} — для тикетов и конверсии.` : ''}
+        {category ? ` Категория: ${TICKET_CATEGORY_LABELS[category]} — только для тикетов.` : ''}
+      </p>
 
       {data.error ? (
         <ErrorState error={data.error} onRetry={data.reload} />
-      ) : !data.data ? (
+      ) : !data.data || data.loading ? (
+        // U-41: при смене периода и фильтров прежние цифры не показываются — их принимали за новые.
         <LoadingState label="Загрузка аналитики…" />
       ) : (
         <DashboardBody stats={data.data} />
@@ -72,7 +127,8 @@ function DashboardBody({
   return (
     <>
       <p className="text-caption text-fg-muted">
-        Данные на {formatComputedAt(resolution.computed_at)} — витрина обновляется каждые 5 минут
+        Данные на {formatComputedAt(resolution.computed_at)} — обновляются раз в 5 минут: новые тикеты появятся в
+        отчёте с задержкой.
       </p>
       <section aria-labelledby="kpi-title" className="grid gap-3">
         <h2 id="kpi-title" className="text-h3">
@@ -93,9 +149,15 @@ function DashboardBody({
       </section>
 
       <section aria-labelledby="models-title" className="grid gap-3">
-        <h2 id="models-title" className="text-h3">
-          Проблемные модели
-        </h2>
+        <div className="grid gap-1">
+          <h2 id="models-title" className="text-h3">
+            Модели по числу тикетов
+          </h2>
+          <p className="text-body-sm text-fg-muted">
+            Все модели за период (без фильтра модели и категории), больше всего тикетов — сверху. «На 10 авто» — тикетов на
+            10 машин модели: так сравнивают модели с разным числом машин.
+          </p>
+        </div>
         {models.length === 0 ? (
           <EmptyState title="Обращений за период нет">Модели без тикетов в отчёт не попадают.</EmptyState>
         ) : (

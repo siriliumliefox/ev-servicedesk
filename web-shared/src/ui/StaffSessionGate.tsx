@@ -190,7 +190,8 @@ const THEME_LABELS: Record<ThemePreference, string> = { system: "Как в си�
 export function ThemeSelect({ value, onChange }: { value: ThemePreference; onChange: (next: ThemePreference) => void }) {
   return (
     <label className="flex items-center gap-2 text-body-sm text-fg-muted">
-      Тема
+      {/* «Оформление», а не «Тема»: в админ-панели «Тема» — поле публикации (одинаковые подписи путают). */}
+      Оформление
       <select
         value={value}
         onChange={(e) => onChange(e.target.value as ThemePreference)}

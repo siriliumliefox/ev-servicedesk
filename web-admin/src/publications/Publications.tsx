@@ -1,33 +1,40 @@
-// Лента публикаций (ТЗ 4.4): новости, акции, регламент ТО — createNotification с таргетингом по модели;
-// прошивка — createFirmwareRelease (релиз + уведомление атомарно). Чтения ленты для админа в контракте v1
-// нет — `listPublishedNotifications` (открытый вопрос ADR 0012).
-// Тема (юзабилити-тест, U-08): поля title в контракте v1 нет — тема уходит первой строкой message, как в
+// Публикации (ТЗ 4.4; глоссарий «Публикация», «Аудитория»): новости и акции — createNotification с
+// таргетингом по модели; прошивка — createFirmwareRelease (релиз + уведомление атомарно). Напоминания о ТО
+// создаёт только система (ADR 0019). Перед публикацией — подтверждение с числом получателей
+// (audience-preview, U-45, ADR 0026 п. 10): публикацию нельзя отменить. Лента — notifications/published со
+// статистикой доставки.
+// Тема (юзабилити-тест, U-08): поля title в контракте нет — тема уходит первой строкой message, как в
 // мобильном клиенте (NotificationItem.title — первая строка, body — остальное).
 import { useState, type FormEvent } from 'react'
 import {
   Badge,
   Button,
   Card,
+  Chip,
+  ConfirmDialog,
   EmptyState,
   ErrorState,
   InlineError,
   LoadingState,
-  NOTIFICATION_TYPES,
   NOTIFICATION_TYPE_LABELS,
+  PUBLICATION_TYPES,
   Select,
   TextArea,
   TextField,
   formatDate,
   formatDateTime,
+  formatInt,
   toIsoDate,
   useAsync,
-  type Notification,
-  type NotificationType,
+  type NotificationAudiencePreview,
+  type PublicationType,
+  type PublishedNotification,
 } from '@ev-servicedesk/web-shared'
 import { modelName, useAdmin } from '../repo.ts'
 
-/** Лимит message контракта — на тему и текст вместе (с переводом строки между ними). */
+/** Лимит формы — на тему и текст вместе (с переводом строки между ними): push длиннее не читается. */
 const MESSAGE_MAX = 500
+const FEED_PAGE = 20
 
 function composeMessage(subject: string, text: string): string {
   return `${subject.trim()}\n${text.trim()}`
@@ -38,11 +45,16 @@ function splitMessage(message: string): { subject: string; text: string } {
   return { subject, text: rest.join('\n').trim() }
 }
 
-export function Publications() {
-  const { repo, models } = useAdmin()
-  const [version, setVersion] = useState(0)
-  const feed = useAsync(() => Promise.all([repo.listPublishedNotifications(), repo.listFirmwareReleases()]), [repo, version])
+/** 1 клиент, 2 клиента, 5 клиентов. */
+function plural(n: number, one: string, few: string, many: string): string {
+  const mod10 = n % 10
+  const mod100 = n % 100
+  const word = mod10 === 1 && mod100 !== 11 ? one : mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14) ? few : many
+  return `${formatInt(n)} ${word}`
+}
 
+export function Publications() {
+  const [version, setVersion] = useState(0)
   return (
     <div className="grid gap-6">
       {/* U-08: публикацию путали со статьёй базы знаний — что здесь, а что в «Базе знаний». */}
@@ -52,65 +64,142 @@ export function Publications() {
       </p>
       <div className="grid grid-cols-[28rem_minmax(0,1fr)] items-start gap-6">
         <PublishForm onPublished={() => setVersion((v) => v + 1)} />
-
         <div className="grid gap-6">
-          <section aria-labelledby="feed-title" className="grid gap-3">
-            <h2 id="feed-title" className="text-h3">
-              Опубликовано
-            </h2>
-            {feed.error ? (
-              <ErrorState error={feed.error} onRetry={feed.reload} />
-            ) : !feed.data ? (
-              <LoadingState />
-            ) : feed.data[0].length === 0 ? (
-              <EmptyState title="Публикаций пока нет">Новости, акции и прошивки появятся здесь после публикации.</EmptyState>
-            ) : (
-              <ol className="grid gap-2">
-                {feed.data[0].map((n) => (
-                  <li key={n.id}>
-                    <PublishedItem notification={n} />
-                  </li>
-                ))}
-              </ol>
-            )}
-          </section>
-
-          {feed.data && feed.data[1].length > 0 && (
-            <section aria-labelledby="fw-title" className="grid gap-3">
-              <h2 id="fw-title" className="text-h3">
-                Релизы прошивок
-              </h2>
-              <Card className="p-0">
-                <table className="w-full text-body-sm">
-                  <thead className="text-left text-fg-muted">
-                    <tr className="border-b border-border">
-                      <th className="px-4 py-3 font-semibold">Модель</th>
-                      <th className="px-4 py-3 font-semibold">Версия</th>
-                      <th className="px-4 py-3 font-semibold">Дата выпуска</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {feed.data[1].map((f) => (
-                      <tr key={f.id} className="border-b border-border last:border-b-0">
-                        <td className="px-4 py-3">{modelName(models, f.vehicle_model_id)}</td>
-                        <td className="px-4 py-3 font-mono">{f.version}</td>
-                        <td className="px-4 py-3">{formatDate(f.released_at)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </Card>
-            </section>
-          )}
+          <Feed version={version} />
+          <FirmwareReleases version={version} />
         </div>
       </div>
     </div>
   )
 }
 
-function PublishedItem({ notification: n }: { notification: Notification }) {
+function Feed({ version }: { version: number }) {
+  const { repo, models } = useAdmin()
+  const [type, setType] = useState<PublicationType | 'all'>('all')
+  const [model, setModel] = useState('')
+  const [page, setPage] = useState(1)
+  const feed = useAsync(
+    () =>
+      repo.listPublishedNotifications({
+        page,
+        page_size: FEED_PAGE,
+        ...(type === 'all' ? {} : { type }),
+        ...(model ? { target_vehicle_model_id: Number(model) } : {}),
+      }),
+    [repo, type, model, page, version],
+  )
+
+  return (
+    <section aria-labelledby="feed-title" className="grid gap-3">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <h2 id="feed-title" className="text-h3">
+          Опубликовано
+        </h2>
+        <div className="flex flex-wrap items-center gap-2">
+          <div role="group" aria-label="Тип публикации" className="flex items-center gap-2">
+            {(['all', ...PUBLICATION_TYPES] as const).map((t) => (
+              <Chip
+                key={t}
+                selected={type === t}
+                onClick={() => {
+                  setType(t)
+                  setPage(1)
+                }}
+              >
+                {t === 'all' ? 'Все' : NOTIFICATION_TYPE_LABELS[t]}
+              </Chip>
+            ))}
+          </div>
+          <Select
+            label="Модель в ленте"
+            inline
+            value={model}
+            onChange={(e) => {
+              setModel(e.target.value)
+              setPage(1)
+            }}
+          >
+            <option value="">Любая</option>
+            {models.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.brand} {m.model}
+              </option>
+            ))}
+          </Select>
+        </div>
+      </div>
+      {feed.error ? (
+        <ErrorState error={feed.error} onRetry={feed.reload} />
+      ) : !feed.data ? (
+        <LoadingState />
+      ) : feed.data.items.length === 0 ? (
+        <EmptyState title="Публикаций нет">Новости, акции и прошивки появятся здесь после публикации.</EmptyState>
+      ) : (
+        <>
+          <ol className="grid gap-2">
+            {feed.data.items.map((n) => (
+              <li key={n.id}>
+                <PublishedItem notification={n} />
+              </li>
+            ))}
+          </ol>
+          {feed.data.meta.total_pages > 1 && (
+            <nav aria-label="Страницы ленты" className="flex items-center gap-3 text-body-sm">
+              <Button size="sm" variant="secondary" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
+                Новее
+              </Button>
+              <span>
+                Страница {feed.data.meta.page} из {feed.data.meta.total_pages}
+              </span>
+              <Button size="sm" variant="secondary" disabled={page >= feed.data.meta.total_pages} onClick={() => setPage((p) => p + 1)}>
+                Старее
+              </Button>
+            </nav>
+          )}
+        </>
+      )}
+    </section>
+  )
+}
+
+function FirmwareReleases({ version }: { version: number }) {
+  const { repo, models } = useAdmin()
+  const releases = useAsync(() => repo.listFirmwareReleases(), [repo, version])
+  if (!releases.data || releases.data.length === 0) return null
+  const sorted = [...releases.data].sort((a, b) => b.released_at.localeCompare(a.released_at) || b.id - a.id)
+  return (
+    <section aria-labelledby="fw-title" className="grid gap-3">
+      <h2 id="fw-title" className="text-h3">
+        Релизы прошивок
+      </h2>
+      <Card className="p-0">
+        <table className="w-full text-body-sm">
+          <thead className="text-left text-fg-muted">
+            <tr className="border-b border-border">
+              <th className="px-4 py-3 font-semibold">Модель</th>
+              <th className="px-4 py-3 font-semibold">Версия</th>
+              <th className="px-4 py-3 font-semibold">Дата выпуска</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map((f) => (
+              <tr key={f.id} className="border-b border-border last:border-b-0">
+                <td className="px-4 py-3">{modelName(models, f.vehicle_model_id)}</td>
+                <td className="px-4 py-3 font-mono">{f.version}</td>
+                <td className="px-4 py-3">{formatDate(f.released_at)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </Card>
+    </section>
+  )
+}
+
+function PublishedItem({ notification: n }: { notification: PublishedNotification }) {
   const { models } = useAdmin()
   const { subject, text } = splitMessage(n.message)
+  const s = n.stats
   return (
     <Card className="grid gap-2">
       <span className="flex flex-wrap items-center gap-2 text-caption text-fg-muted">
@@ -122,15 +211,23 @@ function PublishedItem({ notification: n }: { notification: Notification }) {
       </span>
       <p className="text-label">{subject}</p>
       {text && <p className="whitespace-pre-line text-body-sm">{text}</p>}
+      <p className="text-caption text-fg-muted">
+        Получателей {formatInt(s.recipients)} · push доставлено {formatInt(s.delivered)}
+        {s.failed ? `, не доставлено ${formatInt(s.failed)}` : ''} · открыли {formatInt(s.opened)} · прочитали{' '}
+        {formatInt(s.read)}
+      </p>
     </Card>
   )
 }
 
 const NO_MISSING = { model: false, subject: false, text: false }
 
+/** Что подтверждает администратор: аудитория уже посчитана сервером. */
+type Pending = { audience: NotificationAudiencePreview; publish: () => Promise<string> }
+
 function PublishForm({ onPublished }: { onPublished: () => void }) {
   const { repo, models, now } = useAdmin()
-  const [type, setType] = useState<NotificationType>('news')
+  const [type, setType] = useState<PublicationType>('news')
   const [target, setTarget] = useState('')
   const [subject, setSubject] = useState('')
   const [message, setMessage] = useState('')
@@ -140,6 +237,7 @@ function PublishForm({ onPublished }: { onPublished: () => void }) {
   const [missing, setMissing] = useState(NO_MISSING)
   const [done, setDone] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [pending, setPending] = useState<Pending | null>(null)
   const firmware = type === 'firmware'
   const length = subject.trim() || message.trim() ? composeMessage(subject, message).length : 0
   const tooLong = length > MESSAGE_MAX
@@ -155,6 +253,7 @@ function PublishForm({ onPublished }: { onPublished: () => void }) {
     setReleasedAt(toIsoDate(now()))
   }
 
+  /** Проверка формы → аудитория с сервера → подтверждение (U-45). */
   const submit = async (e: FormEvent) => {
     e.preventDefault()
     setError(null)
@@ -169,23 +268,48 @@ function PublishForm({ onPublished }: { onPublished: () => void }) {
     setBusy(true)
     try {
       if (firmware) {
-        const release = await repo.createFirmwareRelease({ vehicle_model_id: Number(target), version: fwVersion, released_at: releasedAt })
-        setDone(`Релиз опубликован: ${modelLabel}, ${release.version}. Владельцы модели получат уведомление.`)
-      } else {
-        await repo.createNotification({
-          type,
-          message: composeMessage(subject, message),
-          target_vehicle_model_id: target ? Number(target) : null,
+        const body = { vehicle_model_id: Number(target), version: fwVersion, released_at: releasedAt }
+        // Уведомление о прошивке создаётся вместе с релизом — для audience-preview его ещё нет. Оценка сверху —
+        // владельцы модели; получат те, у кого прошивка старее (ADR 0019).
+        const audience = await repo.previewNotificationAudience({ type: 'news', message: '-', target_vehicle_model_id: body.vehicle_model_id })
+        setPending({
+          audience,
+          publish: async () => {
+            const release = await repo.createFirmwareRelease(body)
+            return `Релиз опубликован: ${modelLabel}, ${release.version}. Владельцы модели с более ранней прошивкой получат уведомление.`
+          },
         })
-        setDone(
-          `Уведомление «${subject.trim()}» поставлено в очередь на рассылку: ${target ? `владельцы ${modelLabel}` : 'все клиенты'}.`,
-        )
+      } else {
+        const body = { type, message: composeMessage(subject, message), target_vehicle_model_id: target ? Number(target) : null }
+        const audience = await repo.previewNotificationAudience(body)
+        const who = target ? `владельцы ${modelLabel}` : 'все клиенты'
+        const title = subject.trim()
+        setPending({
+          audience,
+          publish: async () => {
+            await repo.createNotification(body)
+            return `Уведомление «${title}» поставлено в очередь на рассылку: ${who}.`
+          },
+        })
       }
+    } catch (err) {
+      setError(err)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const publish = async () => {
+    if (!pending) return
+    setBusy(true)
+    try {
+      setDone(await pending.publish())
       reset()
       onPublished()
     } catch (err) {
       setError(err)
     } finally {
+      setPending(null)
       setBusy(false)
     }
   }
@@ -204,8 +328,8 @@ function PublishForm({ onPublished }: { onPublished: () => void }) {
         </h2>
         <fieldset className="grid gap-2">
           <legend className="pb-1 text-label">Тип</legend>
-          <div className="grid grid-cols-2 gap-2">
-            {NOTIFICATION_TYPES.map((t) => (
+          <div className="grid grid-cols-3 gap-2">
+            {PUBLICATION_TYPES.map((t) => (
               <label
                 key={t}
                 className={`flex h-(--size-control-web) cursor-pointer items-center gap-2 rounded-md border px-3 text-body ${
@@ -226,6 +350,7 @@ function PublishForm({ onPublished }: { onPublished: () => void }) {
               </label>
             ))}
           </div>
+          <p className="text-caption text-fg-muted">Напоминания о ТО отправляет система по регламентам — вручную их не публикуют.</p>
         </fieldset>
         <Select
           label={firmware ? 'Модель' : 'Аудитория'}
@@ -294,9 +419,33 @@ function PublishForm({ onPublished }: { onPublished: () => void }) {
           </p>
         )}
         <Button type="submit" disabled={busy}>
-          Опубликовать
+          Опубликовать…
         </Button>
       </form>
+
+      {pending && (
+        <ConfirmDialog
+          title={firmware ? 'Опубликовать релиз прошивки?' : 'Опубликовать уведомление?'}
+          confirmLabel="Опубликовать"
+          busy={busy}
+          onConfirm={publish}
+          onCancel={() => setPending(null)}
+        >
+          {firmware ? (
+            <p>
+              Уведомление получат не больше {plural(pending.audience.recipients, 'владельца', 'владельцев', 'владельцев')}{' '}
+              {modelLabel} — те, у кого прошивка старее {fwVersion.trim() || 'новой'}.
+            </p>
+          ) : (
+            <p>
+              Получат {plural(pending.audience.recipients, 'клиент', 'клиента', 'клиентов')} (
+              {plural(pending.audience.devices, 'устройство', 'устройства', 'устройств')} с push).
+            </p>
+          )}
+          {pending.audience.recipients === 0 && <p className="text-status-yellow-fg">Получателей нет — уведомление никто не увидит.</p>}
+          <p>Отменить или изменить публикацию нельзя.</p>
+        </ConfirmDialog>
+      )}
     </Card>
   )
 }

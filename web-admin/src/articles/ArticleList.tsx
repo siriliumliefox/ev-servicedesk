@@ -1,4 +1,5 @@
-// База знаний: список статей с поиском и фильтрами (ТЗ 4.4). Админ видит и черновики.
+// База знаний: список статей с поиском и фильтрами (ТЗ 4.4). Админ видит и черновики. Фильтры — запросом
+// к API, все страницы выборки (глава 22, ADR 0026 п. 2).
 import { useState } from 'react'
 import {
   ARTICLE_TYPE_LABELS,
@@ -10,6 +11,7 @@ import {
   ErrorState,
   LoadingState,
   TextField,
+  fetchAllPages,
   useAsync,
   type ArticleType,
 } from '@ev-servicedesk/web-shared'
@@ -24,15 +26,18 @@ export function ArticleList({ onOpen, onCreate }: { onOpen: (id: number) => void
   const [publish, setPublish] = useState<PublishFilter>('all')
   const data = useAsync(
     () =>
-      repo.listKnowledgeArticles({
-        ...(search.trim() ? { search: search.trim() } : {}),
-        ...(type === 'all' ? {} : { article_type: type }),
-      }),
-    [repo, search, type],
+      fetchAllPages((page) =>
+        repo.listKnowledgeArticles({
+          page,
+          page_size: 100,
+          ...(search.trim() ? { search: search.trim().slice(0, 200) } : {}),
+          ...(type === 'all' ? {} : { article_type: type }),
+          ...(publish === 'all' ? {} : { is_published: publish === 'published' }),
+        }),
+      ),
+    [repo, search, type, publish],
   )
-  const items = (data.data?.items ?? []).filter(
-    (a) => publish === 'all' || (publish === 'published' ? a.is_published : !a.is_published),
-  )
+  const items = data.data ?? []
 
   return (
     <div className="grid gap-4">
