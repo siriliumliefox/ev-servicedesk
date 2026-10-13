@@ -93,31 +93,32 @@ class _NotificationFeedState extends State<NotificationFeed> {
         Expanded(
           child: AsyncView<List<NotificationItem>>(
             reloadKey: app.revision,
+            // Вкладка «Новости» снова выбрана, закрыт экран поверх центра — список с сервера, а не прежний (M3).
+            reloadOnShow: true,
             load: () async =>
                 (await app.repository.notifications()).where((n) => widget.types.contains(n.type)).toList(),
             builder: (context, all, reload) {
               final items = _filter == null ? all : all.where((n) => n.type == _filter).toList();
-              if (items.isEmpty) {
-                return EmptyState(
-                  icon: Icons.notifications_none,
-                  title: _filter == null ? widget.emptyTitle : 'В разделе «${_filter!.label}» пока пусто',
-                  message: widget.emptyMessage,
-                );
-              }
               return RefreshIndicator(
                 onRefresh: () async {
                   await reload();
                   await app.refreshUnread();
                 },
-                child: ListView.separated(
-                  itemCount: items.length,
-                  separatorBuilder: (_, __) => const Divider(height: 1),
-                  itemBuilder: (context, i) => _Tile(
-                    item: items[i],
-                    icon: _icon(items[i].type),
-                    onTap: () => _open(items[i], reload),
-                  ),
-                ),
+                child: items.isEmpty
+                    ? EmptyState(
+                        icon: Icons.notifications_none,
+                        title: _filter == null ? widget.emptyTitle : 'В разделе «${_filter!.label}» пока пусто',
+                        message: widget.emptyMessage,
+                      )
+                    : ListView.separated(
+                        itemCount: items.length,
+                        separatorBuilder: (_, __) => const Divider(height: 1),
+                        itemBuilder: (context, i) => _Tile(
+                          item: items[i],
+                          icon: _icon(items[i].type),
+                          onTap: () => _open(items[i], reload),
+                        ),
+                      ),
               );
             },
           ),
