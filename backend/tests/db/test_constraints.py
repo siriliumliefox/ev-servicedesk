@@ -73,6 +73,34 @@ def test_owner_change_keeps_maintenance_history(conn: Connection) -> None:
     assert scalar(conn, history, v=new) == 0  # новый владелец не видит чужую историю
 
 
+def test_maintenance_record_kind(conn: Connection) -> None:
+    """ADR 0023 п. 2: по умолчанию — работа; замена — только по агрегату."""
+    vehicle, agg = make_vehicle(conn), aggregate_type_id(conn)
+    insert = (
+        "INSERT INTO maintenance_record (vehicle_id, aggregate_type_id, performed_at, "
+        "mileage_at_service, description, kind) "
+        "VALUES (:v, :a, DATE '2026-05-01', 0, :d, :k) RETURNING kind"
+    )
+    default = conn.execute(
+        text(
+            "INSERT INTO maintenance_record (vehicle_id, performed_at, mileage_at_service, "
+            "description) VALUES (:v, DATE '2026-05-01', 0, 'ТО') RETURNING kind"
+        ),
+        {"v": vehicle},
+    ).scalar_one()
+    assert default == "work"
+    conn.execute(text(insert), {"v": vehicle, "a": agg, "d": None, "k": "replacement"})
+    assert_violation(
+        conn,
+        "ck_maintenance_record_replacement_has_aggregate",
+        insert,
+        v=vehicle,
+        a=None,
+        d="Замена",
+        k="replacement",
+    )
+
+
 @pytest.mark.parametrize(
     ("column", "value_sql"),
     [

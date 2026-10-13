@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Контур авто сверху для схемы агрегатов (глава 19, ADR 0023 п. 1): перед — вверху.
+     Цвета — заглушки: приложение заменяет их токенами темы по id элемента (wheel-*, body, glass-*).
+     Зоны агрегатов рисуются поверх виджетами — здесь их нет. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 620 1000" width="620" height="1000">
+  <rect id="wheel-front-left" x="24.8" y="180" width="62" height="130" rx="18.6" fill="#555555"/>
+  <rect id="wheel-front-right" x="533.2" y="180" width="62" height="130" rx="18.6" fill="#555555"/>
+  <rect id="wheel-rear-left" x="24.8" y="740" width="62" height="130" rx="18.6" fill="#555555"/>
+  <rect id="wheel-rear-right" x="533.2" y="740" width="62" height="130" rx="18.6" fill="#555555"/>
+  <path id="body" d="M248 20 H372 A186 186 0 0 1 558 206 V856 A124 124 0 0 1 434 980 H186 A124 124 0 0 1 62 856 V206 A186 186 0 0 1 248 20 Z"
+        fill="#eeeeee" stroke="#555555" stroke-width="4"/>
+  <path id="glass-front" d="M124 470 Q310 430 496 470 L458.8 510 Q310 480 161.2 510 Z" fill="#cccccc"/>
+  <path id="glass-rear" d="M161.2 720 Q310 750 458.8 720 L483.6 760 Q310 800 136.4 760 Z" fill="#cccccc"/>
+</svg>

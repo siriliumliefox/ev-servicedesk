@@ -952,5 +952,15 @@ INSERT INTO analytics_refresh (view_name, refreshed_at) VALUES ('analytics_vehic
 
 UPDATE alembic_version SET version_num='0013' WHERE alembic_version.version_num = '0012';
 
+-- Running upgrade 0013 -> 0014
+
+CREATE TYPE maintenance_record_kind AS ENUM ('replacement', 'work');
+
+ALTER TABLE maintenance_record ADD COLUMN kind maintenance_record_kind DEFAULT 'work' NOT NULL;
+
+ALTER TABLE maintenance_record ADD CONSTRAINT ck_maintenance_record_replacement_has_aggregate CHECK (kind <> 'replacement' OR aggregate_type_id IS NOT NULL);
+
+UPDATE alembic_version SET version_num='0014' WHERE alembic_version.version_num = '0013';
+
 COMMIT;
 

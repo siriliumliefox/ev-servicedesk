@@ -21,6 +21,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, CreatedAtMixin, IdMixin, TimestampMixin
+from app.models.enums import MaintenanceRecordKind, pg_enum
 
 if TYPE_CHECKING:
     from app.models.auth import AppUser
@@ -140,13 +141,20 @@ class VehicleAggregateStatus(IdMixin, TimestampMixin, Base):
 
 
 class MaintenanceRecord(IdMixin, CreatedAtMixin, Base):
-    """История ТО (append-only). ticket_id — связь «обращение → ТО» для A-06."""
+    """История ТО (append-only). ticket_id — связь «обращение → ТО» для A-06.
+
+    kind — замена агрегата (replaceAggregateStatus) или работа (ADR 0023 п. 2).
+    """
 
     __tablename__ = "maintenance_record"
     __table_args__ = (
         CheckConstraint("mileage_at_service >= 0", name="mileage_at_service_non_negative"),
         CheckConstraint(
             "aggregate_type_id IS NOT NULL OR description IS NOT NULL", name="subject_present"
+        ),
+        CheckConstraint(
+            "kind <> 'replacement' OR aggregate_type_id IS NOT NULL",
+            name="replacement_has_aggregate",
         ),
     )
 
@@ -165,6 +173,11 @@ class MaintenanceRecord(IdMixin, CreatedAtMixin, Base):
     performed_at: Mapped[date] = mapped_column(Date, nullable=False)
     mileage_at_service: Mapped[int] = mapped_column(Integer, nullable=False)
     description: Mapped[str | None] = mapped_column(String(255))
+    kind: Mapped[MaintenanceRecordKind] = mapped_column(
+        pg_enum(MaintenanceRecordKind, "maintenance_record_kind"),
+        server_default=MaintenanceRecordKind.WORK.value,
+        nullable=False,
+    )
 
     # Связи только явной загрузкой (selectinload), ленивая подгрузка — ошибка (ADR 0015).
     aggregate_type: Mapped[AggregateType | None] = relationship(lazy="raise")

@@ -1,8 +1,11 @@
 // E2E клиента на уровне API (глава 18, ADR 0022 п. 2): настоящий HttpClientRepository против стека backend из
 // образа-кандидата. Сценарий чек-листа «регистрация → добавление авто → просмотр карточки» плюс сессия:
-// восстановление по refresh-токену, выход, отзыв согласия.
-// Запуск: scripts/integration_stack.sh backend:smoke -- bash -c 'cd mobile && flutter test test_api_e2e'
-// (окружение API_BASE_URL, E2E_PHONE, E2E_CODE задаёт стек; без него тест пропускается).
+// восстановление по refresh-токену, выход, отзыв согласия. Схема агрегатов (глава 19, ADR 0023 п. 7): статусы
+// 5 тестовых авто в клиенте совпадают с таблицей docs/specs/scheme_test_vehicles.json.
+// Запуск: scripts/integration_stack.sh backend:smoke -- bash -c \
+//   '(cd backend && poetry run python scripts/seed_scheme_vehicles.py) && cd mobile && flutter test test_api_e2e'
+// (окружение API_BASE_URL, E2E_PHONE, E2E_CODE, E2E_SCHEME_PHONE задаёт стек; без него тест пропускается).
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
@@ -18,6 +21,7 @@ final _env = Platform.environment;
 final _baseUrl = _env['API_BASE_URL'] ?? '';
 final _phone = _env['E2E_PHONE'] ?? '';
 final _code = _env['E2E_CODE'] ?? '';
+final _schemePhone = _env['E2E_SCHEME_PHONE'] ?? '';
 
 /// VIN, который мок-декодер распознаёт как Zeekr 001 (ADR 0014); хвост случайный — стек может быть не пустым.
 String _zeekrVin() {
@@ -28,10 +32,23 @@ String _zeekrVin() {
 HttpClientRepository _repository(TokenStore tokens) =>
     HttpClientRepository(ApiClient(baseUrl: Uri.parse(_baseUrl), tokens: tokens));
 
+/// Запрос кода с паузой между запросами (429 + Retry-After): номер мог только что запрашивать код другой шаг стека.
+Future<void> _requestCode(HttpClientRepository repo, String phone) async {
+  try {
+    await repo.requestCode(phone);
+  } on ApiException catch (e) {
+    if (e.code != 'RATE_LIMITED') rethrow;
+    await Future<void>.delayed(e.retryAfter! + const Duration(seconds: 1));
+    await repo.requestCode(phone);
+  }
+}
+
 void main() {
   final skip = _baseUrl.isEmpty || _phone.isEmpty || _code.isEmpty
       ? 'нет API_BASE_URL/E2E_PHONE/E2E_CODE — запускается из scripts/integration_stack.sh'
       : null;
+  final schemeSkip =
+      _schemePhone.isEmpty ? 'нет E2E_SCHEME_PHONE — 5 тестовых авто создаёт seed_scheme_vehicles.py' : null;
 
   test('регистрация → авто → карточка → сессия', skip: skip, timeout: const Timeout(Duration(minutes: 3)), () async {
     final tokens = MemoryTokenStore();
@@ -78,7 +95,7 @@ void main() {
     final history = await repo.maintenanceRecordsPage(vehicle.id);
     expect(history.items, isEmpty);
     expect(history.hasMore, isFalse);
-    expect(await repo.maintenanceRecords(vehicle.id), isEmpty);
+    expect((await repo.maintenanceRecordsPage(vehicle.id, aggregateTypeCode: 'gearbox_oil')).items, isEmpty);
 
     // Остальные разделы на реальном API (ADR 0022 п. 5): статьи модели, тикеты, уведомления.
     await repo.articles(vehicle.vehicleModel.id, ArticleType.troubleshooting);
@@ -126,5 +143,36 @@ void main() {
     // Отзыв согласия на обработку ПД завершает все сессии пользователя.
     await repo.withdrawPdConsent();
     expect(await tokens.read(), isNull);
+  });
+
+  test('схема агрегатов: 5 тестовых авто — статусы клиента совпадают с таблицей',
+      skip: skip ?? schemeSkip, timeout: const Timeout(Duration(minutes: 3)), () async {
+    final table =
+        jsonDecode(File('../docs/specs/scheme_test_vehicles.json').readAsStringSync()) as Map<String, dynamic>;
+    final repo = _repository(MemoryTokenStore());
+    await _requestCode(repo, _schemePhone);
+    await repo.verifyCode(_schemePhone, _code); // согласие ПД дал seed
+
+    final vehicles = {for (final v in await repo.vehicles()) v.vin: v};
+    final cars = (table['vehicles'] as List).cast<Map<String, dynamic>>();
+    expect(vehicles.keys.toSet(), cars.map((c) => c['vin']).toSet());
+    for (final car in cars) {
+      final vehicle = vehicles[car['vin']]!;
+      expect(vehicle.vehicleModel.title, car['model'], reason: car['title'] as String);
+      final expected = (car['aggregates'] as Map).cast<String, Map<String, dynamic>>();
+      final actual = {for (final s in await repo.aggregateStatuses(vehicle.id)) s.aggregateTypeCode: s};
+      expect(actual.keys.toSet(), expected.keys.toSet(), reason: car['title'] as String);
+      for (final MapEntry(key: code, value: want) in expected.entries) {
+        final got = actual[code]!;
+        final where = '${car['title']}: $code';
+        expect(got.status.name, want['status'], reason: where);
+        if (want.containsKey('percentage')) expect(got.percentage, want['percentage'], reason: where);
+        // История агрегата: у заменённого — запись вида «замена», у нового авто — пусто.
+        final history = await repo.maintenanceRecordsPage(vehicle.id, aggregateTypeCode: code);
+        expect(history.items.map((r) => r.kind),
+            want.containsKey('replaced_mileage') ? [MaintenanceKind.replacement] : isEmpty,
+            reason: where);
+      }
+    }
   });
 }

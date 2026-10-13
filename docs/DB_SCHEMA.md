@@ -60,13 +60,13 @@
 |---|---|---|
 | client: список/карточка авто | `Vehicle.vin, mileage, is_active, vehicle_model, current_firmware_version, created_at` | `vehicle`, `vehicle_model`, `firmware_release.version`; `is_active = deleted_at IS NULL` |
 | client: схема агрегатов | `AggregateStatus.*` | `vehicle_aggregate_status`, `aggregate_type`, `maintenance_regulation` (статус/процент — расчёт) |
-| client: история ТО | `MaintenanceRecord.*` | `maintenance_record`, `aggregate_type.code`, `app_user` |
+| client: история ТО | `MaintenanceRecord.*` (`kind` — замена / работа, фильтр `aggregate_type_code`) | `maintenance_record`, `aggregate_type.code`, `app_user` |
 | client: обучение / дерево | `KnowledgeArticle.*`, `DecisionTreeNode.*` | `knowledge_article`, `decision_tree_node` |
 | client: тикет + чат | `TicketCreateRequest.*`, `TicketDetail.*`, `TicketMessage.*` | `ticket` (`description`), `ticket_message`, `ticket_attachment` |
 | client: центр уведомлений | `NotificationListItem.read_at` | `notification`, `notification_recipient` |
 | engineer: канбан | `Ticket.status, category, sla_due_at, is_overdue, assigned_engineer_id` | `ticket` (`is_overdue` — расчёт) |
 | engineer: карточка авто из тикета | `TicketDetail.vehicle_context` | `ticket.vehicle_id` → `vehicle`, `vehicle_aggregate_status` |
-| engineer: замена агрегата | `AggregateReplaceRequest.*` | `vehicle_aggregate_status` + `maintenance_record` |
+| engineer: замена агрегата | `AggregateReplaceRequest.*` | `vehicle_aggregate_status` + `maintenance_record` (`kind = replacement`, миграция `0014`, ADR 0023) |
 | admin: регламенты / агрегаты | `MaintenanceRegulation.*`, `AggregateType.*` | `maintenance_regulation`, `aggregate_type` |
 | admin: пороги «светофора» | `AggregateStatusThresholds.*` | `aggregate_status_thresholds` (ADR 0009) |
 | engineer: прошивка авто | `setVehicleFirmware`, `listFirmwareReleases` | `vehicle.current_firmware_release_id`, `firmware_release` |

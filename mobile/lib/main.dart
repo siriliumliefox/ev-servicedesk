@@ -41,12 +41,18 @@ class _EvServiceDeskAppState extends State<EvServiceDeskApp> {
   late final AppState _state = AppState(widget.repository, signedIn: widget.signedIn);
   final _navigator = GlobalKey<NavigatorState>();
   late bool _signedIn;
+  late final AppLifecycleListener _lifecycle;
 
   @override
   void initState() {
     super.initState();
     _signedIn = _state.signedIn;
     _state.addListener(_onState);
+    // Возврат из фона — данные перечитываются: статусы агрегатов могли измениться после замены в сервисе
+    // (ADR 0023 п. 5). Загруженное остаётся на экране до ответа.
+    _lifecycle = AppLifecycleListener(onResume: () {
+      if (_state.signedIn) _state.refresh();
+    });
     if (_state.signedIn) {
       _state.refresh();
     } else {
@@ -64,6 +70,7 @@ class _EvServiceDeskAppState extends State<EvServiceDeskApp> {
 
   @override
   void dispose() {
+    _lifecycle.dispose();
     _state.removeListener(_onState);
     _state.dispose();
     super.dispose();

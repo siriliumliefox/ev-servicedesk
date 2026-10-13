@@ -9,6 +9,7 @@ from app.api.pagination import PaginationMeta
 from app.api.schemas.auth import UserPublic
 from app.api.schemas.common import no_control_chars
 from app.domain.vehicles.vin import VIN_PATTERN, validate_vin
+from app.models.enums import MaintenanceRecordKind
 
 
 class VehicleCreateRequest(BaseModel):
@@ -106,6 +107,7 @@ class MaintenanceRecordOut(BaseModel):
     performed_at: date
     mileage_at_service: int
     description: str | None
+    kind: MaintenanceRecordKind
 
 
 class VehicleModelList(BaseModel):

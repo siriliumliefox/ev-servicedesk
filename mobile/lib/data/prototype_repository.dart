@@ -96,7 +96,9 @@ class PrototypeRepository implements ClientRepository {
           final left = maxCodeAttempts - _codeAttempts;
           throw ApiException(
             'CODE_INVALID',
-            left > 0 ? errorText('CODE_INVALID', details: {'attempts_left': left}) : 'Слишком много попыток. Запросите новый код',
+            left > 0
+                ? errorText('CODE_INVALID', details: {'attempts_left': left})
+                : 'Слишком много попыток. Запросите новый код',
           );
         }
         _phone = phone;
@@ -166,9 +168,17 @@ class PrototypeRepository implements ClientRepository {
       });
 
   @override
-  Future<Page<MaintenanceRecord>> maintenanceRecordsPage(int vehicleId, {int page = 1, int pageSize = 20}) =>
+  Future<Page<MaintenanceRecord>> maintenanceRecordsPage(
+    int vehicleId, {
+    int page = 1,
+    int pageSize = 20,
+    String? aggregateTypeCode,
+  }) =>
       _call(() {
-        final all = [...?_records[vehicleId]]..sort((a, b) => b.performedAt.compareTo(a.performedAt));
+        final all = [
+          for (final r in _records[vehicleId] ?? const <MaintenanceRecord>[])
+            if (aggregateTypeCode == null || r.aggregateTypeCode == aggregateTypeCode) r,
+        ]..sort((a, b) => b.performedAt.compareTo(a.performedAt));
         final start = (page - 1) * pageSize;
         return Page(
           items: all.skip(start).take(pageSize).toList(),
@@ -343,37 +353,43 @@ class PrototypeRepository implements ClientRepository {
         for (final code in _modelAggregates[modelId]!) _status(code, AggregateStatus.unknown),
       ];
 
+  /// Записи по агрегатам — их замены (совпадают со статусами выше), долив — работа (не сбрасывает выработку).
   static final Map<int, List<MaintenanceRecord>> _records = {
     101: [
-      MaintenanceRecord(
-          id: 1, aggregateTypeCode: 'gearbox_oil', performedAt: DateTime(2026, 8, 30), mileageAtService: 36450),
-      MaintenanceRecord(
-          id: 2, aggregateTypeCode: 'air_filter', performedAt: DateTime(2026, 6, 20), mileageAtService: 37750),
-      MaintenanceRecord(
-          id: 3, aggregateTypeCode: 'oil_filter', performedAt: DateTime(2025, 12, 12), mileageAtService: 32700),
-      MaintenanceRecord(
-          id: 4, aggregateTypeCode: 'cabin_filter', performedAt: DateTime(2025, 11, 1), mileageAtService: 31250),
-      MaintenanceRecord(
-        id: 5,
-        aggregateTypeCode: 'engine_oil',
-        performedAt: DateTime(2025, 10, 2),
-        mileageAtService: 30800,
-        description: 'Плановое ТО-2',
-      ),
-      MaintenanceRecord(
-          id: 6, aggregateTypeCode: 'engine_oil', performedAt: DateTime(2024, 10, 15), mileageAtService: 15900),
-      MaintenanceRecord(
-          id: 7, aggregateTypeCode: 'cabin_filter', performedAt: DateTime(2024, 10, 15), mileageAtService: 15900),
+      _work(14, 'engine_oil', DateTime(2026, 3, 14), 34100, 'Долив масла'),
+      _replacement(1, 'gearbox_oil', DateTime(2026, 8, 30), 36450),
+      _replacement(2, 'air_filter', DateTime(2026, 6, 20), 37750),
+      _replacement(3, 'oil_filter', DateTime(2025, 12, 12), 32700),
+      _replacement(4, 'cabin_filter', DateTime(2025, 11, 1), 31250),
+      _replacement(5, 'engine_oil', DateTime(2025, 10, 2), 30800, 'Плановое ТО-2'),
+      _replacement(6, 'engine_oil', DateTime(2024, 10, 15), 15900),
+      _replacement(7, 'cabin_filter', DateTime(2024, 10, 15), 15900),
     ],
     102: [
-      MaintenanceRecord(
-          id: 8, aggregateTypeCode: 'cabin_filter', performedAt: DateTime(2026, 5, 15), mileageAtService: 12900),
-      MaintenanceRecord(
-          id: 9, aggregateTypeCode: 'ac_refrigerant', performedAt: DateTime(2026, 4, 2), mileageAtService: 11400),
-      MaintenanceRecord(
-          id: 10, aggregateTypeCode: 'gearbox_oil', performedAt: DateTime(2024, 11, 20), mileageAtService: 1200),
+      _replacement(8, 'cabin_filter', DateTime(2026, 5, 15), 12900),
+      _replacement(9, 'ac_refrigerant', DateTime(2026, 4, 2), 11400),
+      _replacement(10, 'gearbox_oil', DateTime(2024, 11, 20), 1200),
     ],
   };
+
+  static MaintenanceRecord _replacement(int id, String code, DateTime at, int km, [String? description]) =>
+      MaintenanceRecord(
+        id: id,
+        aggregateTypeCode: code,
+        performedAt: at,
+        mileageAtService: km,
+        kind: MaintenanceKind.replacement,
+        description: description,
+      );
+
+  static MaintenanceRecord _work(int id, String code, DateTime at, int km, String description) => MaintenanceRecord(
+        id: id,
+        aggregateTypeCode: code,
+        performedAt: at,
+        mileageAtService: km,
+        kind: MaintenanceKind.work,
+        description: description,
+      );
 
   static const _articles = [
     KnowledgeArticle(

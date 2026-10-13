@@ -278,7 +278,48 @@ def test_maintenance_record_with_aggregate_does_not_reset_counter(
         headers=engineer[0],
     )
     assert r.status_code == 201
+    assert r.json()["kind"] == "work"
     assert by_code(statuses(client, owner, vid))["engine_oil"]["status"] == "unknown"
+
+
+def test_aggregate_history_tells_replacement_from_work(client, engineer, staffed_vehicle):
+    """ADR 0023 п. 2: история агрегата — замены и работы по нему, у записи kind."""
+    owner, vid = staffed_vehicle
+    eng = engineer[0]
+    r = replace(
+        client,
+        eng,
+        vid,
+        "engine_oil",
+        replaced_at=str(TODAY() - timedelta(days=10)),
+        mileage_at_replacement=15000,
+    )
+    assert r.status_code == 200
+    for code, description in (("engine_oil", "Долив"), ("air_filter", "Осмотр"), (None, "Мойка")):
+        r = client.post(
+            f"{API}/vehicles/{vid}/maintenance-records",
+            json={
+                "aggregate_type_code": code,
+                "performed_at": str(TODAY()),
+                "mileage_at_service": 16000,
+                "description": description,
+            },
+            headers=eng,
+        )
+        assert r.status_code == 201
+
+    def history(**params) -> list[tuple[str | None, str, str | None]]:
+        r = client.get(f"{API}/vehicles/{vid}/maintenance-records", params=params, headers=owner)
+        assert r.status_code == 200, r.text
+        return [(i["aggregate_type_code"], i["kind"], i["description"]) for i in r.json()["items"]]
+
+    assert history(aggregate_type_code="engine_oil") == [
+        ("engine_oil", "work", "Долив"),
+        ("engine_oil", "replacement", None),
+    ], "новые сверху, только по агрегату"
+    assert [kind for _, kind, _ in history()] == ["work", "work", "work", "replacement"]
+    assert history(aggregate_type_code="no_such_aggregate") == [], "фильтр, а не ошибка"
+    assert by_code(statuses(client, owner, vid))["engine_oil"]["last_replaced_mileage"] == 15000
 
 
 # ---------- Доступ к замене: как изменение авто (ADR 0014 п. 4) ----------

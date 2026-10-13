@@ -1,15 +1,14 @@
-// Карточка агрегата (боттом-шит): статус, ресурс, последняя замена, история ТО, запись на замену.
-// «Нет данных» — явный статус, а не ошибка (глава 5, сценарий unknown без истории).
+// Карточка агрегата (боттом-шит): статус, ресурс, последняя замена, история агрегата, запись на замену.
+// «Нет данных» — явный статус, а не ошибка (глава 5, сценарий unknown без истории). История агрегата — его замены
+// и работы по нему (осмотр, долив) с меткой вида записи (глава 19, ADR 0023 п. 2).
 import 'package:flutter/material.dart';
 
-import '../../app/app_state.dart';
 import '../../data/models.dart';
-import '../../data/repository.dart';
 import '../../theme/app_theme.dart';
 import '../../ui/status_badge.dart';
 import '../../ui/fact_row.dart';
 import '../../ui/format.dart';
-import '../../ui/states.dart';
+import 'maintenance_history.dart';
 import '../support/ticket_create_screen.dart';
 
 Future<void> showAggregateSheet(BuildContext context,
@@ -112,9 +111,16 @@ class AggregateSheet extends StatelessWidget {
                 label: const Text('Записаться на ТО'),
               ),
         const SizedBox(height: EvSpace.s6),
-        Text('История замен', style: text.titleMedium),
+        Text('История агрегата', style: text.titleMedium),
         const SizedBox(height: EvSpace.s2),
-        _History(vehicleId: vehicle.id, code: s.aggregateTypeCode),
+        MaintenanceHistory(
+          vehicleId: vehicle.id,
+          aggregateTypeCode: s.aggregateTypeCode,
+          empty: Padding(
+            padding: const EdgeInsets.symmetric(vertical: EvSpace.s2),
+            child: Text('Замен и работ пока не было', style: TextStyle(color: c.fgMuted)),
+          ),
+        ),
       ],
     );
   }
@@ -127,37 +133,5 @@ class AggregateSheet extends StatelessWidget {
         s.remainingDays! >= 0 ? formatDays(s.remainingDays!) : 'просрочено на ${formatDays(s.remainingDays!)}',
     ];
     return parts.isEmpty ? '—' : parts.join(' или ');
-  }
-}
-
-class _History extends StatelessWidget {
-  const _History({required this.vehicleId, required this.code});
-
-  final int vehicleId;
-  final String code;
-
-  @override
-  Widget build(BuildContext context) {
-    final app = AppScope.of(context);
-    return AsyncView<List<MaintenanceRecord>>(
-      load: () async =>
-          (await app.repository.maintenanceRecords(vehicleId)).where((r) => r.aggregateTypeCode == code).toList(),
-      isEmpty: (items) => items.isEmpty,
-      empty: Padding(
-        padding: const EdgeInsets.symmetric(vertical: EvSpace.s2),
-        child: Text('Замен пока не было', style: TextStyle(color: context.evColors.fgMuted)),
-      ),
-      builder: (context, items, _) => Column(
-        children: [
-          for (final r in items)
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              leading: const Icon(Icons.build_circle_outlined),
-              title: Text(formatDate(r.performedAt)),
-              subtitle: Text([formatKm(r.mileageAtService), if (r.description != null) r.description!].join(' · ')),
-            ),
-        ],
-      ),
-    );
   }
 }

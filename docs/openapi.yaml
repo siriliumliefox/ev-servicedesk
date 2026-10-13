@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: EV-ServiceDesk API
-  version: "1.8.0"
+  version: "1.9.0"
   description: >
     API дипломного проекта «EV-ServiceDesk» (ООО «ЕТСавтоГомель»).
     Контракты сервисов: Auth, Vehicle, Aggregates & Maintenance, Tickets,
@@ -495,12 +495,20 @@ paths:
       tags: [Vehicle]
       summary: История выполненных работ
       operationId: listMaintenanceRecords
-      description: Постраничная история работ по автомобилю.
+      description: >
+        Постраничная история работ по автомобилю, новые сверху. Фильтр aggregate_type_code —
+        история агрегата (замены и работы по нему, у записи kind); неизвестный код — пустой
+        список, не ошибка. Добавлено в 1.9.0 (глава 19, ADR 0023).
       x-required-roles: [client, engineer, admin]
       x-rbac-action: ["Просмотр авто (карточка)"]
       parameters:
         - $ref: '#/components/parameters/PageParam'
         - $ref: '#/components/parameters/PageSizeParam'
+        - name: aggregate_type_code
+          in: query
+          required: false
+          description: Только записи по агрегату с этим кодом (справочник AggregateType)
+          schema: { type: string, maxLength: 50 }
       responses:
         default: { $ref: '#/components/responses/ServerError' }
         '200':
@@ -2240,7 +2248,7 @@ components:
     # бизнес-ключ справочника AggregateType, а не на внутренний surrogate id (Глава 2).
     MaintenanceRecord:
       type: object
-      required: [id, performed_at, mileage_at_service]
+      required: [id, performed_at, mileage_at_service, kind]
       properties:
         id: { type: integer }
         aggregate_type_code: { type: string, nullable: true }
@@ -2248,6 +2256,13 @@ components:
         performed_at: { type: string, format: date }
         mileage_at_service: { type: integer }
         description: { type: string, nullable: true }
+        kind:
+          type: string
+          enum: [replacement, work]
+          description: >
+            replacement — замена агрегата (replaceAggregateStatus), сбросила выработку;
+            work — работа (createMaintenanceRecord: осмотр, долив, работа без агрегата),
+            выработку не меняет. Записи до 1.9.0 — work. Добавлено в 1.9.0 (глава 19, ADR 0023).
 
     MaintenanceRecordCreateRequest:
       type: object

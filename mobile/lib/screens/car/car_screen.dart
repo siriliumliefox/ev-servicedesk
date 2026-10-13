@@ -70,24 +70,27 @@ class CarScreen extends StatelessWidget {
               statuses: statuses,
               onTap: (s) => showAggregateSheet(context, vehicle: vehicle, status: s),
             ),
-            const SizedBox(height: EvSpace.s6),
-            Text('Агрегаты', style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: EvSpace.s2),
-            Card(
-              child: Column(
-                children: [
-                  for (final (i, s) in _byUrgency(statuses).indexed) ...[
-                    if (i > 0) const Divider(height: 1),
-                    ListTile(
-                      key: Key('row-${s.aggregateTypeCode}'),
-                      title: Text(s.aggregateTypeName),
-                      trailing: StatusBadge(status: s.status),
-                      onTap: () => showAggregateSheet(context, vehicle: vehicle, status: s),
-                    ),
+            // Список дублирует схему и показывает агрегаты без места на ней; без регламента — нечего показывать.
+            if (statuses.isNotEmpty) ...[
+              const SizedBox(height: EvSpace.s6),
+              Text('Агрегаты', style: Theme.of(context).textTheme.titleMedium),
+              const SizedBox(height: EvSpace.s2),
+              Card(
+                child: Column(
+                  children: [
+                    for (final (i, s) in _byUrgency(statuses).indexed) ...[
+                      if (i > 0) const Divider(height: 1),
+                      ListTile(
+                        key: Key('row-${s.aggregateTypeCode}'),
+                        title: Text(s.aggregateTypeName),
+                        trailing: StatusBadge(status: s.status),
+                        onTap: () => showAggregateSheet(context, vehicle: vehicle, status: s),
+                      ),
+                    ],
                   ],
-                ],
+                ),
               ),
-            ),
+            ],
           ],
         ),
       ),
@@ -103,15 +106,15 @@ class CarScreen extends StatelessWidget {
 
 /// Сводка над схемой (U-01): «Нет данных» — не норма. Нет данных ни по одному агрегату (новое авто без истории ТО) —
 /// отдельная подсказка; по части — счётчик рядом с остальными; «Все агрегаты в норме» — только если все «Заменено».
-/// Пустой список (у модели нет агрегатов в регламенте) — тоже «нет данных», а не «в норме».
+/// Пустой список — у модели нет регламента ТО: это не ошибка и не «в норме» (ADR 0023 п. 3).
 (String headline, String? hint) aggregateSummary(List<AggregateStatusItem> statuses) {
+  if (statuses.isEmpty) {
+    return ('Регламент ТО для модели ещё не задан', 'Статусы агрегатов появятся, когда сервис заведёт регламент');
+  }
   int count(AggregateStatus status) => statuses.where((s) => s.status == status).length;
   final unknown = count(AggregateStatus.unknown);
   if (unknown == statuses.length) {
-    return (
-      statuses.isEmpty ? 'Нет данных о замене' : 'Нет данных о замене: $unknown',
-      'Статусы появятся после ТО в сервисе',
-    );
+    return ('Нет данных о замене: $unknown', 'Статусы появятся после ТО в сервисе');
   }
   final red = count(AggregateStatus.red);
   final yellow = count(AggregateStatus.yellow);

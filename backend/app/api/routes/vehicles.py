@@ -119,9 +119,14 @@ def correct_vehicle_mileage(
     **rbac(*ALL_ROLES),
 )
 def list_maintenance_records(
-    vehicle_id: VehicleId, user: CurrentUser, db: DbDep, page: PageDep
+    vehicle_id: VehicleId,
+    user: CurrentUser,
+    db: DbDep,
+    page: PageDep,
+    aggregate_type_code: Annotated[str | None, Query(max_length=50)] = None,
 ) -> MaintenanceRecordList:
-    items, meta = paginate(db, service.list_maintenance_stmt(db, user, vehicle_id), page)
+    stmt = service.list_maintenance_stmt(db, user, vehicle_id, aggregate_type_code)
+    items, meta = paginate(db, stmt, page)
     return MaintenanceRecordList(items=items, meta=meta)
 
 

@@ -37,6 +37,7 @@ from app.models import (
     VehicleAggregateStatus,
     VehicleModel,
 )
+from app.models.enums import MaintenanceRecordKind
 
 REGULATION_OUT = (selectinload(MaintenanceRegulation.aggregate_type),)
 THRESHOLDS_ID = 1  # одна строка, seed — миграция 0005 (ADR 0009)
@@ -334,6 +335,7 @@ def replace_aggregate(
             performed_at=replaced_at,
             mileage_at_service=mileage_at_replacement,
             description=description,
+            kind=MaintenanceRecordKind.REPLACEMENT,
         )
     )
     row = db.scalars(

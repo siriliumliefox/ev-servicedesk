@@ -269,7 +269,7 @@ export interface paths {
         };
         /**
          * История выполненных работ
-         * @description Постраничная история работ по автомобилю.
+         * @description Постраничная история работ по автомобилю, новые сверху. Фильтр aggregate_type_code — история агрегата (замены и работы по нему, у записи kind); неизвестный код — пустой список, не ошибка. Добавлено в 1.9.0 (глава 19, ADR 0023).
          */
         get: operations["listMaintenanceRecords"];
         put?: never;
@@ -1204,6 +1204,11 @@ export interface components {
             performed_at: string;
             mileage_at_service: number;
             description?: string | null;
+            /**
+             * @description replacement — замена агрегата (replaceAggregateStatus), сбросила выработку; work — работа (createMaintenanceRecord: осмотр, долив, работа без агрегата), выработку не меняет. Записи до 1.9.0 — work. Добавлено в 1.9.0 (глава 19, ADR 0023).
+             * @enum {string}
+             */
+            kind: "replacement" | "work";
         };
         MaintenanceRecordCreateRequest: {
             /** @description Код агрегата (справочник AggregateType), либо null для общей работы */
@@ -2189,6 +2194,8 @@ export interface operations {
             query?: {
                 page?: components["parameters"]["PageParam"];
                 page_size?: components["parameters"]["PageSizeParam"];
+                /** @description Только записи по агрегату с этим кодом (справочник AggregateType) */
+                aggregate_type_code?: string;
             };
             header?: never;
             path: {
