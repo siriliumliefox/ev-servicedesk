@@ -86,8 +86,11 @@ class _Channel implements PushChannel {
 
   @override
   Future<String> permission() async => 'authorized';
+  /// iOS без APNs: FCM-токен получить нельзя.
+  bool noToken = false;
+
   @override
-  Future<String?> token() async => 'fcm-token';
+  Future<String?> token() async => noToken ? throw Exception('APNS token has not been set') : 'fcm-token';
   @override
   Stream<String> get tokenRefresh => refresh$.stream;
   @override
@@ -303,6 +306,18 @@ void main() {
       expect(find.text('Уведомления'), findsOneWidget);
       expect(find.byKey(const Key('notification-title')), findsOneWidget, reason: 'уведомление открыто сразу');
       expect(repo.opened, [1]);
+    });
+
+    testWidgets('без FCM-токена (iOS без APNs) нажатие на push всё равно открывает уведомление', (tester) async {
+      final repo = _Repo();
+      final channel = _Channel()..noToken = true;
+      await _pump(tester, repo, channel: channel);
+      expect(repo.pushTokens, isEmpty);
+      channel.opened$.add(_push({'notification_id': '2', 'type': 'maintenance'}));
+      await tester.pumpAndSettle();
+      expect(find.text('Уведомления'), findsOneWidget);
+      expect(find.byKey(const Key('notification-title')), findsOneWidget);
+      expect(repo.opened, isEmpty, reason: 'отметить открытие без токена нельзя');
     });
 
     testWidgets('нажатие на push по тикету открывает чат; по открытому чату баннера нет', (tester) async {

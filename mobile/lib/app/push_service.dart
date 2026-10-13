@@ -59,10 +59,11 @@ class PushService {
   }
 
   /// Клиент открыл push публикации или напоминания: журнал открываемости (и прочитано).
+  /// Без токена (iOS без APNs) открытие не отмечается, но уведомление всё равно открывается.
   Future<void> markOpened(int notificationId) async {
-    final token = _token ?? await channel.token();
-    if (token == null) return;
     try {
+      final token = _token ?? await channel.token();
+      if (token == null) return;
       await repository.markNotificationOpened(notificationId, token);
     } on Object catch (e) {
       debugPrint('push: открытие не отмечено: $e');

@@ -91,10 +91,12 @@ def seed(api: Api, admin: Headers, table: dict[str, Any]) -> None:
 
 
 def publish(api: Api, admin: Headers, table: dict[str, Any]) -> None:
+    created = []
     for item in table["publications"]:
         body = {"type": item["type"], "message": item["message"], "target_vehicle_model_id": None}
-        api.json("POST", "/notifications", 201, headers=admin, json=body)
-    print(f"PASS  опубликовано: {', '.join(p['type'] for p in table['publications'])}")
+        notification = api.json("POST", "/notifications", 201, headers=admin, json=body)
+        created.append(f"{item['type']} №{notification['id']}")
+    print(f"PASS  опубликовано: {', '.join(created)}")
 
 
 def reply(api: Api, admin: Headers, ticket_id: int, text: str, status: str | None) -> None:
