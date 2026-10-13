@@ -39,3 +39,18 @@ String formatPhone(String e164) {
   if (m == null) return e164;
   return '+375 ${m[1]} ${m[2]}-${m[3]}-${m[4]}';
 }
+
+/// 9 цифр абонента Беларуси из ввода в любом виде: «+375 29 123-45-67», «375291234567», «80291234567».
+/// Коды операторов и городов не начинаются с 375 и 80 — в номере длиннее 9 цифр это код страны или выход на
+/// междугороднюю связь, а не начало номера.
+String belarusSubscriberDigits(String input) {
+  var digits = input.replaceAll(RegExp(r'\D'), '');
+  if (digits.length > 9) {
+    if (digits.startsWith('375')) {
+      digits = digits.substring(3);
+    } else if (digits.startsWith('80')) {
+      digits = digits.substring(2);
+    }
+  }
+  return digits.length > 9 ? digits.substring(0, 9) : digits;
+}
