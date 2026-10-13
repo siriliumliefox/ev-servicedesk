@@ -71,7 +71,16 @@ test('конкурентный доступ: два инженера берут 
     await card(column(page, 'Новые'), first.id).click()
     await expect(page.getByRole('button', { name: 'Взять в работу' })).toBeVisible()
   }
-  await Promise.all([a, b].map((page) => page.getByRole('button', { name: 'Взять в работу' }).click()))
+  // Клики почти одновременны, но не строго: если первый claim и закрытие WebSocket 4403 дошли до второго
+  // инженера раньше его клика, кнопка у него уже исчезла (плашка «уже взял другой инженер») — это тоже исход гонки.
+  await Promise.all(
+    [a, b].map((page) =>
+      page
+        .getByRole('button', { name: 'Взять в работу' })
+        .click({ timeout: 5000 })
+        .catch(() => undefined),
+    ),
+  )
   const outcome = async (page: typeof a) => {
     const panel = page.getByRole('complementary', { name: `Карточка тикета #${first.id}` })
     const lost = panel.getByText('Тикет уже взял в работу другой инженер.')
