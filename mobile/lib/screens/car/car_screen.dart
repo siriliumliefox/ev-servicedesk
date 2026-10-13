@@ -44,16 +44,21 @@ class CarScreen extends StatelessWidget {
 
   Widget _body(BuildContext context, AppState app, Vehicle? vehicle) {
     if (app.loadingVehicles && app.vehicles.isEmpty) return const Center(child: CircularProgressIndicator());
-    if (app.vehiclesError != null) return ErrorState(error: app.vehiclesError!, onRetry: app.refresh);
+    if (app.vehiclesError != null) {
+      return RefreshIndicator(onRefresh: app.refresh, child: ErrorState(error: app.vehiclesError!, onRetry: app.refresh));
+    }
     if (vehicle == null) {
-      return EmptyState(
-        icon: Icons.directions_car_outlined,
-        title: 'Добавьте автомобиль',
-        message: 'Привяжите авто по VIN — покажем статус агрегатов, историю ТО и инструкции для вашей модели',
-        action: FilledButton.icon(
-          onPressed: () => openAddVehicle(context),
-          icon: const Icon(Icons.add),
-          label: const Text('Добавить авто'),
+      return RefreshIndicator(
+        onRefresh: app.refresh,
+        child: EmptyState(
+          icon: Icons.directions_car_outlined,
+          title: 'Добавьте автомобиль',
+          message: 'Привяжите авто по VIN — покажем статус агрегатов, историю ТО и инструкции для вашей модели',
+          action: FilledButton.icon(
+            onPressed: () => openAddVehicle(context),
+            icon: const Icon(Icons.add),
+            label: const Text('Добавить авто'),
+          ),
         ),
       );
     }

@@ -6,6 +6,7 @@ import '../../app/app_state.dart';
 import '../../data/repository.dart';
 import '../../theme/app_theme.dart';
 import '../../ui/demo_panel.dart';
+import '../../ui/format.dart';
 import '../../ui/states.dart';
 import 'code_screen.dart';
 
@@ -37,10 +38,12 @@ class _PhoneScreenState extends State<PhoneScreen> {
     super.dispose();
   }
 
-  /// Беларусь: +375 и 9 цифр (код оператора + номер).
+  /// Беларусь: +375 и 9 цифр (код оператора + номер). «375…» и «80…» из 9 цифр — номер, набранный с кодом и
+  /// не дописанный до конца: такого кода оператора нет.
   String? get _phone {
-    final digits = _controller.text.replaceAll(RegExp(r'\D'), '');
-    return digits.length == 9 ? '+375$digits' : null;
+    final digits = belarusSubscriberDigits(_controller.text);
+    final complete = digits.length == 9 && !digits.startsWith('375') && !digits.startsWith('80');
+    return complete ? '+375$digits' : null;
   }
 
   Future<void> _submit() async {
@@ -105,7 +108,8 @@ class _PhoneScreenState extends State<PhoneScreen> {
               controller: _controller,
               keyboardType: TextInputType.phone,
               autofillHints: const [AutofillHints.telephoneNumberNational],
-              inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(9)],
+              // Номер с кодом страны (вставка, автозаполнение) не обрезается до чужого «+375 37 5…» (M1).
+              inputFormatters: [_SubscriberDigitsFormatter()],
               onSubmitted: (_) => _submit(),
               decoration: InputDecoration(
                 labelText: 'Номер телефона',
@@ -127,5 +131,15 @@ class _PhoneScreenState extends State<PhoneScreen> {
         ),
       ),
     );
+  }
+}
+
+/// В поле — только 9 цифр абонента: «+», «375» или «80» в начале, пробелы, скобки и дефисы убираются.
+class _SubscriberDigitsFormatter extends TextInputFormatter {
+  @override
+  TextEditingValue formatEditUpdate(TextEditingValue oldValue, TextEditingValue newValue) {
+    final digits = belarusSubscriberDigits(newValue.text);
+    if (digits == newValue.text) return newValue;
+    return TextEditingValue(text: digits, selection: TextSelection.collapsed(offset: digits.length));
   }
 }
