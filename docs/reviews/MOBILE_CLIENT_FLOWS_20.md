@@ -15,10 +15,10 @@ Issue #83, ADR 0024. Дата: 2026-10-13.
 | Проверка | Статус | Результат |
 |---|---|---|
 | `flutter analyze`, `flutter test` | PASS | без замечаний; 120 тестов: `ticket_live_test` (auth, догрузка после `ready` по курсору REST, 4401/4403, обрыв, фон), `http_repository_test` (presign → PUT, вложения в запросах, `after_id`, push-токены), `client_flows_test` (вложения, чат, push, центр уведомлений, Markdown) |
-| E2E на стеке: дерево решений → эскалация → тикет → ответ инженера в чате | PASS (локально) | стек из образа-кандидата: сценарий backend, seed схемы и статей, 3 теста `test_api_e2e` — PASS, логи без секретов; `test_api_e2e` (CI `mobile-e2e`): статьи `docs/specs/support_flow.json`, тикет с фото в MinIO стека (фото скачивается по ссылке из ответа), ответ инженера и «решено» — по WebSocket, новость и акция в ленте |
-| UI E2E в симуляторе | NOT RUN | `mobile/scripts/e2e_ui.sh` → `support_flow_test`: «Обучение» → дерево → эскалация → фото → чат → ответ инженера (`e2e_support.py answer` на Mac) → новость в центре уведомлений |
+| E2E на стеке: дерево решений → эскалация → тикет → ответ инженера в чате | PASS | `test_api_e2e` на стеке из образа-кандидата — локально и в CI (`mobile-e2e / api-e2e`): статьи `docs/specs/support_flow.json`, тикет с фото в MinIO стека (фото скачивается по ссылке из ответа), ответ инженера и «решено» — по WebSocket, переписка без потерь и повторов, новость и акция в ленте |
+| UI E2E в симуляторе: iPhone 17e (390×844 pt) и iPhone 18 Pro (402×874 pt), iOS 27 | PASS | `mobile/scripts/e2e_ui.sh`: `app_flow_test`, `scheme_test` и `support_flow_test` — «Обучение» (Markdown) → дерево → эскалация → фото загружено → чат → ответ инженера пришёл по WebSocket, статус «В работе» → новость в центре уведомлений; 3/3 на обоих симуляторах, логи стека без секретов |
 | Push в свёрнутом и закрытом приложении (Android-эмулятор, настоящий FCM) | BLOCKED | нужен проект Firebase владельца (`scripts/firebase_dev_setup.sh`); сценарии — ниже |
-| Push на iOS: обработка нажатия (`simctl push`) | NOT RUN | |
+| Push на iOS: обработка нажатия (`simctl push`) | BLOCKED | нужна iOS-конфигурация Firebase (`GoogleService-Info.plist` в `scripts/firebase_dev_setup.sh`, без APNs) |
 | Полный клиентский сценарий 3 раза подряд (владелец, ADR 0024 п. 3) | NOT RUN | чек-лист — ниже |
 
 ## Чек-лист прогона на iPhone (владелец, 3 раза подряд в разных сессиях)
