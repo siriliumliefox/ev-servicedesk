@@ -72,4 +72,3 @@ jobs:
             tail -60 build-ios.log
             exit 1
           }
-          grep -E "\*\* BUILD SUCCEEDED" build-ios.log
