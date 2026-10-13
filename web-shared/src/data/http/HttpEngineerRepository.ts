@@ -1,62 +1,29 @@
 // Кабинет инженера на реальном API (глава 21, ADR 0025 п. 6): операции `EngineerRepository` через
 // `ApiSession` (Bearer, refresh, тексты ошибок по коду), события тикета — `openTicketLive`.
-// Справочники и история сообщений выгружаются всеми страницами (page_size — максимум контракта, 100).
-import type {
-  AggregateType,
-  KnowledgeArticleList,
-  MaintenanceRecordList,
-  TicketDetail,
-  TicketList,
-  TicketMessage,
-  TicketStatus,
-  UserPublic,
-  VehicleModel,
-} from "../models.ts";
+// Общие операции — `HttpCommonRepository`; история сообщений выгружается всеми страницами.
+import type { MaintenanceRecordList, TicketDetail, TicketList, TicketMessage, TicketStatus } from "../models.ts";
 import type {
   EngineerRepository,
-  ListArticlesQuery,
   ListTicketsQuery,
   PageQuery,
   TicketLiveHandlers,
 } from "../repository.ts";
 import { fetchAllPages } from "../paging.ts";
+import { HttpCommonRepository, PAGE_SIZE } from "./HttpCommonRepository.ts";
 import type { ApiSession } from "./session.ts";
 import { openTicketLive, webSocketUrl, type TicketLiveOptions } from "./ticketLive.ts";
-
-const PAGE_SIZE = 100;
 
 export interface HttpRepositoryOptions {
   /** Подмена WebSocket и видимости вкладки — в тестах. */
   live?: Pick<TicketLiveOptions, "WebSocketImpl" | "visibility" | "random">;
 }
 
-export class HttpEngineerRepository implements EngineerRepository {
-  private readonly session: ApiSession;
+export class HttpEngineerRepository extends HttpCommonRepository implements EngineerRepository {
   private readonly options: HttpRepositoryOptions;
 
   constructor(session: ApiSession, options: HttpRepositoryOptions = {}) {
-    this.session = session;
+    super(session);
     this.options = options;
-  }
-
-  getCurrentUser(): Promise<UserPublic> {
-    return this.session.request((c) => c.GET("/me"));
-  }
-
-  async searchVehicleModels(): Promise<VehicleModel[]> {
-    return fetchAllPages((page) =>
-      this.session.request((c) => c.GET("/vehicle-models", { params: { query: { page, page_size: PAGE_SIZE } } })),
-    );
-  }
-
-  async listAggregateTypes(): Promise<AggregateType[]> {
-    return fetchAllPages((page) =>
-      this.session.request((c) => c.GET("/aggregate-types", { params: { query: { page, page_size: PAGE_SIZE } } })),
-    );
-  }
-
-  listKnowledgeArticles(query: ListArticlesQuery = {}): Promise<KnowledgeArticleList> {
-    return this.session.request((c) => c.GET("/knowledge-articles", { params: { query } }));
   }
 
   listTickets(query: ListTicketsQuery = {}): Promise<TicketList> {

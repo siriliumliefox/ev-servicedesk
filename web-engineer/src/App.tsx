@@ -7,12 +7,12 @@ import {
   DemoPanel,
   ErrorState,
   LoadingState,
+  ThemeSelect,
   useAsync,
   useHashRoute,
   useTheme,
   type EngineerRepository,
   type PrototypeRepository,
-  type ThemePreference,
 } from '@ev-servicedesk/web-shared'
 import { Board } from './board/Board.tsx'
 import { EngineerContext, type EngineerEnv } from './repo.ts'
@@ -20,8 +20,6 @@ import { TicketPanel } from './ticket/TicketPanel.tsx'
 import { NoticeProvider } from './ui/Notices.tsx'
 
 const systemNow = () => new Date()
-
-const THEME_LABELS: Record<ThemePreference, string> = { system: 'Как в системе', light: 'Светлая', dark: 'Тёмная' }
 
 export default function App({
   repo,
@@ -85,20 +83,7 @@ export default function App({
               </span>
             )}
             {demo && <DemoPanel repo={demo} theme={theme} onToggleTheme={toggle} onChange={bump} />}
-            <label className="flex items-center gap-2 text-body-sm text-fg-muted">
-              Тема
-              <select
-                value={preference}
-                onChange={(e) => setPreference(e.target.value as ThemePreference)}
-                className="h-(--size-control-web-sm) rounded-md border border-border-strong bg-surface px-2 text-body-sm text-fg"
-              >
-                {(Object.keys(THEME_LABELS) as ThemePreference[]).map((p) => (
-                  <option key={p} value={p}>
-                    {THEME_LABELS[p]}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <ThemeSelect value={preference} onChange={setPreference} />
             {onLogout && (
               <Button variant="secondary" size="sm" onClick={onLogout}>
                 Выйти

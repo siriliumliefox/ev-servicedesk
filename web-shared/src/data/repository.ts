@@ -1,6 +1,7 @@
 // Доступ к данным веб-клиентов (Глава 8, ADR 0012). Методы — операции OpenAPI v1 (имя = operationId),
 // роли — `x-required-roles`. Прототип: `PrototypeRepository` (фикстуры в памяти); HTTP —
-// `HttpEngineerRepository` (глава 21, ADR 0025 п. 6), экраны от реализации не зависят.
+// `HttpEngineerRepository` (глава 21, ADR 0025 п. 6) и `HttpAdminRepository` (глава 22, ADR 0026 п. 2),
+// экраны от реализации не зависят.
 import type {
   AggregateStatusThresholds,
   AggregateStatusThresholdsUpdateRequest,
@@ -16,14 +17,20 @@ import type {
   KnowledgeArticle,
   KnowledgeArticleCreateRequest,
   KnowledgeArticleList,
+  KnowledgeArticleRevision,
+  KnowledgeArticleRevisionSummary,
   KnowledgeArticleUpdateRequest,
   MaintenanceConversionStats,
   MaintenanceRecordList,
   MaintenanceRegulation,
   MaintenanceRegulationCreateRequest,
   Notification,
+  NotificationAudiencePreview,
   NotificationCreateRequest,
   ProblemModelStats,
+  PublicationType,
+  PublishedNotificationList,
+  StaffUserCreateRequest,
   TicketCategory,
   Ticket,
   TicketDetail,
@@ -31,7 +38,10 @@ import type {
   TicketMessage,
   TicketResolutionStats,
   TicketStatus,
+  UserList,
   UserPublic,
+  UserRole,
+  UserUpdateRequest,
   VehicleModel,
 } from "./models.ts";
 
@@ -87,9 +97,11 @@ export interface TicketLiveHandlers {
   onState?(state: TicketLiveState): void;
 }
 
-export interface ListArticlesQuery {
+export interface ListArticlesQuery extends PageQuery {
   vehicle_model_id?: number;
   article_type?: ArticleType;
+  /** Только персонал (admin видит и черновики). */
+  is_published?: boolean;
   search?: string;
 }
 
@@ -116,9 +128,28 @@ export interface EngineerRepository extends CommonRepository {
   watchTicket(ticketId: number, handlers: TicketLiveHandlers): () => void;
 }
 
-/** Администрирование, база знаний и аналитика (ТЗ 4.4). */
+export interface ListUsersQuery extends PageQuery {
+  role?: UserRole;
+  is_active?: boolean;
+  /** Подстрока телефона (до 16 символов). */
+  search?: string;
+}
+
+export interface ListPublishedQuery extends PageQuery {
+  type?: PublicationType;
+  target_vehicle_model_id?: number;
+}
+
+/** Фильтры дашборда: период и то, что поддерживает операция (ADR 0026 п. 11). */
+export interface AnalyticsQuery extends DateRange {
+  vehicle_model_id?: number;
+  category?: TicketCategory;
+}
+
+/** Администрирование, база знаний, пользователи и аналитика (ТЗ 4.4; глава 22, ADR 0026). */
 export interface AdminRepository extends CommonRepository {
   createAggregateType(body: AggregateTypeCreateRequest): Promise<AggregateType>;
+  /** Все страницы. */
   listMaintenanceRegulations(query: { vehicle_model_id?: number; include_archived?: boolean }): Promise<MaintenanceRegulation[]>;
   reviseMaintenanceRegulation(body: MaintenanceRegulationCreateRequest): Promise<MaintenanceRegulation>;
   archiveMaintenanceRegulation(regulationId: number): Promise<void>;
@@ -129,6 +160,9 @@ export interface AdminRepository extends CommonRepository {
   createKnowledgeArticle(body: KnowledgeArticleCreateRequest): Promise<KnowledgeArticle>;
   updateKnowledgeArticle(articleId: number, body: KnowledgeArticleUpdateRequest): Promise<KnowledgeArticle>;
   unpublishKnowledgeArticle(articleId: number): Promise<void>;
+  /** История опубликованных версий (все страницы), новые — первыми. */
+  listKnowledgeArticleRevisions(articleId: number): Promise<KnowledgeArticleRevisionSummary[]>;
+  getKnowledgeArticleRevision(articleId: number, version: number): Promise<KnowledgeArticleRevision>;
   listDecisionTreeNodes(articleId: number): Promise<DecisionTreeNode[]>;
   createDecisionTreeNode(articleId: number, body: DecisionTreeNodeCreateRequest): Promise<DecisionTreeNode>;
   updateDecisionTreeNode(nodeId: number, body: DecisionTreeNodeCreateRequest): Promise<DecisionTreeNode>;
@@ -136,15 +170,26 @@ export interface AdminRepository extends CommonRepository {
   validateDecisionTree(articleId: number): Promise<DecisionTreeValidationResult>;
 
   createNotification(body: NotificationCreateRequest): Promise<Notification>;
-  /**
-   * Лента опубликованного для админа. В контракте v1 операции НЕТ (`GET /notifications` — только client):
-   * открытый вопрос ADR 0012, решение — глава 15. Прототип отдаёт фикстуры и опубликованное в сессии.
-   */
-  listPublishedNotifications(): Promise<Notification[]>;
+  /** Сколько клиентов и устройств получат публикацию — ничего не записывает (U-45). */
+  previewNotificationAudience(body: NotificationCreateRequest): Promise<NotificationAudiencePreview>;
+  /** Лента опубликованного со статистикой доставки — одна страница, новые первыми. */
+  listPublishedNotifications(query?: ListPublishedQuery): Promise<PublishedNotificationList>;
+  /** Все страницы. */
   listFirmwareReleases(query?: { vehicle_model_id?: number }): Promise<FirmwareRelease[]>;
   createFirmwareRelease(body: FirmwareReleaseCreateRequest): Promise<FirmwareRelease>;
 
-  getTicketResolutionStats(range: DateRange): Promise<TicketResolutionStats>;
+  listUsers(query?: ListUsersQuery): Promise<UserList>;
+  getUser(userId: number): Promise<UserPublic>;
+  createStaffUser(body: StaffUserCreateRequest): Promise<UserPublic>;
+  updateUser(userId: number, body: UserUpdateRequest): Promise<UserPublic>;
+  resetUserPassword(userId: number, password: string): Promise<void>;
+  /** Тикеты инженера в карточке пользователя — переназначение (ADR 0026 п. 7). */
+  listTickets(query?: ListTicketsQuery): Promise<TicketList>;
+  /** null — вернуть тикет в очередь. */
+  assignTicket(ticketId: number, engineerId: number | null): Promise<TicketDetail>;
+
+  getTicketResolutionStats(query: AnalyticsQuery): Promise<TicketResolutionStats>;
+  /** Все страницы рейтинга. */
   listProblemModels(range: DateRange): Promise<ProblemModelStats[]>;
-  getMaintenanceConversionStats(range: DateRange): Promise<MaintenanceConversionStats>;
+  getMaintenanceConversionStats(query: Omit<AnalyticsQuery, "category">): Promise<MaintenanceConversionStats>;
 }
