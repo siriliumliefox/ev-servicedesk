@@ -40,7 +40,7 @@ export function Attachments({ items, onExpired }: { items: Attachment[] | undefi
           role="dialog"
           aria-modal="true"
           aria-label="Фото во весь экран"
-          className="fixed inset-0 z-50 grid place-items-center bg-black/80 p-8"
+          className="fixed inset-0 z-50 grid place-items-center bg-[rgb(0_0_0/0.8)] p-8"
           onClick={() => setOpened(null)}
           onKeyDown={(e) => {
             // Esc закрывает только фото, а не карточку тикета (слушатель Esc у окна в App).

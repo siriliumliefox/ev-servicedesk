@@ -6,6 +6,7 @@ import { useEffect, useState, type ReactNode } from 'react'
 import { DndContext, DragOverlay, PointerSensor, pointerWithin, useDroppable, useSensor, useSensors } from '@dnd-kit/core'
 import {
   Chip,
+  ConfirmDialog,
   EmptyState,
   ErrorState,
   LoadingState,
@@ -25,7 +26,6 @@ import {
   type TicketStatus,
 } from '@ev-servicedesk/web-shared'
 import { useEngineer } from '../repo.ts'
-import { ConfirmDialog } from '../ui/ConfirmDialog.tsx'
 import { useNotify } from '../ui/notify.ts'
 import { CardOverlay, TicketCard } from './TicketCard.tsx'
 import { MAX_PAGES, PAGE_SIZE, useBoardData, type Column } from './boardData.ts'

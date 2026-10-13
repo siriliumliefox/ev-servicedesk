@@ -1,13 +1,15 @@
 // Репозиторий админ-панели — через контекст: экраны зависят от интерфейса AdminRepository, а не от
-// прототипа (ADR 0012). Глава 22 подставит HTTP-реализацию.
+// реализации — прототип (ADR 0012) или реальный API (`HttpAdminRepository`, ADR 0026 п. 2).
 import { createContext, useContext } from 'react'
-import type { AdminRepository, VehicleModel } from '@ev-servicedesk/web-shared'
+import type { AdminRepository, UserPublic, VehicleModel } from '@ev-servicedesk/web-shared'
 
 export interface AdminEnv {
   repo: AdminRepository
   now: () => Date
   /** Справочник моделей (`searchVehicleModels`) — нужен почти на каждом экране. */
   models: VehicleModel[]
+  /** Кто вошёл: свою учётную запись нельзя понизить или заблокировать из UI (ADR 0026 п. 6). */
+  me: UserPublic
 }
 
 export const AdminContext = createContext<AdminEnv | null>(null)

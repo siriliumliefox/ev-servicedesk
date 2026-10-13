@@ -1,5 +1,5 @@
 // Подписи перечислений контракта для интерфейса (одинаковые в кабинете инженера и админ-панели).
-import type { ArticleType, NotificationType, TicketCategory, TicketStatus } from "./models.ts";
+import type { ArticleType, NotificationType, TicketCategory, TicketStatus, UserRole } from "./models.ts";
 
 export const TICKET_STATUS_LABELS: Record<TicketStatus, string> = {
   new: "Новые",
@@ -26,4 +26,10 @@ export const NOTIFICATION_TYPE_LABELS: Record<NotificationType, string> = {
   promo: "Акция",
   maintenance: "Регламент ТО",
   firmware: "Прошивка",
+};
+
+export const USER_ROLE_LABELS: Record<UserRole, string> = {
+  client: "Клиент",
+  engineer: "Инженер",
+  admin: "Администратор",
 };

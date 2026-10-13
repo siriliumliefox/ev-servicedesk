@@ -1,6 +1,7 @@
 // Конструктор регламентов ТО (ТЗ 4.4, 5): интервалы замены агрегатов по моделям, справочник агрегатов,
-// пороги «светофора» (глава 5). Изменение интервала — пересмотр (reviseMaintenanceRegulation): прошлая
-// версия архивируется, а не перезаписывается.
+// пороги «светофора» (глава 5). Изменение интервала — пересмотр (глоссарий «Пересмотр регламента ТО»):
+// прошлая версия архивируется, а не перезаписывается; статусы клиентов сразу считаются по новой.
+// Модели — справочник (миграция), новые добавляет разработчик (ADR 0026 п. 8).
 import { useState, type FormEvent } from 'react'
 import {
   Badge,
@@ -34,6 +35,15 @@ function intervals(r: MaintenanceRegulation): string {
   ]
     .filter(Boolean)
     .join(', ')
+}
+
+/** Номер версии регламента агрегата: по порядку создания, первая — 1 (U-44: вместо «версия #id»). */
+function versionNumbers(regulations: MaintenanceRegulation[]): Map<number, number> {
+  const numbers = new Map<number, number>()
+  const byType = new Map<string, MaintenanceRegulation[]>()
+  for (const r of regulations) byType.set(r.aggregate_type_code, [...(byType.get(r.aggregate_type_code) ?? []), r])
+  for (const list of byType.values()) list.sort((a, b) => a.id - b.id).forEach((r, i) => numbers.set(r.id, i + 1))
+  return numbers
 }
 
 /** Сохранённый пересмотр: новая версия и прежняя (ушла в историю). */
@@ -143,6 +153,9 @@ function RegulationTable({
   onRevised: (revision: Revision | null) => void
 }) {
   const [editing, setEditing] = useState<string | null>(null)
+  const numbers = versionNumbers(regulations)
+  // ADR 0009: масляный фильтр — отдельный регламент с интервалом масла; подсказка в форме фильтра.
+  const oil = regulations.find((r) => r.aggregate_type_code === 'engine_oil' && !r.is_archived)
   return (
     <Card className="p-0">
       <table className="w-full text-body-sm">
@@ -151,6 +164,7 @@ function RegulationTable({
             <th className="px-4 py-3 font-semibold">Агрегат</th>
             <th className="px-4 py-3 font-semibold">Интервал, км</th>
             <th className="px-4 py-3 font-semibold">Интервал, мес.</th>
+            <th className="px-4 py-3 font-semibold">Версия</th>
             <th className="px-4 py-3 text-right font-semibold">Действия</th>
           </tr>
         </thead>
@@ -167,6 +181,7 @@ function RegulationTable({
                   modelId={modelId}
                   type={type}
                   current={active}
+                  oil={type.code === 'oil_filter' ? oil : undefined}
                   onDone={(saved) => {
                     setEditing(null)
                     if (saved) {
@@ -180,6 +195,7 @@ function RegulationTable({
                   key={type.code}
                   type={type}
                   regulation={active}
+                  version={active ? numbers.get(active.id) : undefined}
                   onEdit={() => {
                     setEditing(type.code)
                     onRevised(null)
@@ -193,9 +209,10 @@ function RegulationTable({
               ...(showArchive
                 ? history.map((r) => (
                     <tr key={`h-${r.id}`} className="border-b border-border text-fg-muted">
-                      <td className="py-2 pr-4 pl-8">версия #{r.id} · в архиве</td>
+                      <td className="py-2 pr-4 pl-8">в архиве</td>
                       <td className="px-4 py-2 tabular-nums">{r.interval_km == null ? '—' : formatInt(r.interval_km)}</td>
                       <td className="px-4 py-2 tabular-nums">{r.interval_months ?? '—'}</td>
+                      <td className="px-4 py-2 tabular-nums">{numbers.get(r.id)}</td>
                       <td />
                     </tr>
                   ))
@@ -211,11 +228,14 @@ function RegulationTable({
 function RegulationRow({
   type,
   regulation,
+  version,
   onEdit,
   onChanged,
 }: {
   type: AggregateType
   regulation: MaintenanceRegulation | undefined
+  /** Номер действующей версии (U-44). */
+  version: number | undefined
   onEdit: () => void
   onChanged: () => void
 }) {
@@ -247,6 +267,7 @@ function RegulationRow({
           <Badge>Не отслеживается</Badge>
         </td>
       )}
+      <td className="px-4 py-3 tabular-nums">{version ?? '—'}</td>
       <td className="px-4 py-3">
         <span className="flex justify-end gap-2">
           <InlineError error={error} />
@@ -281,11 +302,14 @@ function RegulationForm({
   modelId,
   type,
   current,
+  oil,
   onDone,
 }: {
   modelId: number
   type: AggregateType
   current: MaintenanceRegulation | undefined
+  /** Действующий регламент масла этой модели — подсказка для масляного фильтра (ADR 0009). */
+  oil?: MaintenanceRegulation
   /** Новая версия регламента или null — отмена. */
   onDone: (saved: MaintenanceRegulation | null) => void
 }) {
@@ -315,7 +339,7 @@ function RegulationForm({
 
   return (
     <tr className="border-b border-border bg-surface-subtle">
-      <td colSpan={4} className="px-4 py-3">
+      <td colSpan={5} className="px-4 py-3">
         <form onSubmit={submit} className="grid gap-3" aria-label={`Интервал: ${type.name}`}>
           <p className="text-label">{type.name}</p>
           <div className="flex flex-wrap items-start gap-4">
@@ -328,9 +352,24 @@ function RegulationForm({
               onChange={(e) => setMonths(e.target.value)}
             />
             <p className="max-w-xs pt-7 text-caption text-fg-muted">
-              Нужен хотя бы один интервал. {current ? 'Текущая версия уйдёт в историю — расчёты по прошлым ТО не изменятся.' : ''}
+              Нужен хотя бы один интервал. {current ? 'Текущая версия уйдёт в историю, статусы клиентов сразу пересчитаются по новой; история ТО не изменится.' : ''}
             </p>
           </div>
+          {oil && (
+            <p className="flex flex-wrap items-center gap-2 text-body-sm">
+              Масло двигателя у этой модели: {intervals(oil)}; фильтр обычно меняют вместе с маслом.
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => {
+                  setKm(oil.interval_km?.toString() ?? '')
+                  setMonths(oil.interval_months?.toString() ?? '')
+                }}
+              >
+                Как у масла
+              </Button>
+            </p>
+          )}
           <InlineError error={error} />
           <div className="flex gap-2">
             <Button type="submit" size="sm" disabled={busy}>
@@ -380,15 +419,19 @@ function ThresholdsForm({ initial }: { initial: { yellow_from_percent: number; r
         <h2 id="thresholds-title" className="text-h3">
           Пороги «светофора»
         </h2>
-        <p className="text-body-sm text-fg-muted">% выработки интервала: зелёный — меньше «жёлтого», красный — больше «красного».</p>
+        {/* U-42: общие для всех моделей и агрегатов; «износ» вместо «% выработки интервала». */}
+        <p className="text-body-sm text-fg-muted">
+          Общие для всех моделей и агрегатов. Износ — какая часть интервала замены уже пройдена: зелёный — меньше «жёлтого
+          с», жёлтый — до «красного выше» включительно, красный — больше.
+        </p>
         <div className="grid grid-cols-2 gap-3">
-          <TextField label="Жёлтый с, %" inputMode="numeric" value={yellow} onChange={(e) => setYellow(e.target.value)} />
-          <TextField label="Красный выше, %" inputMode="numeric" value={red} onChange={(e) => setRed(e.target.value)} />
+          <TextField label="Жёлтый с, % износа" inputMode="numeric" value={yellow} onChange={(e) => setYellow(e.target.value)} />
+          <TextField label="Красный выше, % износа" inputMode="numeric" value={red} onChange={(e) => setRed(e.target.value)} />
         </div>
         <InlineError error={error} />
         {saved && (
           <p role="status" className="text-body-sm text-status-green-fg">
-            Пороги сохранены. Статусы пересчитаются при следующем запросе.
+            Пороги сохранены — статусы всех авто уже считаются по новым порогам.
           </p>
         )}
         <Button type="submit" size="sm">
@@ -425,8 +468,9 @@ function NewAggregateType({ onCreated }: { onCreated: () => void }) {
           Новый агрегат
         </h2>
         <p className="text-body-sm text-fg-muted">Набор агрегатов на схеме расширяется без разработчика (ТЗ, блок 1).</p>
-        <TextField label="Название" placeholder="Тормозная жидкость" value={name} onChange={(e) => setName(e.target.value)} />
-        <TextField label="Код" placeholder="brake_fluid" hint="Латиница, цифры и «_»" value={code} onChange={(e) => setCode(e.target.value)} />
+        {/* Как A7/U-18: пример — в подсказке, а не в placeholder (его принимали за введённое значение). */}
+        <TextField label="Название" hint="Например: Тормозная жидкость" value={name} onChange={(e) => setName(e.target.value)} />
+        <TextField label="Код" hint="Латиница, цифры и «_», например: brake_fluid" value={code} onChange={(e) => setCode(e.target.value)} />
         <InlineError error={error} />
         <Button type="submit" size="sm" variant="secondary">
           Добавить агрегат

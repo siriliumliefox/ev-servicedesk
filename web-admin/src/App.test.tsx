@@ -1,6 +1,7 @@
-// Прототип админ-панели (Глава 8, ADR 0012): конструктор регламентов ТО, конструктор статей и дерево
-// решений, лента публикаций, дашборд; клики — для таблицы в docs/design/WEB_PROTOTYPE.md.
-import { act, render, screen, within } from '@testing-library/react'
+// Админ-панель на прототипе-репозитории (Глава 8, ADR 0012; глава 22, ADR 0026): конструктор регламентов
+// ТО, конструктор статей и дерево решений, публикации, пользователи, дашборд; клики — для таблицы в
+// docs/design/WEB_PROTOTYPE.md. Прототип отвечает теми же кодами ошибок, что backend.
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { PrototypeRepository } from '@ev-servicedesk/web-shared'
@@ -46,7 +47,7 @@ describe('навигация и тема', () => {
 
   it('пункты меню — с пояснением (U-08); имя ссылки — название раздела, пояснение — описание', async () => {
     setup('/publications')
-    await screen.findByLabelText('Тема')
+    await screen.findByLabelText('Оформление')
     const nav = screen.getByRole('navigation', { name: 'Разделы админ-панели' })
     expect(within(nav).getByRole('link', { name: 'Дашборд' })).toHaveAccessibleDescription('показатели поддержки')
     expect(within(nav).getByRole('link', { name: 'Регламенты ТО' })).toHaveAccessibleDescription('интервалы замены и пороги')
@@ -71,11 +72,34 @@ describe('дашборд', () => {
     const models = screen.getByRole('table')
     expect(within(models).getAllByRole('row')[1]).toHaveTextContent('Li Auto L7')
     expect(screen.getByText('Обращение → работа ТО').parentElement).toHaveTextContent('18 %')
-    expect(screen.getByText(/^Данные на \d+ [а-я]+.* \d\d:\d\d/)).toHaveTextContent('витрина обновляется каждые 5 минут')
+    expect(screen.getByText(/^Данные на \d+ [а-я]+.* \d\d:\d\d/)).toHaveTextContent('обновляются раз в 5 минут')
     await click(screen.getByRole('button', { name: '7 дней' }))
     await screen.findByRole('button', { name: '7 дней', pressed: true })
     expect(await screen.findByText('Создано')).toBeInTheDocument()
     await expect.poll(() => kpi('Создано').textContent).toBe('Создано30')
+  })
+
+  it('свой период и фильтр модели уходят в запросы; прежние цифры при смене не показываются (U-41)', async () => {
+    const { user, click, repo } = setup()
+    await screen.findByText('Тикеты')
+    const resolution = vi.spyOn(repo, 'getTicketResolutionStats')
+    const conversion = vi.spyOn(repo, 'getMaintenanceConversionStats')
+    await click(screen.getByRole('button', { name: 'Свой период' }))
+    // Поле даты в jsdom посимвольно не вводится — значение целиком, как выбор в календаре.
+    fireEvent.change(screen.getByLabelText('С'), { target: { value: '2026-03-01' } })
+    fireEvent.change(screen.getByLabelText('По'), { target: { value: '2026-03-31' } })
+    await user.selectOptions(screen.getByLabelText('Модель'), 'Zeekr 001')
+    await user.selectOptions(screen.getByLabelText('Категория тикета'), 'Аудио')
+    await screen.findByText('Тикеты')
+    expect(resolution).toHaveBeenLastCalledWith({ date_from: '2026-03-01', date_to: '2026-03-31', vehicle_model_id: 2, category: 'audio' })
+    expect(conversion).toHaveBeenLastCalledWith({ date_from: '2026-03-01', date_to: '2026-03-31', vehicle_model_id: 2 })
+    expect(screen.getByText(/Категория: Аудио — только для тикетов/)).toBeInTheDocument()
+  })
+
+  it('«На 10 авто» — с пояснением; рейтинг — по всем моделям (U-41)', async () => {
+    setup()
+    expect(await screen.findByRole('heading', { name: 'Модели по числу тикетов' })).toBeInTheDocument()
+    expect(screen.getByText(/«На 10 авто» — тикетов на 10 машин модели/)).toBeInTheDocument()
   })
 
   it('пустая система — без моделей и с прочерками', async () => {
@@ -132,11 +156,11 @@ describe('конструктор регламентов ТО', () => {
 
   it('разряды через пробел — и в порогах «светофора» (U-04)', async () => {
     const { user, click, repo } = setup('/regulations')
-    const yellow = await screen.findByLabelText('Жёлтый с, %')
+    const yellow = await screen.findByLabelText('Жёлтый с, % износа')
     await user.clear(yellow)
     await user.type(yellow, '1 00')
-    await user.clear(screen.getByLabelText('Красный выше, %'))
-    await user.type(screen.getByLabelText('Красный выше, %'), '1\u202F50')
+    await user.clear(screen.getByLabelText('Красный выше, % износа'))
+    await user.type(screen.getByLabelText('Красный выше, % износа'), '1\u202F50')
     await click(screen.getByRole('button', { name: 'Сохранить пороги' }))
     expect(await screen.findByText(/Пороги сохранены/)).toBeInTheDocument()
     expect(await repo.getAggregateStatusThresholds()).toMatchObject({ yellow_from_percent: 100, red_above_percent: 150 })
@@ -215,15 +239,45 @@ describe('конструктор регламентов ТО', () => {
 
   it('пороги «светофора»: жёлтый ≥ красного — ошибка, корректные — сохраняются', async () => {
     const { user, click } = setup('/regulations')
-    const yellow = await screen.findByLabelText('Жёлтый с, %')
+    const yellow = await screen.findByLabelText('Жёлтый с, % износа')
     await user.clear(yellow)
     await user.type(yellow, '120')
     await click(screen.getByRole('button', { name: 'Сохранить пороги' }))
     expect(await screen.findByText(/жёлтый с.*красный выше/i)).toBeInTheDocument()
-    await user.clear(screen.getByLabelText('Жёлтый с, %'))
-    await user.type(screen.getByLabelText('Жёлтый с, %'), '75')
+    await user.clear(screen.getByLabelText('Жёлтый с, % износа'))
+    await user.type(screen.getByLabelText('Жёлтый с, % износа'), '75')
     await click(screen.getByRole('button', { name: 'Сохранить пороги' }))
-    expect(await screen.findByText(/Пороги сохранены/)).toBeInTheDocument()
+    expect(await screen.findByText(/Пороги сохранены — статусы всех авто уже считаются по новым порогам/)).toBeInTheDocument()
+    // U-42: пороги общие, «износ» вместо «% выработки».
+    expect(screen.getByText(/^Общие для всех моделей и агрегатов/)).toBeInTheDocument()
+  })
+
+  it('версии регламента — по порядку, а не по id (U-44)', async () => {
+    const { user, click } = setup('/regulations')
+    await click(await screen.findByRole('button', { name: 'Изменить интервал: Масло двигателя' }))
+    const form = screen.getByRole('form', { name: 'Интервал: Масло двигателя' })
+    await user.clear(within(form).getByLabelText('Интервал, км'))
+    await user.type(within(form).getByLabelText('Интервал, км'), '12000')
+    await click(within(form).getByRole('button', { name: 'Сохранить' }))
+    const row = (await screen.findByRole('rowheader', { name: 'Масло двигателя' })).closest('tr')!
+    expect(within(row).getAllByRole('cell')[2]).toHaveTextContent('2')
+    await click(screen.getByLabelText('Показать историю версий'))
+    const archived = (await screen.findByText('в архиве')).closest('tr')!
+    expect(within(archived).getAllByRole('cell')[3]).toHaveTextContent(/^1$/)
+  })
+
+  it('масляный фильтр: подсказка интервала масла и «Как у масла» (ADR 0009)', async () => {
+    const { click } = setup('/regulations')
+    await click(await screen.findByRole('button', { name: 'Изменить интервал: Масляный фильтр' }))
+    const form = screen.getByRole('form', { name: 'Интервал: Масляный фильтр' })
+    expect(within(form).getByText('Масло двигателя у этой модели: 10 000 км, 12 мес.; фильтр обычно меняют вместе с маслом.')).toBeInTheDocument()
+    await click(within(form).getByRole('button', { name: 'Как у масла' }))
+    expect(within(form).getByLabelText('Интервал, км')).toHaveValue('10000')
+    expect(within(form).getByLabelText('Интервал, мес.')).toHaveValue('12')
+    // У других агрегатов подсказки нет.
+    await click(within(form).getByRole('button', { name: 'Отмена' }))
+    await click(screen.getByRole('button', { name: 'Изменить интервал: Салонный фильтр' }))
+    expect(screen.queryByRole('button', { name: 'Как у масла' })).not.toBeInTheDocument()
   })
 
   it('новый агрегат появляется в таблице', async () => {
@@ -232,6 +286,9 @@ describe('конструктор регламентов ТО', () => {
     await user.type(screen.getByLabelText('Код'), 'brake_fluid')
     await click(screen.getByRole('button', { name: 'Добавить агрегат' }))
     expect(await screen.findByRole('rowheader', { name: 'Тормозная жидкость' })).toBeInTheDocument()
+    // Пример — в подсказке, поле пустое (как A7/U-18).
+    expect(screen.getByLabelText('Название')).not.toHaveAttribute('placeholder')
+    expect(screen.getByLabelText('Код')).toHaveAccessibleDescription('Латиница, цифры и «_», например: brake_fluid')
   })
 })
 
@@ -318,7 +375,7 @@ describe('конструктор статей базы знаний', () => {
     const { click } = setup('/articles/11')
     await click(await screen.findByRole('button', { name: 'Снять с публикации' }))
     await click(await screen.findByRole('button', { name: 'Опубликовать' }))
-    expect(await screen.findByText(/^Статья опубликована/)).toHaveTextContent(
+    expect(await screen.findByText(/^Статья опубликована в базе знаний/)).toHaveTextContent(
       'Статья опубликована в базе знаний — клиенты всех моделей увидят её в приложении: «Поддержка» → «Неполадки».',
     )
   })
@@ -341,7 +398,9 @@ describe('конструктор статей базы знаний', () => {
     await click(treeTab)
     expect(treeTab).toHaveAttribute('aria-selected', 'true')
     expect(screen.getByRole('tabpanel', { name: 'Дерево решений · 3 шага' })).toBeVisible()
-    expect(screen.getByRole('button', { name: 'Добавить шаг' })).toBeInTheDocument()
+    // Статья опубликована — дерево только для просмотра (ADR 0026 п. 9, 409 ARTICLE_PUBLISHED).
+    expect(screen.getByText(/^Дерево опубликованной статьи не меняется/)).toBeVisible()
+    expect(screen.queryByRole('button', { name: 'Добавить шаг' })).not.toBeInTheDocument()
     expect(intro).not.toBeVisible()
 
     // Клавиатура: стрелки переключают вкладки (WAI-ARIA Tabs).
@@ -356,6 +415,22 @@ describe('конструктор статей базы знаний', () => {
     await user.selectOptions(await screen.findByLabelText('Тип'), 'Устранение неполадок')
     expect(screen.getByLabelText('Вступление')).toHaveAccessibleDescription(/в дереве решений — после сохранения черновика/)
     expect(screen.queryByRole('tablist')).not.toBeInTheDocument()
+  })
+
+  it('новая статья «Устранение неполадок»: категория ошибки обязательна; с категорией — черновик и вкладка дерева', async () => {
+    const { user, click, repo } = setup('/articles/new')
+    const create = vi.spyOn(repo, 'createKnowledgeArticle')
+    await user.selectOptions(await screen.findByLabelText('Тип'), 'Устранение неполадок')
+    await user.type(screen.getByLabelText('Заголовок'), 'Не работает Bluetooth')
+    await user.type(screen.getByLabelText('Вступление'), 'Телефон не находит мультимедиа.')
+    await click(screen.getByRole('button', { name: 'Сохранить черновик' }))
+    expect(screen.getByLabelText('Категория ошибки')).toHaveAccessibleDescription('Выберите категорию ошибки')
+    expect(create).not.toHaveBeenCalled()
+    await user.selectOptions(screen.getByLabelText('Категория ошибки'), 'Аудио')
+    await click(screen.getByRole('button', { name: 'Сохранить черновик' }))
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ article_type: 'troubleshooting', category: 'audio' }))
+    expect(await screen.findByRole('tab', { name: /^Дерево решений/ })).toBeInTheDocument()
+    expect(screen.getByLabelText('Категория ошибки')).toHaveValue('audio')
   })
 
   it('инструкция — без вкладок: поле «Текст статьи», как раньше', async () => {
@@ -381,52 +456,111 @@ describe('конструктор статей базы знаний', () => {
     expect(await screen.findByRole('link', { name: 'Zeekr 001: голосовой помощник на русском' })).toBeInTheDocument()
   })
 
-  it('дерево решений: проверка без ошибок; шаг-тупик — ошибка и запрет публикации', async () => {
+  it('дерево решений: снять с публикации → шаг с переходом; недостижимый шаг — ошибка и запрет публикации', async () => {
     const { user, click } = setup('/articles/10')
     await click(await screen.findByRole('tab', { name: 'Дерево решений · 6 шагов' }))
     await click(screen.getByRole('button', { name: 'Проверить дерево' }))
-    expect(await screen.findByText(/Ошибок нет/)).toBeInTheDocument()
-
-    await click(screen.getByRole('button', { name: 'Добавить шаг' }))
-    const form = screen.getByRole('form', { name: 'Новый шаг' })
-    await user.type(within(form).getByLabelText('Вопрос или инструкция'), 'Проверьте предохранитель')
-    await click(within(form).getByRole('button', { name: 'Добавить вариант' }))
-    await user.type(within(form).getByLabelText('Вариант 1'), 'Не помогло')
-    await click(within(form).getByRole('button', { name: 'Сохранить шаг' }))
-    await click(await screen.findByRole('button', { name: 'Проверить дерево' }))
-    expect(await screen.findByText(/Найдено ошибок: 2/)).toBeInTheDocument()
-    expect(screen.getByText(/тупик/)).toBeInTheDocument()
-    expect(screen.getByText(/недостижим/)).toBeInTheDocument()
-    expect(screen.getByRole('tab', { name: 'Дерево решений · 7 шагов' })).toBeInTheDocument()
+    expect(await screen.findByText('Ошибок нет.')).toBeInTheDocument()
 
     await click(screen.getByRole('tab', { name: 'Текст статьи' }))
     await click(screen.getByRole('button', { name: 'Снять с публикации' }))
+    // Снятие перечитывает статью — форма монтируется заново; вкладку выбираем уже у новой формы.
+    await screen.findByRole('button', { name: 'Опубликовать' })
+    await click(await screen.findByRole('tab', { name: 'Дерево решений · 6 шагов' }))
+    await click(await screen.findByRole('button', { name: 'Добавить шаг' }))
+    const form = screen.getByRole('form', { name: 'Новый шаг' })
+    // Корень уже есть — второй не отметить.
+    expect(within(form).getByLabelText(/Корневой шаг \(уже есть: шаг 1\)/)).toBeDisabled()
+    await user.type(within(form).getByLabelText('Вопрос или инструкция'), 'Проверьте предохранитель')
+    await click(within(form).getByRole('button', { name: 'Добавить вариант' }))
+    await user.type(within(form).getByLabelText('Вариант 1'), 'Не помогло')
+    // Вариант без перехода не уходит на сервер (U-40, INVALID_NEXT_NODE).
+    await click(within(form).getByRole('button', { name: 'Сохранить шаг' }))
+    expect(within(form).getByRole('alert')).toHaveTextContent('Выберите, к какому шагу ведёт вариант «Не помогло»')
+    // Шаги — по номеру и тексту, без обрезки (U-40).
+    const target = within(form).getByRole('combobox', { name: 'Ведёт к' })
+    expect(within(target).getAllByRole('option')[1].textContent).toMatch(/^Шаг 1: /)
+    await user.selectOptions(target, within(target).getAllByRole('option')[1])
+    await click(within(form).getByRole('button', { name: 'Сохранить шаг' }))
+    await click(await screen.findByRole('button', { name: 'Проверить дерево' }))
+    expect(await screen.findByText(/Найдено ошибок: 1/)).toBeInTheDocument()
+    expect(screen.getByText(/недостижим/)).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'Дерево решений · 7 шагов' })).toBeInTheDocument()
+    expect(screen.getAllByText(/→ Шаг 1 «/).length).toBeGreaterThan(0)
+
+    await click(screen.getByRole('tab', { name: 'Текст статьи' }))
     await click(await screen.findByRole('button', { name: 'Опубликовать' }))
     expect(await screen.findByRole('alert')).toHaveTextContent('В дереве решений есть ошибки')
   })
+
+  it('новая инструкция — «Сохранить и опубликовать» одним действием (U-05)', async () => {
+    const { user, click } = setup('/articles/new')
+    await user.type(await screen.findByLabelText('Заголовок'), 'Как подключить телефон по Bluetooth')
+    await user.type(screen.getByLabelText('Текст статьи'), 'Откройте «Настройки» → Bluetooth.')
+    await click(screen.getByRole('button', { name: 'Сохранить и опубликовать' }))
+    expect(await screen.findByText(/^Статья опубликована в базе знаний/)).toBeInTheDocument()
+    expect(screen.getByText('Опубликована')).toBeInTheDocument()
+    expect(window.location.hash).toMatch(/^#\/articles\/\d+$/)
+  })
+
+  it('правки черновика — «Сохранить и опубликовать»; правка опубликованной — «Опубликовать изменения» с номером версии (U-43)', async () => {
+    const { user, click } = setup('/articles/6')
+    await user.type(await screen.findByLabelText('Текст статьи'), ' Дополнение.')
+    await click(screen.getByRole('button', { name: 'Сохранить и опубликовать' }))
+    expect(await screen.findByText(/^Статья опубликована в базе знаний/)).toBeInTheDocument()
+    expect((screen.getByLabelText('Текст статьи') as HTMLTextAreaElement).value).toContain('Дополнение.')
+
+    await user.type(screen.getByLabelText('Текст статьи'), ' Ещё.')
+    expect(screen.getByText(/сохранение выпустит версию 2 — клиенты увидят её сразу/)).toBeInTheDocument()
+    await click(screen.getByRole('button', { name: 'Опубликовать изменения' }))
+    expect(await within(await screen.findByRole('form', { name: /^Статья:/ })).findByText('v2')).toBeInTheDocument()
+  })
+
+  it('история версий: список опубликованных и просмотр версии только для чтения', async () => {
+    const { user, click } = setup('/articles/6')
+    expect(await screen.findByText('Статья ещё не публиковалась — версий нет.')).toBeInTheDocument()
+    await click(screen.getByRole('button', { name: 'Опубликовать' }))
+    // Публикация перечитывает статью и монтирует форму заново — вводим уже в новую.
+    await screen.findByRole('button', { name: 'Снять с публикации' })
+    await user.type(screen.getByLabelText('Заголовок'), ' (обновлено)')
+    await click(screen.getByRole('button', { name: 'Опубликовать изменения' }))
+    await within(await screen.findByRole('form', { name: /^Статья:/ })).findByText('v2')
+    expect((await screen.findByText(/· действующая$/)).textContent).toMatch(/^v2 · /)
+    await click(screen.getByRole('button', { name: 'Версия 1' }))
+    const old = await screen.findByLabelText('Содержание версии 1')
+    expect(old).not.toHaveTextContent('(обновлено)')
+    expect(within(old).queryByRole('textbox')).not.toBeInTheDocument()
+  })
 })
 
+/** «Опубликовать…» → подтверждение аудитории → «Опубликовать» (U-45): два клика. */
+async function publish(click: (element: Element) => Promise<void>) {
+  await click(screen.getByRole('button', { name: 'Опубликовать…' }))
+  const dialog = await screen.findByRole('dialog')
+  await click(within(dialog).getByRole('button', { name: 'Опубликовать' }))
+}
+
 describe('лента публикаций', () => {
-  it('новость для всех моделей — 1 клик после ввода темы и текста; первая в ленте', async () => {
+  it('новость для всех моделей — 2 клика после ввода темы и текста (публикация и подтверждение); первая в ленте', async () => {
     const { user, click, clicks } = setup('/publications')
     await user.type(await screen.findByLabelText('Тема'), 'Зимний режим')
     await user.type(screen.getByLabelText('Текст уведомления'), 'С 1 ноября — зимний режим работы сервиса.')
     expect(screen.getByText('Предпросмотр push-уведомления').parentElement).toHaveTextContent('зимний режим')
-    await click(screen.getByRole('button', { name: 'Опубликовать' }))
+    await publish(click)
     expect(await screen.findByText(/поставлено в очередь/)).toBeInTheDocument()
     const feed = screen.getByRole('region', { name: 'Опубликовано' })
     expect(within(feed).getAllByRole('listitem')[0]).toHaveTextContent('зимний режим')
-    expect(clicks()).toBe(1)
+    expect(clicks()).toBe(2)
   })
 
-  it('выпустить прошивку — 2 клика (выбор модели и версия — ввод)', async () => {
+  it('выпустить прошивку — 3 клика (тип, публикация, подтверждение; модель и версия — ввод)', async () => {
     const { user, click, clicks } = setup('/publications')
     await click(await screen.findByLabelText('Прошивка'))
     await user.selectOptions(screen.getByLabelText('Модель'), 'Zeekr 001')
     await user.type(screen.getByLabelText('Версия'), 'RU 5.2.0')
-    await click(screen.getByRole('button', { name: 'Опубликовать' }))
+    await publish(click)
     expect(await screen.findByText(/Релиз опубликован/)).toBeInTheDocument()
-    expect(clicks()).toBe(2)
+    expect(clicks()).toBe(3)
   })
 
   it('пояснение раздела: здесь рассылки, статьи — в базе знаний (переход по ссылке) (U-08)', async () => {
@@ -440,12 +574,12 @@ describe('лента публикаций', () => {
   it('тема обязательна: без темы — ошибка у поля, ничего не отправлено (U-08)', async () => {
     const { user, click, repo } = setup('/publications')
     await user.type(await screen.findByLabelText('Текст уведомления'), 'Откройте «Настройки» → Bluetooth.')
-    await click(screen.getByRole('button', { name: 'Опубликовать' }))
+    await click(screen.getByRole('button', { name: 'Опубликовать…' }))
     const subject = screen.getByLabelText('Тема')
     expect(subject).toHaveAttribute('aria-invalid', 'true')
     expect(subject).toHaveAccessibleDescription('Укажите тему')
     expect(screen.queryByText(/поставлено в очередь/)).not.toBeInTheDocument()
-    expect(await repo.listPublishedNotifications()).toHaveLength(4)
+    expect((await repo.listPublishedNotifications()).items).toHaveLength(3)
   })
 
   it('тема — первой строкой message; предпросмотр и лента — тема заголовком, текст ниже; счётчик — тема + текст', async () => {
@@ -460,9 +594,9 @@ describe('лента публикаций', () => {
     const preview = screen.getByText('Предпросмотр push-уведомления').parentElement!
     expect(within(preview).getByText(subject).nextElementSibling).toHaveTextContent(text)
 
-    await click(screen.getByRole('button', { name: 'Опубликовать' }))
+    await publish(click)
     expect(await screen.findByText(/поставлено в очередь/)).toHaveTextContent('все клиенты')
-    expect((await repo.listPublishedNotifications())[0].message).toBe(`${subject}\n${text}`)
+    expect((await repo.listPublishedNotifications()).items[0].message).toBe(`${subject}\n${text}`)
     const item = within(screen.getByRole('region', { name: 'Опубликовано' })).getAllByRole('listitem')[0]
     expect(within(item).getByText(subject).nextElementSibling).toHaveTextContent(text)
   })
@@ -475,10 +609,11 @@ describe('лента публикаций', () => {
     expect(screen.getByLabelText('Текст уведомления')).toHaveAccessibleDescription(/не длиннее 500 символов: 501 \/ 500/)
     // Лимит держит форма: в контракте у message нет maxLength — запрос не должен уйти вовсе.
     const create = vi.spyOn(repo, 'createNotification')
-    await click(screen.getByRole('button', { name: 'Опубликовать' }))
+    await click(screen.getByRole('button', { name: 'Опубликовать…' }))
     expect(create).not.toHaveBeenCalled()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     expect(screen.queryByText(/поставлено в очередь/)).not.toBeInTheDocument()
-    expect(await repo.listPublishedNotifications()).toHaveLength(4)
+    expect((await repo.listPublishedNotifications()).items).toHaveLength(3)
   })
 
   it('прошивка: тему формирует система; версия — пример в подсказке, не в placeholder (A7)', async () => {
@@ -499,7 +634,7 @@ describe('лента публикаций', () => {
     await user.clear(screen.getByLabelText('Дата выпуска'))
     await user.type(screen.getByLabelText('Дата выпуска'), '2026-10-01')
     expect(screen.getByLabelText('Дата выпуска')).toHaveValue('2026-10-01')
-    await click(screen.getByRole('button', { name: 'Опубликовать' }))
+    await publish(click)
     expect(await screen.findByText(/Релиз опубликован/)).toBeInTheDocument()
     expect(await repo.listFirmwareReleases({ vehicle_model_id: 1 })).toContainEqual(
       expect.objectContaining({ version: 'RU 2.5.0', released_at: '2026-10-01' }),
@@ -520,24 +655,63 @@ describe('лента публикаций', () => {
     await click(screen.getByLabelText('Новость'))
     await user.type(screen.getByLabelText('Тема'), 'Зимний режим')
     await user.type(screen.getByLabelText('Текст уведомления'), 'С 1 ноября — зимний режим работы сервиса.')
-    await click(screen.getByRole('button', { name: 'Опубликовать' }))
+    await publish(click)
     expect(await screen.findByText(/поставлено в очередь/)).toHaveTextContent('все клиенты')
     const feed = screen.getByRole('region', { name: 'Опубликовано' })
     expect(within(feed).getAllByRole('listitem')[0]).toHaveTextContent('Аудитория: Все модели')
-    expect((await repo.listPublishedNotifications())[0].target_vehicle_model_id).toBeNull()
+    expect((await repo.listPublishedNotifications()).items[0].target_vehicle_model_id).toBeNull()
   })
 
   it('прошивка: без модели — ошибка; с моделью — релиз и уведомление с таргетингом', async () => {
     const { user, click } = setup('/publications')
     await click(await screen.findByLabelText('Прошивка'))
     await user.type(screen.getByLabelText('Версия'), 'RU 1.9.0')
-    await click(screen.getByRole('button', { name: 'Опубликовать' }))
+    await click(screen.getByRole('button', { name: 'Опубликовать…' }))
     expect(await screen.findByText('Выберите модель')).toBeInTheDocument()
     await user.selectOptions(screen.getByLabelText('Модель'), 'Voyah Free')
-    await click(screen.getByRole('button', { name: 'Опубликовать' }))
+    await publish(click)
     expect(await screen.findByText(/Релиз опубликован/)).toBeInTheDocument()
     const feed = screen.getByRole('region', { name: 'Опубликовано' })
     expect(within(feed).getAllByRole('listitem')[0]).toHaveTextContent('Аудитория: Voyah Free')
     expect(within(screen.getByRole('region', { name: 'Релизы прошивок' })).getByText('RU 1.9.0')).toBeInTheDocument()
   })
+
+  it('подтверждение: число получателей и устройств с сервера; «Отмена» — ничего не публикуется (U-45)', async () => {
+    const { user, click, repo } = setup('/publications')
+    await user.selectOptions(await screen.findByLabelText('Аудитория'), 'Li Auto L7')
+    await user.type(screen.getByLabelText('Тема'), 'Сервис')
+    await user.type(screen.getByLabelText('Текст уведомления'), 'Работаем в субботу.')
+    const create = vi.spyOn(repo, 'createNotification')
+    await click(screen.getByRole('button', { name: 'Опубликовать…' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Опубликовать уведомление?' })
+    // Владельцы L7 в фикстурах — клиенты 501 и 503; у каждого второго — два устройства.
+    expect(dialog).toHaveTextContent('Получат 2 клиента (3 устройства с push)')
+    expect(dialog).toHaveTextContent('Отменить или изменить публикацию нельзя.')
+    await click(within(dialog).getByRole('button', { name: 'Отмена' }))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(create).not.toHaveBeenCalled()
+    expect(screen.getByLabelText('Тема')).toHaveValue('Сервис')
+  })
+
+  it('прошивка: в подтверждении — оценка сверху по владельцам модели', async () => {
+    const { user, click } = setup('/publications')
+    await click(await screen.findByLabelText('Прошивка'))
+    await user.selectOptions(screen.getByLabelText('Модель'), 'Zeekr 001')
+    await user.type(screen.getByLabelText('Версия'), 'RU 5.2.0')
+    await click(screen.getByRole('button', { name: 'Опубликовать…' }))
+    expect(await screen.findByRole('dialog', { name: 'Опубликовать релиз прошивки?' })).toHaveTextContent(
+      'не больше 2 владельцев Zeekr 001 — те, у кого прошивка старее RU 5.2.0',
+    )
+  })
+
+  it('напоминание о ТО вручную не публикуется; лента — со статистикой и фильтром типа', async () => {
+    const { click } = setup('/publications')
+    await screen.findByLabelText('Новость')
+    expect(screen.queryByLabelText('Регламент ТО')).not.toBeInTheDocument()
+    const feed = screen.getByRole('region', { name: 'Опубликовано' })
+    expect(within(feed).getAllByRole('listitem')[0]).toHaveTextContent(/Получателей \d+ · push доставлено \d+/)
+    await click(within(feed).getByRole('button', { name: 'Прошивка' }))
+    await expect.poll(() => within(feed).getAllByRole('listitem').every((li) => li.textContent?.includes('Прошивка'))).toBe(true)
+  })
 })
+

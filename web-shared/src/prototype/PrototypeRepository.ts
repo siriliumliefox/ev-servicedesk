@@ -1,7 +1,7 @@
 // Репозиторий прототипа (Глава 8, ADR 0012): операции OpenAPI v1 на фикстурах в памяти, без сети и Docker.
 // Ошибки — в формате контракта (`ApiError`: code + HTTP-статус). Правила, которые в продукте проверяет
-// backend (переходы статусов тикета, claim 409, валидация дерева решений), здесь — упрощённо; финальные
-// правила — главы 12–14.
+// backend (переходы статусов тикета, claim 409, валидация дерева решений, пользователи), здесь —
+// упрощённо, с теми же кодами ошибок; финальные правила — backend (главы 12–17, 22).
 import type {
   AggregateStatusThresholds,
   AggregateStatusThresholdsUpdateRequest,
@@ -16,14 +16,19 @@ import type {
   KnowledgeArticle,
   KnowledgeArticleCreateRequest,
   KnowledgeArticleList,
+  KnowledgeArticleRevision,
+  KnowledgeArticleRevisionSummary,
   KnowledgeArticleUpdateRequest,
   MaintenanceConversionStats,
   MaintenanceRecordList,
   MaintenanceRegulation,
   MaintenanceRegulationCreateRequest,
   Notification,
+  NotificationAudiencePreview,
   NotificationCreateRequest,
   ProblemModelStats,
+  PublishedNotificationList,
+  StaffUserCreateRequest,
   Ticket,
   TicketCategory,
   TicketDetail,
@@ -31,7 +36,9 @@ import type {
   TicketMessage,
   TicketResolutionStats,
   TicketStatus,
+  UserList,
   UserPublic,
+  UserUpdateRequest,
   Vehicle,
   VehicleModel,
 } from "../data/models.ts";
@@ -40,9 +47,12 @@ import { allowedTransitions } from "../data/ticketFlow.ts";
 import {
   ApiError,
   type AdminRepository,
+  type AnalyticsQuery,
   type EngineerRepository,
   type ListArticlesQuery,
+  type ListPublishedQuery,
   type ListTicketsQuery,
+  type ListUsersQuery,
   type PageQuery,
   type TicketLiveHandlers,
 } from "../data/repository.ts";
@@ -85,11 +95,6 @@ const clone = <T>(value: T): T => structuredClone(value);
 const ANALYTICS_LAG_MS = 3 * 60_000;
 const round4 = (value: number) => Math.round(value * 10_000) / 10_000;
 
-const page = <T>(items: T[]) => ({
-  items,
-  meta: { page: 1, page_size: Math.max(items.length, 20), total_items: items.length, total_pages: 1 },
-});
-
 /** Страница выборки, как `PaginationMeta` контракта (page с 1, page_size по умолчанию 20). */
 const slice = <T>(items: T[], query: PageQuery) => {
   const size = query.page_size ?? 20;
@@ -124,6 +129,8 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
   };
   private firmware: FirmwareRelease[] = [];
   private notifications: Notification[] = [];
+  private users: UserPublic[] = [];
+  private revisions: KnowledgeArticleRevision[] = [];
   private nextId = 10_000;
 
   constructor(options: PrototypeOptions) {
@@ -175,12 +182,15 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
     };
     this.firmware = empty ? [] : clone(FIRMWARE_RELEASES);
     this.notifications = empty ? [] : seedNotifications(now);
+    this.users = Object.values(clone(USERS));
+    // Версия — снимок опубликованной редакции (ADR 0018 п. 1); у фикстур — только текущая.
+    this.revisions = this.articles.filter((a) => a.is_published).map((a) => this.snapshot(a, a.updated_at));
   }
 
   // ---------- Общие ----------
 
   getCurrentUser(): Promise<UserPublic> {
-    return this.call(() => USERS[this.role === "admin" ? ADMIN_ID : ENGINEER_ID]);
+    return this.call(() => this.user(this.role === "admin" ? ADMIN_ID : ENGINEER_ID));
   }
 
   searchVehicleModels(): Promise<VehicleModel[]> {
@@ -197,10 +207,11 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
       const items = this.articles.filter(
         (a) =>
           (query.article_type === undefined || a.article_type === query.article_type) &&
+          (query.is_published === undefined || a.is_published === query.is_published) &&
           (query.vehicle_model_id === undefined || a.vehicle_model_id === null || a.vehicle_model_id === query.vehicle_model_id) &&
           (!needle || `${a.title}\n${a.content}`.toLocaleLowerCase("ru").includes(needle)),
       );
-      return page(items);
+      return slice(items, query);
     });
   }
 
@@ -237,6 +248,26 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
       }
       t.assigned_engineer_id = ENGINEER_ID;
       if (t.status === "new") t.status = "in_progress";
+      this.emitTicket(t);
+      return this.toDetail(t);
+    });
+  }
+
+  /** Админ: назначить активного инженера или вернуть тикет в очередь (null), как assignTicket. */
+  assignTicket(ticketId: number, engineerId: number | null): Promise<TicketDetail> {
+    return this.call(() => {
+      const t = this.ticket(ticketId);
+      if (t.status === "resolved") throw new ApiError("TICKET_RESOLVED", "Тикет решён", 409);
+      if (engineerId !== null) {
+        const engineer = this.users.find((u) => u.id === engineerId);
+        if (!engineer || engineer.role !== "engineer" || !engineer.is_active) {
+          throw new ApiError("ASSIGNEE_NOT_ENGINEER", "Назначить можно только активного инженера", 422, "assigned_engineer_id");
+        }
+        if (t.status === "new") t.status = "in_progress";
+      } else {
+        t.status = "new";
+      }
+      t.assigned_engineer_id = engineerId;
       this.emitTicket(t);
       return this.toDetail(t);
     });
@@ -436,7 +467,9 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
       this.checkArticle(title, content);
       if (body.is_published && a.article_type === "troubleshooting") {
         const result = this.validateTree(articleId);
-        if (!result.is_valid) throw validation("В дереве решений есть ошибки — исправьте перед публикацией", "is_published");
+        if (!result.is_valid) {
+          throw new ApiError("DECISION_TREE_INVALID", "В дереве решений есть ошибки — исправьте перед публикацией", 409);
+        }
       }
       const category = body.category === undefined ? a.category : body.category;
       if (a.article_type === "troubleshooting" && category === null) throw validation("Выберите категорию ошибки", "category");
@@ -444,15 +477,40 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
       // правки черновика версий не создают. Упрощение: снимков и истории версий в прототипе нет.
       const changed = title.trim() !== a.title || content !== a.content || category !== a.category;
       const wasPublished = a.is_published;
+      const published = body.is_published ?? a.is_published;
+      const known = this.revisions.some((r) => r.article_id === a.id);
+      // Новая версия — правка опубликованной или повторная публикация с правками; первая публикация — v1.
+      const next = !known ? 1 : (wasPublished || published) && changed ? a.version + 1 : a.version;
       Object.assign(a, {
         title: title.trim(),
         content,
         category,
-        is_published: body.is_published ?? a.is_published,
-        version: wasPublished && changed ? a.version + 1 : a.version,
-        updated_at: new Date().toISOString(),
+        is_published: published,
+        version: next,
+        updated_at: this.clock().toISOString(),
       });
+      if (published && !this.revisions.some((r) => r.article_id === a.id && r.version === next)) {
+        this.revisions.push(this.snapshot(a, a.updated_at));
+      }
       return a;
+    });
+  }
+
+  listKnowledgeArticleRevisions(articleId: number): Promise<KnowledgeArticleRevisionSummary[]> {
+    return this.call(() => {
+      this.article(articleId);
+      return this.revisions
+        .filter((r) => r.article_id === articleId)
+        .sort((a, b) => b.version - a.version)
+        .map(({ version, title, published_at }) => ({ version, title, published_at }));
+    });
+  }
+
+  getKnowledgeArticleRevision(articleId: number, version: number): Promise<KnowledgeArticleRevision> {
+    return this.call(() => {
+      const r = this.revisions.find((x) => x.article_id === articleId && x.version === version);
+      if (!r) throw new ApiError("NOT_FOUND", "Версия не найдена", 404);
+      return r;
     });
   }
 
@@ -471,8 +529,9 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
 
   createDecisionTreeNode(articleId: number, body: DecisionTreeNodeCreateRequest): Promise<DecisionTreeNode> {
     return this.call(() => {
-      this.article(articleId);
+      this.editableTree(articleId);
       if (!body.question_text.trim()) throw validation("Введите текст шага", "question_text");
+      this.checkNode(articleId, body, null);
       const created: DecisionTreeNode = { ...clone(body), id: this.nextId++, article_id: articleId };
       this.treeNodes.push(created);
       return created;
@@ -483,7 +542,9 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
     return this.call(() => {
       const n = this.treeNodes.find((x) => x.id === nodeId);
       if (!n) throw new ApiError("NOT_FOUND", "Шаг не найден", 404);
+      this.editableTree(n.article_id);
       if (!body.question_text.trim()) throw validation("Введите текст шага", "question_text");
+      this.checkNode(n.article_id, body, n.id);
       Object.assign(n, clone(body));
       return n;
     });
@@ -491,7 +552,13 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
 
   deleteDecisionTreeNode(nodeId: number): Promise<void> {
     return this.call(() => {
-      this.treeNodes = this.treeNodes.filter((n) => n.id !== nodeId);
+      const n = this.treeNodes.find((x) => x.id === nodeId);
+      if (!n) return;
+      this.editableTree(n.article_id);
+      if (this.treeNodes.some((x) => (x.options ?? []).some((o) => o.next_node_id === nodeId))) {
+        throw new ApiError("DECISION_TREE_NODE_REFERENCED", "На шаг ссылаются варианты других шагов", 409);
+      }
+      this.treeNodes = this.treeNodes.filter((x) => x.id !== nodeId);
     });
   }
 
@@ -503,6 +570,9 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
 
   createNotification(body: NotificationCreateRequest): Promise<Notification> {
     return this.call(() => {
+      if (body.type === "maintenance") {
+        throw new ApiError("NOTIFICATION_TYPE_RESERVED", "Напоминания о ТО создаёт система", 422, "type");
+      }
       if (!body.message.trim()) throw validation("Введите текст уведомления", "message");
       if (body.message.length > 500) throw validation("Не длиннее 500 символов", "message");
       const created: Notification = {
@@ -518,8 +588,40 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
     });
   }
 
-  listPublishedNotifications(): Promise<Notification[]> {
-    return this.call(() => this.notifications);
+  /** Аудитория — как backend (ADR 0019): все клиенты или владельцы модели; у прошивки — с более ранней версией. */
+  previewNotificationAudience(body: NotificationCreateRequest): Promise<NotificationAudiencePreview> {
+    return this.call(() => {
+      const recipients = this.audience(body.target_vehicle_model_id ?? null);
+      // В прототипе у каждого второго клиента — два устройства.
+      return { recipients, devices: recipients + Math.floor(recipients / 2) };
+    });
+  }
+
+  listPublishedNotifications(query: ListPublishedQuery = {}): Promise<PublishedNotificationList> {
+    return this.call(() => {
+      const items = this.notifications
+        .filter(
+          (n) =>
+            n.type !== "maintenance" &&
+            (query.type === undefined || n.type === query.type) &&
+            (query.target_vehicle_model_id === undefined || n.target_vehicle_model_id === query.target_vehicle_model_id),
+        )
+        .map((n) => {
+          const recipients = this.audience(n.target_vehicle_model_id ?? null);
+          const delivered = Math.round(recipients * 0.8);
+          return {
+            ...n,
+            stats: {
+              recipients,
+              delivered,
+              failed: recipients - delivered,
+              opened: Math.round(delivered * 0.5),
+              read: Math.round(recipients * 0.6),
+            },
+          };
+        });
+      return slice(items, query);
+    });
   }
 
   listFirmwareReleases(query: { vehicle_model_id?: number } = {}): Promise<FirmwareRelease[]> {
@@ -553,13 +655,81 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
     });
   }
 
+  // ---------- Админ: пользователи ----------
+
+  listUsers(query: ListUsersQuery = {}): Promise<UserList> {
+    return this.call(() => {
+      const needle = query.search?.trim();
+      const items = this.users
+        .filter(
+          (u) =>
+            (query.role === undefined || u.role === query.role) &&
+            (query.is_active === undefined || u.is_active === query.is_active) &&
+            (!needle || (u.phone ?? "").includes(needle)),
+        )
+        .sort((a, b) => a.id - b.id);
+      return slice(items, query);
+    });
+  }
+
+  getUser(userId: number): Promise<UserPublic> {
+    return this.call(() => this.user(userId));
+  }
+
+  createStaffUser(body: StaffUserCreateRequest): Promise<UserPublic> {
+    return this.call(() => {
+      if (!/^\+[1-9]\d{7,14}$/.test(body.phone)) throw validation("Телефон — в формате +375XXXXXXXXX", "phone");
+      if (body.password.length < 12 || body.password.length > 128) throw validation("Пароль — от 12 до 128 символов", "password");
+      if (this.users.some((u) => u.phone === body.phone)) {
+        throw new ApiError("PHONE_ALREADY_REGISTERED", "Телефон уже зарегистрирован", 409);
+      }
+      const created: UserPublic = {
+        id: this.nextId++,
+        phone: body.phone,
+        role: body.role,
+        is_active: true,
+        telegram_id: null,
+        created_at: this.clock().toISOString(),
+      };
+      this.users.push(created);
+      return created;
+    });
+  }
+
+  updateUser(userId: number, body: UserUpdateRequest): Promise<UserPublic> {
+    return this.call(() => {
+      const u = this.user(userId);
+      if (body.role != null && body.role !== u.role && u.role === "client") {
+        throw new ApiError("ROLE_CHANGE_NOT_ALLOWED", "Смена роли клиента не поддерживается", 409);
+      }
+      const role = body.role ?? u.role;
+      const active = body.is_active ?? u.is_active;
+      const admins = this.users.filter((x) => x.role === "admin" && x.is_active);
+      if (u.role === "admin" && u.is_active && !(role === "admin" && active) && admins.length === 1) {
+        throw new ApiError("LAST_ADMIN", "Нельзя понизить или заблокировать последнего администратора", 409);
+      }
+      Object.assign(u, { role, is_active: active });
+      return u;
+    });
+  }
+
+  resetUserPassword(userId: number, password: string): Promise<void> {
+    return this.call(() => {
+      const u = this.user(userId);
+      if (u.role === "client") throw new ApiError("PASSWORD_NOT_ALLOWED", "У клиента нет пароля", 409);
+      if (password.length < 12 || password.length > 128) throw validation("Пароль — от 12 до 128 символов", "password");
+    });
+  }
+
   // ---------- Админ: аналитика ----------
   // В прототипе — детерминированные значения, пропорциональные длине периода (не из тикетов фикстур).
   // computed_at — витрина «обновлена» несколько минут назад (ADR 0020 п. 3).
 
-  getTicketResolutionStats(range: DateRange): Promise<TicketResolutionStats> {
+  getTicketResolutionStats(query: AnalyticsQuery): Promise<TicketResolutionStats> {
     return this.call(() => {
-      const days = this.days(range);
+      const { date_from, date_to } = query;
+      const range = { date_from, date_to };
+      const days = this.days(range) * this.share(query);
       const created = this.scenario === "empty" ? 0 : Math.round(days * 4.3);
       const resolved = Math.round(created * 0.9);
       return {
@@ -598,9 +768,11 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
     });
   }
 
-  getMaintenanceConversionStats(range: DateRange): Promise<MaintenanceConversionStats> {
+  getMaintenanceConversionStats(query: Omit<AnalyticsQuery, "category">): Promise<MaintenanceConversionStats> {
     return this.call(() => {
-      const days = this.days(range);
+      const { date_from, date_to } = query;
+      const range = { date_from, date_to };
+      const days = this.days(range) * this.share(query);
       const empty = this.scenario === "empty";
       const tickets = empty ? 0 : Math.round(days * 4.3);
       const withMaintenance = Math.round(tickets * 0.18);
@@ -630,6 +802,59 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
   private emitTicket(t: TicketRecord): void {
     const ticket = this.toTicket(t);
     this.emit(t.seed.id, (h) => h.onTicket(clone(ticket)));
+  }
+
+  /** Фильтры дашборда в прототипе уменьшают объём пропорционально (модель — треть, категория — пятая часть). */
+  private share(query: Partial<AnalyticsQuery>): number {
+    return (query.vehicle_model_id === undefined ? 1 : 1 / 3) * (query.category === undefined ? 1 : 1 / 5);
+  }
+
+  private user(userId: number): UserPublic {
+    const u = this.users.find((x) => x.id === userId);
+    if (!u) throw new ApiError("USER_NOT_FOUND", "Пользователь не найден", 404);
+    return u;
+  }
+
+  /** Клиенты-получатели: владельцы авто модели или все активные клиенты. */
+  private audience(modelId: number | null): number {
+    const owners =
+      modelId === null
+        ? this.users.filter((u) => u.role === "client" && u.is_active).map((u) => u.id)
+        : VEHICLES.filter((v) => v.modelId === modelId).map((v) => v.ownerId);
+    return new Set(owners).size;
+  }
+
+  private snapshot(a: KnowledgeArticle, publishedAt: string): KnowledgeArticleRevision {
+    return {
+      article_id: a.id,
+      version: a.version,
+      title: a.title,
+      published_at: publishedAt,
+      content: a.content ?? "",
+      category: a.category ?? null,
+      vehicle_model_id: a.vehicle_model_id ?? null,
+      firmware_release_id: a.firmware_release_id ?? null,
+      decision_tree: clone(this.treeNodes.filter((n) => n.article_id === a.id)),
+    };
+  }
+
+  /** Как backend (`_check_node`): корень единственный (409), переходы — только на шаги этой статьи (422). */
+  private checkNode(articleId: number, body: DecisionTreeNodeCreateRequest, nodeId: number | null): void {
+    const siblings = this.treeNodes.filter((n) => n.article_id === articleId);
+    if (body.is_root && siblings.some((n) => n.is_root && n.id !== nodeId)) {
+      throw new ApiError("DECISION_TREE_ROOT_EXISTS", "У дерева уже есть корень", 409, "is_root");
+    }
+    const known = new Set(siblings.map((n) => n.id));
+    if ((body.options ?? []).some((o) => o.next_node_id == null || !known.has(o.next_node_id))) {
+      throw new ApiError("INVALID_NEXT_NODE", "Вариант ведёт к шагу не из этого дерева", 422, "options");
+    }
+  }
+
+  /** Дерево опубликованной статьи не меняется (`409 ARTICLE_PUBLISHED`, ADR 0018) — сначала снять с публикации. */
+  private editableTree(articleId: number): KnowledgeArticle {
+    const a = this.article(articleId);
+    if (a.is_published) throw new ApiError("ARTICLE_PUBLISHED", "Дерево опубликованной статьи не меняется", 409);
+    return a;
   }
 
   private computedAt(): string {
@@ -698,8 +923,8 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
 
   /**
    * Проверка дерева — правила backend (ADR 0018 п. 3–4): финал — эскалация или шаг без вариантов;
-   * тупик — шаг, из которого финал недостижим (в т. ч. цикл). Упрощение прототипа: вариант без
-   * перехода (null) допускается в форме и считается тупиковым — backend отклоняет его сразу (422).
+   * тупик — шаг, из которого финал недостижим (в т. ч. цикл). Вариант без перехода и второй корень
+   * отклоняются ещё при сохранении шага (`checkNode`), здесь остаются проверки дерева целиком.
    */
   private validateTree(articleId: number): DecisionTreeValidationResult {
     const nodes = this.treeNodes.filter((n) => n.article_id === articleId);

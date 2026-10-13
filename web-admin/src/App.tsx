@@ -1,23 +1,27 @@
-// Админ-панель (Глава 8, прототип; ADR 0012): конструктор регламентов ТО, конструктор статей базы знаний,
-// лента публикаций, дашборд аналитики (ТЗ 4.4, раздел 9). Раздел — в адресе: `#/regulations`.
+// Админ-панель (Глава 8 — прототип, ADR 0012; глава 22 — реальный API, ADR 0026): конструктор регламентов
+// ТО, конструктор статей базы знаний, публикации, пользователи и роли, дашборд аналитики (ТЗ 4.4,
+// раздел 9). Раздел — в адресе: `#/regulations`, карточка пользователя — `#/users/7`.
 import { useCallback, useMemo, useState } from 'react'
 import {
   Button,
   DemoPanel,
   ErrorState,
   LoadingState,
+  ThemeSelect,
   useAsync,
   useHashRoute,
   useTheme,
   type AdminRepository,
   type PrototypeRepository,
 } from '@ev-servicedesk/web-shared'
-import { ArticleEditor } from './articles/ArticleEditor.tsx'
+import { ArticleEditor, type Notice } from './articles/ArticleEditor.tsx'
 import { ArticleList } from './articles/ArticleList.tsx'
 import { Dashboard } from './dashboard/Dashboard.tsx'
 import { Publications } from './publications/Publications.tsx'
 import { Regulations } from './regulations/Regulations.tsx'
 import { AdminContext, type AdminEnv } from './repo.ts'
+import { UserCard } from './users/UserCard.tsx'
+import { Users } from './users/Users.tsx'
 
 const systemNow = () => new Date()
 
@@ -27,31 +31,41 @@ const SECTIONS = [
   { path: '/regulations', label: 'Регламенты ТО', hint: 'интервалы замены и пороги' },
   { path: '/articles', label: 'База знаний', hint: 'статьи и деревья неполадок' },
   { path: '/publications', label: 'Публикации', hint: 'рассылки: новости, акции, прошивки' },
+  { path: '/users', label: 'Пользователи', hint: 'сотрудники, роли, блокировка' },
 ] as const
 
 export default function App({
   repo,
   now = systemNow,
   demo,
+  onLogout,
 }: {
   repo: AdminRepository
   now?: () => Date
   /** Панель «Демо» — только для прототипа. */
   demo?: PrototypeRepository
+  /** Выход — только на реальном API (SessionGate). */
+  onLogout?: () => void
 }) {
-  const { theme, toggle } = useTheme('light')
+  // ADR 0026 п. 3: «как в системе» по умолчанию, выбор — в шапке.
+  const { theme, preference, setPreference, toggle } = useTheme('system')
   const [path, navigate] = useHashRoute()
   const [version, setVersion] = useState(0)
   const bump = useCallback(() => setVersion((v) => v + 1), [])
-  const models = useAsync(() => repo.searchVehicleModels(), [repo, version])
+  const base = useAsync(() => Promise.all([repo.searchVehicleModels(), repo.getCurrentUser()]), [repo, version])
 
   const env = useMemo<AdminEnv | null>(
-    () => (models.data ? { repo, now, models: models.data } : null),
-    [repo, now, models.data],
+    () => (base.data ? { repo, now, models: base.data[0], me: base.data[1] } : null),
+    [repo, now, base.data],
   )
 
   const section = SECTIONS.slice(1).find((s) => path.startsWith(s.path)) ?? SECTIONS[0]
   const article = /^\/articles\/(new|\d+)$/.exec(path)?.[1]
+  const userId = /^\/users\/(\d+)$/.exec(path)?.[1]
+  // Итог «Сохранить и опубликовать» новой статьи — для редактора по её адресу; на другом адресе сбрасывается.
+  const [flash, setFlash] = useState<{ id: string; notice: Notice } | null>(null)
+  // Ушли с адреса статьи — итог устарел (сброс во время рендера, без эффекта: React перерисует сразу).
+  if (flash && article !== flash.id) setFlash(null)
 
   return (
     <div className="grid min-h-screen grid-cols-[15rem_minmax(0,1fr)] bg-canvas text-fg">
@@ -86,16 +100,20 @@ export default function App({
         <header className="flex items-center justify-between gap-4 border-b border-border bg-surface px-8 py-3">
           <h1 className="text-h2">Админ-панель · {section.label}</h1>
           <div className="flex items-center gap-3">
+            {env && <span className="text-body-sm text-fg-muted">Администратор {env.me.phone ?? `#${env.me.id}`}</span>}
             {demo && <DemoPanel repo={demo} theme={theme} onToggleTheme={toggle} onChange={bump} />}
-            <Button variant="secondary" size="sm" onClick={toggle} aria-pressed={theme === 'dark'}>
-              {theme === 'dark' ? 'Светлая тема' : 'Тёмная тема'}
-            </Button>
+            <ThemeSelect value={preference} onChange={setPreference} />
+            {onLogout && (
+              <Button variant="secondary" size="sm" onClick={onLogout}>
+                Выйти
+              </Button>
+            )}
           </div>
         </header>
 
         <main className="mx-auto w-full max-w-400 p-8">
-          {models.error ? (
-            <ErrorState error={models.error} onRetry={models.reload} />
+          {base.error ? (
+            <ErrorState error={base.error} onRetry={base.reload} />
           ) : !env ? (
             <LoadingState />
           ) : (
@@ -111,13 +129,23 @@ export default function App({
                     <ArticleEditor
                       key={article}
                       articleId={article === 'new' ? null : Number(article)}
-                      onSaved={(id) => navigate(`/articles/${id}`)}
+                      initialNotice={flash?.id === article ? flash.notice : null}
+                      onSaved={(id, notice) => {
+                        if (notice) setFlash({ id: String(id), notice })
+                        navigate(`/articles/${id}`)
+                      }}
                       onBack={() => navigate('/articles')}
                     />
                   ) : (
                     <ArticleList onOpen={(id) => navigate(`/articles/${id}`)} onCreate={() => navigate('/articles/new')} />
                   ))}
                 {section.path === '/publications' && <Publications />}
+                {section.path === '/users' &&
+                  (userId ? (
+                    <UserCard key={userId} userId={Number(userId)} onBack={() => navigate('/users')} />
+                  ) : (
+                    <Users onOpen={(id) => navigate(`/users/${id}`)} />
+                  ))}
               </div>
             </AdminContext.Provider>
           )}

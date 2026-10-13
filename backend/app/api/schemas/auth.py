@@ -78,6 +78,10 @@ class StaffUserCreateRequest(BaseModel):
     password: Annotated[str, Field(min_length=12, max_length=128)]
 
 
+class UserPasswordResetRequest(BaseModel):
+    password: Annotated[str, Field(min_length=12, max_length=128)]
+
+
 class UserUpdateRequest(BaseModel):
     """minProperties: 1 контракта — пустое тело (или только null) отклоняется с 422."""
 
