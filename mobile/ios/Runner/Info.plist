@@ -72,7 +72,13 @@
 		<true/>
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Подключение к локальному серверу EV-ServiceDesk при проверке push-уведомлений.</string>
+	<string>Подключение к локальному серверу EV-ServiceDesk при проверке приложения.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Фото и видео неполадки для обращения в поддержку.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Выбор фото и видео неполадки для обращения в поддержку.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Звук при съёмке видео неполадки для обращения в поддержку.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>remote-notification</string>

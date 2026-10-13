@@ -16,7 +16,7 @@ Future<void> main() async {
       body: Center(child: Text('Не заданы: ${config.missing.join(', ')}\nСм. docs/NOTIFICATIONS_E2E.md')),
     );
   } else {
-    final channel = await FirebasePushChannel.init(config);
+    final channel = await FirebasePushChannel.init(config.firebase, systemBannerInForeground: true);
     home = PushDebugScreen(channel: channel, api: PushDebugApi(config));
   }
   runApp(MaterialApp(title: 'EV-ServiceDesk push', theme: evTheme(Brightness.light), home: home));

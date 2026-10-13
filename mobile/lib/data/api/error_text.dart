@@ -36,6 +36,16 @@ String errorText(String code, {Map<String, Object?>? details, int? retryAfterSec
       return 'Пробег не может быть меньше текущего. Если ошиблись при вводе — обратитесь в сервисный центр';
     case 'TICKET_RESOLVED':
       return 'Обращение уже решено — создайте новое';
+    case 'ATTACHMENT_TYPE_NOT_ALLOWED':
+      return 'Этот формат файла не подходит. Прикрепите фото (JPEG, PNG, HEIC) или видео (MP4, MOV)';
+    case 'ATTACHMENT_TOO_LARGE':
+      return 'Файл слишком большой: фото — до 20 МБ, видео — до 200 МБ';
+    case 'TOO_MANY_ATTACHMENTS':
+      return 'Можно прикрепить не больше 10 файлов';
+    case 'ATTACHMENT_NOT_FOUND':
+    case 'ATTACHMENT_ALREADY_USED':
+    case 'UPLOAD_FAILED':
+      return 'Не удалось загрузить файл. Прикрепите его ещё раз';
     case 'NOT_FOUND':
       return 'Данные не найдены — возможно, они были удалены';
     case 'VALIDATION_ERROR':

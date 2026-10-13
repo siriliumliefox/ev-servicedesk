@@ -2,7 +2,7 @@
 // описание подставляется из дерева решений / карточки агрегата; модель и прошивка прикрепляются сами.
 // Запись на замену/ТО из карточки агрегата — та же форма (глава 9): пожелание по времени уходит в description,
 // дату и время предлагает инженер в чате (полей визита в контракте API v1 нет).
-// Фото/видео — POST /uploads/presign (глава 15); в прототипе вложение имитируется.
+// Фото/видео — загрузка сразу после выбора (presign → S3, ADR 0024 п. 9); «Отправить» ждёт, пока загрузятся все.
 import 'package:flutter/material.dart';
 
 import '../../app/app_state.dart';
@@ -10,6 +10,7 @@ import '../../data/models.dart';
 import '../../theme/app_theme.dart';
 import '../../ui/info_note.dart';
 import '../../ui/states.dart';
+import 'attachment_tray.dart';
 import 'ticket_chat_screen.dart';
 
 /// Запись в сервис из карточки агрегата: заголовок формы и начало описания.
@@ -58,7 +59,8 @@ class _TicketCreateScreenState extends State<TicketCreateScreen> {
   late int? _vehicleId = widget.vehicleId;
   late TicketCategory? _category = widget.booking != null ? TicketCategory.maintenance : widget.category;
   late final _description = TextEditingController(text: widget.description);
-  final List<TicketAttachment> _attachments = [];
+  late final AttachmentUploads _uploads = AttachmentUploads(AppScope.read(context).repository)
+    ..addListener(() => setState(() {}));
   String? _visitTime;
   final _scroll = ScrollController();
   final _vehicleQuestion = GlobalKey();
@@ -74,6 +76,7 @@ class _TicketCreateScreenState extends State<TicketCreateScreen> {
   void dispose() {
     _description.dispose();
     _scroll.dispose();
+    _uploads.dispose();
     super.dispose();
   }
 
@@ -84,14 +87,6 @@ class _TicketCreateScreenState extends State<TicketCreateScreen> {
         _description.text.trim(),
         if (_visitTime != null) 'Когда удобно приехать: $_visitTime',
       ].join('\n');
-
-  void _attach(AttachmentType type) {
-    final n = _attachments.where((a) => a.fileType == type).length + 1;
-    setState(() => _attachments.add(TicketAttachment(
-          fileName: type == AttachmentType.photo ? 'Фото $n.jpg' : 'Видео $n.mp4',
-          fileType: type,
-        )));
-  }
 
   Future<void> _submit() async {
     final app = AppScope.read(context);
@@ -110,6 +105,11 @@ class _TicketCreateScreenState extends State<TicketCreateScreen> {
       return;
     }
     if (_descriptionError != null) return;
+    final blocker = uploadsBlocker(_uploads);
+    if (blocker != null) {
+      showErrorSnack(context, blocker);
+      return;
+    }
     setState(() => _busy = true);
     try {
       final ticket = await app.repository.createTicket(TicketDraft(
@@ -118,7 +118,7 @@ class _TicketCreateScreenState extends State<TicketCreateScreen> {
         description: _ticketDescription,
         sourceArticleId: widget.sourceArticleId,
         sourceNodeId: widget.sourceNodeId,
-        attachments: List.of(_attachments),
+        attachments: _uploads.uploaded,
       ));
       if (!mounted) return;
       // Заявка на запись — пояснение остаётся над перепиской; обычное обращение — короткое уведомление.
@@ -248,40 +248,11 @@ class _TicketCreateScreenState extends State<TicketCreateScreen> {
                 errorText: _descriptionError,
               ),
             ),
-            // Вложения в HTTP-режиме — глава 20 (presign → S3, ADR 0022 п. 5).
-            if (AppScope.of(context).repository.supportsAttachments) ...[
-              const SizedBox(height: EvSpace.s4),
-              Wrap(
-                spacing: EvSpace.s2,
-                runSpacing: EvSpace.s2,
-                children: [
-                  OutlinedButton.icon(
-                    onPressed: () => _attach(AttachmentType.photo),
-                    icon: const Icon(Icons.photo_camera_outlined),
-                    label: const Text('Фото'),
-                  ),
-                  OutlinedButton.icon(
-                    onPressed: () => _attach(AttachmentType.video),
-                    icon: const Icon(Icons.videocam_outlined),
-                    label: const Text('Видео'),
-                  ),
-                ],
-              ),
-            ],
-            if (_attachments.isNotEmpty) ...[
+            const SizedBox(height: EvSpace.s4),
+            Align(alignment: Alignment.centerLeft, child: AttachButton(uploads: _uploads)),
+            if (!_uploads.isEmpty) ...[
               const SizedBox(height: EvSpace.s3),
-              Wrap(
-                spacing: EvSpace.s2,
-                runSpacing: EvSpace.s2,
-                children: [
-                  for (final a in _attachments)
-                    InputChip(
-                      avatar: Icon(a.fileType == AttachmentType.photo ? Icons.image_outlined : Icons.movie_outlined),
-                      label: Text(a.fileName),
-                      onDeleted: () => setState(() => _attachments.remove(a)),
-                    ),
-                ],
-              ),
+              AttachmentTray(uploads: _uploads),
             ],
             const SizedBox(height: EvSpace.s6),
             InfoNote(

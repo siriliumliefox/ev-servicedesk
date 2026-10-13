@@ -3,6 +3,7 @@
 import 'api/error_text.dart';
 import 'models.dart';
 import 'repository.dart';
+import 'ticket_live.dart';
 
 /// Набор авто на аккаунте для ревью прототипа.
 enum AccountScenario {
@@ -61,9 +62,6 @@ class PrototypeRepository implements ClientRepository {
     if (offline) throw const OfflineException();
     return body();
   }
-
-  @override
-  bool get supportsAttachments => true;
 
   /// Сессию в прототипе сервер не завершает.
   @override
@@ -190,7 +188,7 @@ class PrototypeRepository implements ClientRepository {
   // ---------- Knowledge base ----------
 
   @override
-  Future<List<KnowledgeArticle>> articles(int vehicleModelId, ArticleType type) => _call(() => _articles
+  Future<List<KnowledgeArticle>> articles(int? vehicleModelId, ArticleType type) => _call(() => _articles
       .where((a) => a.articleType == type && (a.vehicleModelId == null || a.vehicleModelId == vehicleModelId))
       .toList());
 
@@ -229,7 +227,22 @@ class PrototypeRepository implements ClientRepository {
       });
 
   @override
-  Future<List<TicketMessage>> messages(int ticketId) => _call(() => List.unmodifiable(_messages[ticketId] ?? []));
+  Future<Ticket> ticket(int ticketId) => _call(() => _tickets.firstWhere((t) => t.id == ticketId));
+
+  @override
+  Future<List<TicketMessage>> messages(int ticketId, {int? afterId}) => _call(() => List.unmodifiable(
+      (_messages[ticketId] ?? const <TicketMessage>[]).where((m) => afterId == null || m.id > afterId)));
+
+  @override
+  Future<TicketAttachment> uploadAttachment(LocalAttachment file, {void Function(double progress)? onProgress}) =>
+      _call(() {
+        onProgress?.call(1);
+        return TicketAttachment(fileName: file.fileName, fileType: file.fileType);
+      });
+
+  /// Сервера нет — переписка не меняется сама.
+  @override
+  TicketLive watchTicket(int ticketId, {required int afterId}) => OfflineTicketLive();
 
   @override
   Future<TicketMessage> sendMessage(int ticketId, String body, {List<TicketAttachment> attachments = const []}) =>
@@ -258,6 +271,16 @@ class PrototypeRepository implements ClientRepository {
           for (final n in _notifications) n.id == notificationId && !n.isRead ? n.markRead(now) : n,
         ];
       });
+
+  @override
+  Future<void> markNotificationOpened(int notificationId, String pushToken) => markNotificationRead(notificationId);
+
+  /// Push в прототипе нет (без Firebase канал не создаётся).
+  @override
+  Future<void> registerPushToken(String token) async {}
+
+  @override
+  Future<void> unregisterPushToken(String token) async {}
 
   int get unreadCount => _notifications.where((n) => !n.isRead).length;
 
@@ -643,6 +666,7 @@ class PrototypeRepository implements ClientRepository {
             type: NotificationType.maintenance,
             message: 'Скоро замена салонного фильтра\nLi Auto L7: осталось около 1 100 км или 21 день.',
             createdAt: DateTime(2026, 10, 7, 9),
+            vehicleId: 101,
           ),
         ],
         NotificationItem(

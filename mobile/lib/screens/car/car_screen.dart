@@ -7,6 +7,7 @@ import '../../data/models.dart';
 import '../../theme/app_theme.dart';
 import '../../ui/status_badge.dart';
 import '../../ui/demo_panel.dart';
+import '../../ui/notification_bell.dart';
 import '../../ui/format.dart';
 import '../../ui/states.dart';
 import 'aggregate_scheme.dart';
@@ -27,6 +28,7 @@ class CarScreen extends StatelessWidget {
         titleSpacing: EvSpace.s2,
         title: vehicle == null ? const Text('Мой авто') : VehicleSwitcher(vehicle: vehicle),
         actions: [
+          const NotificationBell(),
           IconButton(
             key: const Key('open-profile'),
             tooltip: 'Профиль',

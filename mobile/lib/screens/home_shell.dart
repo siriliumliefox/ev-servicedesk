@@ -8,28 +8,22 @@ import 'learning/learning_screen.dart';
 import 'news/news_screen.dart';
 import 'support/support_screen.dart';
 
-class HomeShell extends StatefulWidget {
+/// Раздел — в AppState: его переключает и нажатие на push (ADR 0024 п. 4).
+class HomeShell extends StatelessWidget {
   const HomeShell({super.key});
-
-  @override
-  State<HomeShell> createState() => _HomeShellState();
-}
-
-class _HomeShellState extends State<HomeShell> {
-  EvSection _section = EvSection.car;
 
   @override
   Widget build(BuildContext context) {
     final app = AppScope.of(context);
     return Scaffold(
       body: IndexedStack(
-        index: _section.index,
+        index: app.section.index,
         children: const [CarScreen(), LearningScreen(), SupportScreen(), NewsScreen()],
       ),
       bottomNavigationBar: EvBottomNav(
-        current: _section,
-        onSelected: (s) => setState(() => _section = s),
-        badges: {EvSection.news: app.unreadNotifications},
+        current: app.section,
+        onSelected: app.selectSection,
+        badges: {EvSection.news: app.unreadNews},
       ),
     );
   }

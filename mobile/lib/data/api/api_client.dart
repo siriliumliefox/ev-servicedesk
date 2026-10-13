@@ -1,7 +1,7 @@
 // HTTP-транспорт клиента (ADR 0022): JSON, тайм-аут, ошибки контракта, сессия и обновление токенов.
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io' show IOException;
+import 'dart:io' show File, IOException;
 
 import 'package:http/http.dart' as http;
 
@@ -55,7 +55,8 @@ class ApiClient {
   Future<Object?> delete(String path) => send('DELETE', path);
 
   /// Запрос с авторизацией: на 401 — обновление токена и один повтор; повторный 401 завершает сессию.
-  Future<Object?> send(String method, String path, {Object? body, Map<String, Object?>? query, bool auth = true}) async {
+  Future<Object?> send(String method, String path,
+      {Object? body, Map<String, Object?>? query, bool auth = true}) async {
     if (!auth) return _decode(await _raw(method, path, body: body, query: query));
     var access = _access ?? await _refresh(null);
     var response = await _raw(method, path, body: body, query: query, access: access);
@@ -68,6 +69,59 @@ class ApiClient {
       }
     }
     return _decode(response);
+  }
+
+  /// Access-токен для WebSocket (первый кадр auth, ADR 0024 п. 8); stale — токен, отклонённый сервером (4401):
+  /// обновляется тем же единственным refresh, что и для HTTP.
+  Future<String> accessToken({String? stale}) async {
+    final current = _access;
+    if (stale == null && current != null) return current;
+    return _refresh(stale ?? current);
+  }
+
+  /// Адрес WebSocket того же backend: http → ws, https → wss.
+  Uri webSocketUrl(String path) => baseUrl.replace(
+        scheme: baseUrl.scheme == 'https' ? 'wss' : 'ws',
+        path: '${baseUrl.path}/v1$path',
+      );
+
+  /// PUT файла по presigned URL S3 (без авторизации API). Тайм-аут — от размера: не медленнее ~50 КБ/с.
+  Future<void> putFile(
+    Uri url,
+    File file, {
+    required String contentType,
+    required int length,
+    void Function(double progress)? onProgress,
+  }) async {
+    final request = http.StreamedRequest('PUT', url)
+      ..headers['Content-Type'] = contentType
+      ..contentLength = length;
+    var sent = 0;
+    file.openRead().listen(
+      (chunk) {
+        request.sink.add(chunk);
+        sent += chunk.length;
+        if (length > 0) onProgress?.call(sent / length);
+      },
+      onDone: request.sink.close,
+      onError: request.sink.addError,
+      cancelOnError: true,
+    );
+    final limit = timeout + Duration(seconds: length ~/ 50000);
+    final http.StreamedResponse response;
+    try {
+      response = await _http.send(request).timeout(limit);
+      await response.stream.drain<void>().timeout(timeout);
+    } on TimeoutException {
+      throw const OfflineException();
+    } on IOException {
+      throw const OfflineException();
+    } on http.ClientException {
+      throw const OfflineException();
+    }
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw ApiException('UPLOAD_FAILED', errorText('UPLOAD_FAILED'));
+    }
   }
 
   /// Один запрос refresh на все параллельные 401 (ADR 0022 п. 6): если access уже обновил другой запрос — берём его.
@@ -139,7 +193,8 @@ class ApiClient {
     var code = response.statusCode >= 500 ? 'SERVER_ERROR' : 'HTTP_${response.statusCode}';
     Map<String, Object?>? details;
     try {
-      final error = (jsonDecode(utf8.decode(response.bodyBytes)) as Map<String, Object?>)['error']! as Map<String, Object?>;
+      final error =
+          (jsonDecode(utf8.decode(response.bodyBytes)) as Map<String, Object?>)['error']! as Map<String, Object?>;
       code = error['code']! as String;
       details = error['details'] as Map<String, Object?>?;
     } on Object {

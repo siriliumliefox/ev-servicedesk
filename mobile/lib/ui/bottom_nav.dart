@@ -1,6 +1,6 @@
 // Нижняя навигация клиентского приложения (Глава 6; разделы — ТЗ раздел 9, Глава 7 / ADR 0011):
-// «Авто» / «Обучение» / «Поддержка» / «Новости». Неполадки и тикеты — в «Поддержке»,
-// уведомления — в «Новостях» (одна лента /notifications, счётчик непрочитанных на пункте).
+// «Авто» / «Обучение» / «Поддержка» / «Новости». Неполадки и тикеты — в «Поддержке», новости и акции — в «Новостях»
+// (счётчик непрочитанных на пункте); все уведомления — в центре уведомлений за колокольчиком в шапке (ADR 0024 п. 6).
 // Высота — size.bottom-nav (64), каждый пункт ≥ 44×44 (тест test/design_system_test.dart).
 import 'package:flutter/material.dart';
 
@@ -8,7 +8,7 @@ enum EvSection {
   car('Авто', Icons.directions_car_outlined, Icons.directions_car),
   learning('Обучение', Icons.school_outlined, Icons.school),
   support('Поддержка', Icons.support_agent_outlined, Icons.support_agent),
-  news('Новости', Icons.notifications_outlined, Icons.notifications);
+  news('Новости', Icons.newspaper_outlined, Icons.newspaper);
 
   const EvSection(this.label, this.icon, this.selectedIcon);
 
@@ -23,7 +23,7 @@ class EvBottomNav extends StatelessWidget {
   final EvSection current;
   final ValueChanged<EvSection> onSelected;
 
-  /// Счётчики на пунктах (непрочитанные уведомления).
+  /// Счётчики на пунктах (непрочитанные новости и акции).
   final Map<EvSection, int> badges;
 
   @override
