@@ -34,6 +34,13 @@ async function goTo(path: string) {
   })
 }
 
+/** Бейдж версии у перечитанной статьи: форму ищем заново на каждой попытке — после сохранения она монтируется заново. */
+async function expectArticleVersion(version: string) {
+  await vi.waitFor(() => expect(within(screen.getByRole('form', { name: /^Статья:/ })).getByText(version)).toBeInTheDocument(), {
+    timeout: 3000,
+  })
+}
+
 describe('навигация и тема', () => {
   it('светлая тема по умолчанию; разделы — ссылки с aria-current', async () => {
     const { click } = setup()
@@ -513,7 +520,7 @@ describe('конструктор статей базы знаний', () => {
     await user.type(screen.getByLabelText('Текст статьи'), ' Ещё.')
     expect(screen.getByText(/сохранение выпустит версию 2 — клиенты увидят её сразу/)).toBeInTheDocument()
     await click(screen.getByRole('button', { name: 'Опубликовать изменения' }))
-    expect(await within(await screen.findByRole('form', { name: /^Статья:/ })).findByText('v2')).toBeInTheDocument()
+    await expectArticleVersion('v2')
   })
 
   it('история версий: список опубликованных и просмотр версии только для чтения', async () => {
@@ -524,7 +531,7 @@ describe('конструктор статей базы знаний', () => {
     await screen.findByRole('button', { name: 'Снять с публикации' })
     await user.type(screen.getByLabelText('Заголовок'), ' (обновлено)')
     await click(screen.getByRole('button', { name: 'Опубликовать изменения' }))
-    await within(await screen.findByRole('form', { name: /^Статья:/ })).findByText('v2')
+    await expectArticleVersion('v2')
     expect((await screen.findByText(/· действующая$/)).textContent).toMatch(/^v2 · /)
     await click(screen.getByRole('button', { name: 'Версия 1' }))
     const old = await screen.findByLabelText('Содержание версии 1')
