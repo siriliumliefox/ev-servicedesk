@@ -18,12 +18,14 @@ import {
   LoadingState,
   NOTIFICATION_TYPE_LABELS,
   PUBLICATION_TYPES,
+  Pager,
   Select,
   TextArea,
   TextField,
   formatDate,
   formatDateTime,
   formatInt,
+  plural,
   toIsoDate,
   useAsync,
   type NotificationAudiencePreview,
@@ -43,14 +45,6 @@ function composeMessage(subject: string, text: string): string {
 function splitMessage(message: string): { subject: string; text: string } {
   const [subject, ...rest] = message.split('\n')
   return { subject, text: rest.join('\n').trim() }
-}
-
-/** 1 клиент, 2 клиента, 5 клиентов. */
-function plural(n: number, one: string, few: string, many: string): string {
-  const mod10 = n % 10
-  const mod100 = n % 100
-  const word = mod10 === 1 && mod100 !== 11 ? one : mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14) ? few : many
-  return `${formatInt(n)} ${word}`
 }
 
 export function Publications() {
@@ -143,19 +137,7 @@ function Feed({ version }: { version: number }) {
               </li>
             ))}
           </ol>
-          {feed.data.meta.total_pages > 1 && (
-            <nav aria-label="Страницы ленты" className="flex items-center gap-3 text-body-sm">
-              <Button size="sm" variant="secondary" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
-                Новее
-              </Button>
-              <span>
-                Страница {feed.data.meta.page} из {feed.data.meta.total_pages}
-              </span>
-              <Button size="sm" variant="secondary" disabled={page >= feed.data.meta.total_pages} onClick={() => setPage((p) => p + 1)}>
-                Старее
-              </Button>
-            </nav>
-          )}
+          <Pager label="Страницы ленты" meta={feed.data.meta} onPage={setPage} prev="Новее" next="Старее" />
         </>
       )}
     </section>

@@ -36,6 +36,14 @@ export function formatRate(value: number | null | undefined): string {
   return value == null ? "—" : `${Math.round(value * 100)} %`;
 }
 
+/** Число со словом в нужной форме: plural(2, "шаг", "шага", "шагов") → «2 шага»; 11–14 — «много». */
+export function plural(n: number, one: string, few: string, many: string): string {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  const word = mod10 === 1 && mod100 !== 11 ? one : mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14) ? few : many;
+  return `${intFmt.format(n)} ${word}`;
+}
+
 /** Локальная дата в формате OpenAPI `date` (YYYY-MM-DD). */
 export function toIsoDate(date: Date): string {
   const y = date.getFullYear();

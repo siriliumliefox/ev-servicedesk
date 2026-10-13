@@ -38,6 +38,7 @@ from e2e_backend import (
     digits,
     register_client,
     staff_login,
+    write_private,
 )
 
 TABLE = Path(__file__).resolve().parents[2] / "docs" / "specs" / "engineer_web_flow.json"
@@ -116,14 +117,6 @@ def seed(
         "tickets": tickets,
         "e2e_sets": sets,
     }
-
-
-def write_private(path: Path, data: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-    os.chmod(path, 0o600)
 
 
 def main(argv: list[str] | None = None) -> int:

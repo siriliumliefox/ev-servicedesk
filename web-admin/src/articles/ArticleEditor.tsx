@@ -20,6 +20,7 @@ import {
   TextArea,
   TextField,
   errorText,
+  plural,
   useAsync,
   type ArticleType,
   type DecisionTreeNode,
@@ -33,13 +34,7 @@ import { Revisions } from './Revisions.tsx'
 
 const TITLE_MAX = 200
 
-/** 1 шаг, 2 шага, 5 шагов. */
-function stepsLabel(n: number): string {
-  const mod10 = n % 10
-  const mod100 = n % 100
-  const word = mod10 === 1 && mod100 !== 11 ? 'шаг' : mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14) ? 'шага' : 'шагов'
-  return `${n} ${word}`
-}
+const stepsOf = (n: number) => plural(n, 'шаг', 'шага', 'шагов')
 
 /** Где опубликованную статью увидит клиент (U-08: статью после публикации искали в «Публикациях»). */
 function publishedNotice(article: KnowledgeArticle, models: VehicleModel[]): string {
@@ -388,7 +383,7 @@ function ArticleForm({
           <p className="whitespace-pre-line text-body-sm text-fg-muted">{content || (troubleshooting ? 'Вступление' : 'Текст статьи')}</p>
           {troubleshooting && (
             <p className="text-caption text-fg-muted">
-              Дальше — вопросы дерева решений{hasTree && tree.data ? `: ${stepsLabel(tree.data.length)}` : ''}.
+              Дальше — вопросы дерева решений{hasTree && tree.data ? `: ${stepsOf(tree.data.length)}` : ''}.
             </p>
           )}
         </Card>
@@ -399,7 +394,7 @@ function ArticleForm({
 
   if (!hasTree) return editor
 
-  const tabLabel = (t: Tab) => (t === 'text' ? 'Текст статьи' : `Дерево решений${tree.data ? ` · ${stepsLabel(tree.data.length)}` : ''}`)
+  const tabLabel = (t: Tab) => (t === 'text' ? 'Текст статьи' : `Дерево решений${tree.data ? ` · ${stepsOf(tree.data.length)}` : ''}`)
   return (
     <div className="grid gap-4">
       <div role="tablist" aria-label="Разделы статьи" className="flex gap-1 border-b border-border" onKeyDown={onTabKey}>

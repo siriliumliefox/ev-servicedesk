@@ -44,6 +44,7 @@ import type {
 } from "../data/models.ts";
 import { TICKET_CATEGORIES } from "../data/models.ts";
 import { allowedTransitions } from "../data/ticketFlow.ts";
+import { checkNode, validateTree } from "./decisionTree.ts";
 import {
   ApiError,
   type AdminRepository,
@@ -466,7 +467,7 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
       const content = body.content ?? a.content ?? "";
       this.checkArticle(title, content);
       if (body.is_published && a.article_type === "troubleshooting") {
-        const result = this.validateTree(articleId);
+        const result = validateTree(this.nodesOf(articleId));
         if (!result.is_valid) {
           throw new ApiError("DECISION_TREE_INVALID", "В дереве решений есть ошибки — исправьте перед публикацией", 409);
         }
@@ -523,7 +524,7 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
   listDecisionTreeNodes(articleId: number): Promise<DecisionTreeNode[]> {
     return this.call(() => {
       this.article(articleId);
-      return this.treeNodes.filter((n) => n.article_id === articleId);
+      return this.nodesOf(articleId);
     });
   }
 
@@ -531,7 +532,7 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
     return this.call(() => {
       this.editableTree(articleId);
       if (!body.question_text.trim()) throw validation("Введите текст шага", "question_text");
-      this.checkNode(articleId, body, null);
+      checkNode(this.nodesOf(articleId), body, null);
       const created: DecisionTreeNode = { ...clone(body), id: this.nextId++, article_id: articleId };
       this.treeNodes.push(created);
       return created;
@@ -544,7 +545,7 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
       if (!n) throw new ApiError("NOT_FOUND", "Шаг не найден", 404);
       this.editableTree(n.article_id);
       if (!body.question_text.trim()) throw validation("Введите текст шага", "question_text");
-      this.checkNode(n.article_id, body, n.id);
+      checkNode(this.nodesOf(n.article_id), body, n.id);
       Object.assign(n, clone(body));
       return n;
     });
@@ -563,7 +564,7 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
   }
 
   validateDecisionTree(articleId: number): Promise<DecisionTreeValidationResult> {
-    return this.call(() => this.validateTree(articleId));
+    return this.call(() => validateTree(this.nodesOf(articleId)));
   }
 
   // ---------- Админ: публикации и прошивки ----------
@@ -834,20 +835,12 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
       category: a.category ?? null,
       vehicle_model_id: a.vehicle_model_id ?? null,
       firmware_release_id: a.firmware_release_id ?? null,
-      decision_tree: clone(this.treeNodes.filter((n) => n.article_id === a.id)),
+      decision_tree: clone(this.nodesOf(a.id)),
     };
   }
 
-  /** Как backend (`_check_node`): корень единственный (409), переходы — только на шаги этой статьи (422). */
-  private checkNode(articleId: number, body: DecisionTreeNodeCreateRequest, nodeId: number | null): void {
-    const siblings = this.treeNodes.filter((n) => n.article_id === articleId);
-    if (body.is_root && siblings.some((n) => n.is_root && n.id !== nodeId)) {
-      throw new ApiError("DECISION_TREE_ROOT_EXISTS", "У дерева уже есть корень", 409, "is_root");
-    }
-    const known = new Set(siblings.map((n) => n.id));
-    if ((body.options ?? []).some((o) => o.next_node_id == null || !known.has(o.next_node_id))) {
-      throw new ApiError("INVALID_NEXT_NODE", "Вариант ведёт к шагу не из этого дерева", 422, "options");
-    }
+  private nodesOf(articleId: number): DecisionTreeNode[] {
+    return this.treeNodes.filter((n) => n.article_id === articleId);
   }
 
   /** Дерево опубликованной статьи не меняется (`409 ARTICLE_PUBLISHED`, ADR 0018) — сначала снять с публикации. */
@@ -921,45 +914,6 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
     if (!content.trim()) throw validation("Введите текст статьи", "content");
   }
 
-  /**
-   * Проверка дерева — правила backend (ADR 0018 п. 3–4): финал — эскалация или шаг без вариантов;
-   * тупик — шаг, из которого финал недостижим (в т. ч. цикл). Вариант без перехода и второй корень
-   * отклоняются ещё при сохранении шага (`checkNode`), здесь остаются проверки дерева целиком.
-   */
-  private validateTree(articleId: number): DecisionTreeValidationResult {
-    const nodes = this.treeNodes.filter((n) => n.article_id === articleId);
-    if (nodes.length === 0) return { is_valid: false, issues: [{ problem: "NO_ROOT" }] };
-    const ids = new Set(nodes.map((n) => n.id));
-    const issues: DecisionTreeValidationResult["issues"] = [];
-    const roots = nodes.filter((n) => n.is_root);
-    if (roots.length === 0) issues.push({ problem: "NO_ROOT" });
-    if (roots.length > 1) for (const r of roots) issues.push({ node_id: r.id, problem: "MULTIPLE_ROOTS" });
-    const edges = new Map<number, number[]>();
-    for (const n of nodes) {
-      const targets = (n.options ?? []).map((o) => o.next_node_id).filter((t): t is number => t !== null);
-      if (targets.some((t) => !ids.has(t))) issues.push({ node_id: n.id, problem: "BROKEN_REFERENCE" });
-      edges.set(n.id, targets.filter((t) => ids.has(t)));
-    }
-    const reach = (start: number[], next: (id: number) => number[]) => {
-      const seen = new Set<number>();
-      const queue = [...start];
-      while (queue.length) {
-        const id = queue.shift()!;
-        if (seen.has(id)) continue;
-        seen.add(id);
-        queue.push(...next(id));
-      }
-      return seen;
-    };
-    const fromRoot = reach(roots.map((r) => r.id), (id) => edges.get(id) ?? []);
-    if (roots.length) for (const n of nodes) if (!fromRoot.has(n.id)) issues.push({ node_id: n.id, problem: "UNREACHABLE" });
-    const isFinal = (n: DecisionTreeNode) => n.is_escalation || (n.options ?? []).length === 0;
-    const incoming = (id: number) => nodes.filter((n) => edges.get(n.id)!.includes(id)).map((n) => n.id);
-    const leadsToFinal = reach(nodes.filter(isFinal).map((n) => n.id), incoming);
-    for (const n of nodes) if (!leadsToFinal.has(n.id)) issues.push({ node_id: n.id, problem: "DEAD_END" });
-    if (roots.length && !nodes.some((n) => n.is_escalation && fromRoot.has(n.id))) issues.push({ problem: "NO_ESCALATION" });
-    return { is_valid: issues.length === 0, issues };
-  }
 
   private days(range: DateRange): number {
     const ms = Date.parse(range.date_to) - Date.parse(range.date_from);

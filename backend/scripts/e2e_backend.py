@@ -16,6 +16,7 @@ docs/openapi.yaml (tests/support/contract.py). Разовые задачи (CLI 
 """
 
 import argparse
+import json
 import os
 import secrets
 import shlex
@@ -116,6 +117,15 @@ class Client:
     refresh_token: str
     user_id: int
     push_token: str
+
+
+def write_private(path: Path, data: dict[str, Any]) -> None:
+    """Данные E2E с паролями и токенами — файл 0600 (на экран не выводятся)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    os.chmod(path, 0o600)
 
 
 # ---------- Шаги сценария: явные входы и результаты ----------
