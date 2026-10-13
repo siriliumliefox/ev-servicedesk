@@ -14,7 +14,7 @@ on:
   workflow_dispatch:   # ручной прогон — все проверки, без фильтра
     inputs:
       web_browsers:
-        description: "E2E веб-кабинета инженера: браузеры через пробел (chromium firefox webkit)"
+        description: "E2E веб-кабинета инженера и админ-панели: браузеры через пробел (chromium firefox webkit)"
         default: "chromium"
         type: string
 
@@ -83,7 +83,9 @@ jobs:
               - ".github/workflows/ci.yml"
             web_e2e:
               - "web-engineer/**"
+              - "web-admin/**"
               - "web-shared/**"
+              - "scripts/integration_stack.sh"
               - "package.json"
               - "package-lock.json"
               - ".github/workflows/web-e2e.yml"
@@ -128,8 +130,13 @@ jobs:
   web-e2e:
     needs: changes
     if: needs.changes.outputs.web_e2e == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [web-engineer, web-admin]
     uses: ./.github/workflows/web-e2e.yml
     with:
+      app: ${{ matrix.app }}
       browsers: ${{ inputs.web_browsers || 'chromium' }}
 
   docs:

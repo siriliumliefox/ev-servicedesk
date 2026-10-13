@@ -26,9 +26,9 @@ export function formatKm(value: number): string {
   return `${intFmt.format(value)} км`;
 }
 
-/** Часы с одним знаком: 1.25 → «1,3 ч»; null → «—». */
+/** Часы до 0,01, как в API (ADR 0020): 0.925 → «0,93 ч», 11 → «11 ч»; null → «—». Сверка с ручным расчётом. */
 export function formatHours(value: number | null | undefined): string {
-  return value == null ? "—" : `${value.toLocaleString("ru-RU", { maximumFractionDigits: 1 })} ч`;
+  return value == null ? "—" : `${value.toLocaleString("ru-RU", { maximumFractionDigits: 2 })} ч`;
 }
 
 /** Доля 0…1 → «23 %»; null → «—». */
