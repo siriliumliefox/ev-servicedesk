@@ -3,15 +3,20 @@
 # образа-кандидата, данные (seed: набор из 3 тикетов на каждый браузер — клиент создаёт не больше 10
 # тикетов в час) и Playwright: Chromium (как в CI), Firefox, WebKit (Safari). Стек удаляется при выходе.
 # Запуск: web-engineer/scripts/e2e.sh [аргументы playwright test, например --project=webkit]
+# E2E_BACKEND_IMAGE — готовый образ backend (CI: backend:integration); без него собирается backend:smoke.
 # Нужны: Docker, poetry-окружение backend, npm ci, npx playwright install chromium firefox webkit.
 
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-docker build -q -t backend:smoke "$ROOT/backend" >/dev/null
+IMAGE="${E2E_BACKEND_IMAGE:-}"
+if [ -z "$IMAGE" ]; then
+  IMAGE=backend:smoke
+  docker build -q -t "$IMAGE" "$ROOT/backend" >/dev/null
+fi
 # Переменные стека раскрывает внутренний bash — одинарные кавычки намеренно.
 # shellcheck disable=SC2016
-"$ROOT/scripts/integration_stack.sh" backend:smoke -- bash -c '
+"$ROOT/scripts/integration_stack.sh" "$IMAGE" -- bash -c '
   set -e
   ROOT="$1"; shift
   SEED="$(mktemp)"

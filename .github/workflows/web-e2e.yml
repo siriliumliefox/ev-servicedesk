@@ -5,10 +5,17 @@ name: web-e2e
 # `vite preview` с прокси на стек. Сценарии чек-листа: тикет в работу перетаскиванием → быстрый ответ
 # из базы знаний → «Решено» с клавиатуры, клиент получает события по WebSocket не позже 2 с; конкурентный
 # доступ — два инженера берут один тикет. Данные — backend/scripts/e2e_engineer.py seed.
-# Вызывается из ci.yml при изменениях web-engineer/, web-shared/ или backend/. WebKit и Firefox — локально.
+# Вызывается из ci.yml при изменениях web-engineer/, web-shared/ или backend/ — Chromium. Firefox и WebKit —
+# локально (web-engineer/scripts/e2e.sh) или ручным запуском ci.yml с web_browsers="chromium firefox webkit":
+# Firefox из Playwright не запускается на macOS 27 («Could not find profile folder»).
 
 on:
   workflow_call:
+    inputs:
+      browsers:
+        description: "Браузеры через пробел: chromium firefox webkit"
+        default: "chromium"
+        type: string
 
 jobs:
   playwright:
@@ -43,9 +50,15 @@ jobs:
 
       - run: npm ci
 
-      - name: Playwright Chromium
+      - name: Браузеры Playwright
         working-directory: web-engineer
-        run: npx playwright install --with-deps chromium
+        env:
+          BROWSERS: ${{ inputs.browsers || 'chromium' }}
+        run: |
+          [[ "$BROWSERS" =~ ^(chromium|firefox|webkit)( (chromium|firefox|webkit))*$ ]] || {
+            echo "browsers: только chromium, firefox, webkit через пробел, получено: '$BROWSERS'"; exit 1; }
+          read -ra list <<<"$BROWSERS"
+          npx playwright install --with-deps "${list[@]}"
 
       - uses: docker/setup-buildx-action@v3
 
@@ -58,11 +71,12 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Стек backend, данные кабинета и Playwright
-        run: >-
-          scripts/integration_stack.sh backend:integration --
-          bash -c 'SEED="$(mktemp)" &&
-          (cd backend && poetry run python scripts/e2e_engineer.py seed --out "$SEED" --e2e-sets 1) &&
-          cd web-engineer && E2E_ENGINEER_SEED="$SEED" npx playwright test --project=chromium'
+        env:
+          BROWSERS: ${{ inputs.browsers || 'chromium' }}
+          E2E_BACKEND_IMAGE: backend:integration
+        run: |
+          read -ra list <<<"$BROWSERS"
+          web-engineer/scripts/e2e.sh "${list[@]/#/--project=}"
 
       - uses: actions/upload-artifact@v4
         if: failure()

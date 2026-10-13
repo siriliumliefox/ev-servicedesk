@@ -12,6 +12,11 @@ on:
   push:
     branches: [develop, main]
   workflow_dispatch:   # ручной прогон — все проверки, без фильтра
+    inputs:
+      web_browsers:
+        description: "E2E веб-кабинета инженера: браузеры через пробел (chromium firefox webkit)"
+        default: "chromium"
+        type: string
 
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
@@ -124,6 +129,8 @@ jobs:
     needs: changes
     if: needs.changes.outputs.web_e2e == 'true'
     uses: ./.github/workflows/web-e2e.yml
+    with:
+      browsers: ${{ inputs.web_browsers || 'chromium' }}
 
   docs:
     needs: changes
