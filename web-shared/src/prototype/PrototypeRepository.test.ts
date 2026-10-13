@@ -63,14 +63,14 @@ describe("тикет: claim, статусы, сообщения", () => {
 
   it("claim чужого тикета — 409", async () => {
     const e = await apiError(engineer().claimTicket(1050));
-    expect([e.code, e.status]).toEqual(["CONFLICT", 409]);
+    expect([e.code, e.status]).toEqual(["TICKET_ALREADY_CLAIMED", 409]);
   });
 
-  it("статус чужого тикета — 403, недопустимый переход — 422", async () => {
+  it("статус чужого тикета — 403, недопустимый переход — 409 (как backend)", async () => {
     const repo = engineer();
     expect((await apiError(repo.updateTicketStatus(1050, "resolved"))).status).toBe(403);
     const e = await apiError(repo.updateTicketStatus(1042, "new"));
-    expect([e.code, e.field]).toEqual(["VALIDATION_ERROR", "status"]);
+    expect([e.code, e.status]).toEqual(["INVALID_STATUS_TRANSITION", 409]);
   });
 
   it("решение заполняет resolved_at, возврат в работу — очищает", async () => {
@@ -85,7 +85,40 @@ describe("тикет: claim, статусы, сообщения", () => {
     expect((await apiError(repo.createTicketMessage(1042, "  "))).status).toBe(422);
     const m = await repo.createTicketMessage(1042, "Проверьте APN");
     expect(m.author.id).toBe(ENGINEER_ID);
-    expect((await repo.listTicketMessages(1042)).items.at(-1)?.body).toBe("Проверьте APN");
+    expect((await repo.listTicketMessages(1042)).at(-1)?.body).toBe("Проверьте APN");
+    expect(await repo.listTicketMessages(1042, { after_id: m.id })).toEqual([]);
+    await repo.updateTicketStatus(1042, "resolved");
+    expect((await apiError(repo.createTicketMessage(1042, "Ещё"))).code).toBe("TICKET_RESOLVED");
+  });
+
+  it("события тикета: ready, затем свои сообщения и смена статуса", async () => {
+    const repo = engineer();
+    const events: string[] = [];
+    const stop = repo.watchTicket(1042, {
+      onReady: () => events.push("ready"),
+      onMessage: (m) => events.push(`message:${m.body}`),
+      onTicket: (t) => events.push(`ticket:${t.status}`),
+      onLost: () => events.push("lost"),
+    });
+    await Promise.resolve();
+    await repo.createTicketMessage(1042, "Проверьте APN");
+    await repo.updateTicketStatus(1042, "waiting_vendor");
+    await new Promise((r) => setTimeout(r, 0));
+    stop();
+    await repo.updateTicketStatus(1042, "in_progress");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(events).toEqual(["ready", "message:Проверьте APN", "ticket:waiting_vendor"]);
+  });
+
+  it("список: страницы и resolved_since (контракт 1.10.0)", async () => {
+    const repo = engineer();
+    const all = await repo.listTickets({ page_size: 100 });
+    const first = await repo.listTickets({ page_size: 2 });
+    expect(first.items).toEqual(all.items.slice(0, 2));
+    expect(first.meta.total_pages).toBe(Math.ceil(all.items.length / 2));
+    await repo.updateTicketStatus(1042, "resolved");
+    const since = await repo.listTickets({ resolved_since: NOW.toISOString() });
+    expect(since.items.map((t) => t.id)).toEqual([1042]);
   });
 
   it("контекст авто в карточке тикета", async () => {

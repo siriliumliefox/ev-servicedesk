@@ -2,25 +2,9 @@
 // (Error.message контракта — «для логов/поддержки, не для UI напрямую»).
 import type { ReactNode } from "react";
 import { Button } from "../components.tsx";
-import { ApiError } from "../data/repository.ts";
+import { errorText } from "../data/errors.ts";
 
-export function errorText(error: unknown): string {
-  if (error instanceof ApiError) {
-    switch (error.code) {
-      case "NETWORK":
-        return "Нет соединения с сервером. Проверьте сеть и повторите.";
-      case "FORBIDDEN":
-        return "Недостаточно прав для этого действия.";
-      case "CONFLICT":
-        return "Данные уже изменил другой пользователь. Обновите и повторите.";
-      case "NOT_FOUND":
-        return "Объект не найден — возможно, его удалили.";
-      case "VALIDATION_ERROR":
-        return error.message;
-    }
-  }
-  return "Что-то пошло не так. Повторите попытку.";
-}
+export { errorText };
 
 export function LoadingState({ label = "Загрузка…" }: { label?: string }) {
   return (

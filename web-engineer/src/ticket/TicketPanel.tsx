@@ -1,7 +1,9 @@
 // Карточка тикета справа от доски (ТЗ раздел 9): действия (claim, смена статуса), переписка с быстрыми
-// ответами из базы знаний, контекст авто клиента.
+// ответами из базы знаний, контекст авто клиента. Переписка и статус обновляются вживую (WebSocket,
+// ADR 0025 п. 6); тикет ушёл к другому инженеру — карточка только для чтения и закрывается (п. 10).
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import {
+  ApiError,
   Badge,
   Button,
   ErrorState,
@@ -12,16 +14,33 @@ import {
   TextArea,
   allowedTransitions,
   formatDateTime,
-  useAsync,
   type TicketDetail,
+  type TicketLiveState,
   type TicketMessage,
   type TicketStatus,
 } from '@ev-servicedesk/web-shared'
 import { SlaBadge } from '../board/SlaBadge.tsx'
 import { useEngineer } from '../repo.ts'
 import { assigneeLabel } from '../text.ts'
+import { Attachments } from './Attachments.tsx'
 import { QuickReplies } from './QuickReplies.tsx'
+import { useLiveTicket, type LostReason } from './useLiveTicket.ts'
 import { VehiclePanel } from './VehiclePanel.tsx'
+
+/** Через сколько закрывается карточка тикета, ушедшего к другому инженеру. */
+export const LOST_CLOSE_MS = 5000
+
+const LOST_TEXT: Record<LostReason, string> = {
+  claimed_by_other: 'Тикет уже взял в работу другой инженер.',
+  reassigned: 'Тикет переназначен другому инженеру.',
+  unavailable: 'Тикет больше вам недоступен.',
+}
+
+const LIVE_TEXT: Record<TicketLiveState, string> = {
+  connecting: 'Подключение…',
+  live: 'Обновляется вживую',
+  offline: 'Нет связи — переподключение…',
+}
 
 /** Подпись кнопки перехода в статус. */
 const ACTION_LABELS: Record<TicketStatus, string> = {
@@ -47,28 +66,41 @@ export function TicketPanel({
   onClose: () => void
 }) {
   const { repo, now, meId } = useEngineer()
-  const ticket = useAsync(() => repo.getTicket(ticketId), [repo, ticketId, version])
-  const messages = useAsync(() => repo.listTicketMessages(ticketId), [repo, ticketId, version])
+  const live = useLiveTicket(repo, ticketId, meId, version, onChanged)
   const [busy, setBusy] = useState(false)
   const [actionError, setActionError] = useState<unknown>(null)
   const [draft, setDraft] = useState('')
   const [showReplies, setShowReplies] = useState(false)
   const headingRef = useRef<HTMLHeadingElement>(null)
+  const expiredAt = useRef(0)
 
   // Новый тикет — фокус на заголовок карточки (клавиатура и скринридер; карточка монтируется по key).
   useEffect(() => {
     headingRef.current?.focus()
   }, [])
 
-  const run = async (action: () => Promise<unknown>, after?: () => void) => {
+  useEffect(() => {
+    if (!live.lost) return
+    const id = setTimeout(onClose, LOST_CLOSE_MS)
+    return () => clearTimeout(id)
+  }, [live.lost, onClose])
+
+  const run = async (action: () => Promise<unknown>, after?: (result: unknown) => void) => {
     setBusy(true)
     setActionError(null)
     try {
-      await action()
-      after?.()
+      const result = await action()
+      after?.(result)
       onChanged()
     } catch (e) {
-      setActionError(e)
+      if (e instanceof ApiError && e.code === 'TICKET_ALREADY_CLAIMED') {
+        live.markLost('claimed_by_other')
+        onChanged()
+      } else {
+        setActionError(e)
+        // Переход вне графа или тикет решён другим действием — показать актуальные данные.
+        if (e instanceof ApiError && e.status === 409) live.reload()
+      }
     } finally {
       setBusy(false)
     }
@@ -77,15 +109,27 @@ export function TicketPanel({
   const send = (text: string) =>
     run(
       () => repo.createTicketMessage(ticketId, text),
-      () => {
+      (message) => {
+        live.append(message as TicketMessage)
         setDraft('')
         setShowReplies(false)
       },
     )
 
+  const act = (action: () => Promise<TicketDetail>) => run(action, (t) => live.apply(t as TicketDetail))
+
+  // Ссылки на вложения живут 15 минут: перечитать карточку, но не чаще раза в 30 с.
+  const onExpired = () => {
+    if (Date.now() - expiredAt.current < 30_000) return
+    expiredAt.current = Date.now()
+    live.reload()
+  }
+
+  const ticket = { data: live.ticket, error: live.error, reload: live.reload }
   const t = ticket.data
-  const isMine = t?.assigned_engineer_id === meId
-  const canClaim = t != null && t.assigned_engineer_id == null && t.status !== 'resolved'
+  const readOnly = live.lost !== null
+  const isMine = !readOnly && t?.assigned_engineer_id === meId
+  const canClaim = !readOnly && t != null && t.assigned_engineer_id == null && t.status !== 'resolved'
   const model = t?.vehicle_context?.vehicle?.vehicle_model
   const modelName = model ? `${model.brand} ${model.model}` : null
 
@@ -108,6 +152,13 @@ export function TicketPanel({
               <SlaBadge ticket={t} now={now()} />
               <span>Создан {formatDateTime(t.created_at)}</span>
               <span>· Исполнитель: {assigneeLabel(t.assigned_engineer_id, meId)}</span>
+              <span className="flex items-center gap-1" aria-live="polite">
+                <span
+                  aria-hidden="true"
+                  className={`size-2 rounded-full ${live.live === 'live' ? 'bg-status-green-solid' : 'bg-status-unknown-solid'}`}
+                />
+                {LIVE_TEXT[live.live]}
+              </span>
             </div>
           )}
         </div>
@@ -115,6 +166,17 @@ export function TicketPanel({
           ✕
         </Button>
       </header>
+
+      {live.lost && (
+        <div role="alert" className="flex items-center justify-between gap-4 border-b border-border bg-status-yellow-bg px-6 py-3">
+          <p className="text-label text-status-yellow-fg">
+            {LOST_TEXT[live.lost]} Карточка доступна только для чтения и сейчас закроется.
+          </p>
+          <Button variant="secondary" size="sm" onClick={onClose}>
+            Закрыть
+          </Button>
+        </div>
+      )}
 
       {ticket.error ? (
         <div className="p-6">
@@ -126,7 +188,7 @@ export function TicketPanel({
         <>
           <div className="flex flex-wrap items-center gap-2 border-b border-border px-6 py-3">
             {canClaim && (
-              <Button disabled={busy} onClick={() => run(() => repo.claimTicket(ticketId))}>
+              <Button disabled={busy} onClick={() => act(() => repo.claimTicket(ticketId))}>
                 Взять в работу
               </Button>
             )}
@@ -136,12 +198,12 @@ export function TicketPanel({
                   key={s}
                   variant={s === 'resolved' ? 'primary' : 'secondary'}
                   disabled={busy}
-                  onClick={() => run(() => repo.updateTicketStatus(ticketId, s))}
+                  onClick={() => act(() => repo.updateTicketStatus(ticketId, s))}
                 >
                   {ACTION_LABELS[s]}
                 </Button>
               ))}
-            {!canClaim && !isMine && (
+            {!canClaim && !isMine && !readOnly && (
               <p className="text-body-sm text-fg-muted">
                 {t.status === 'resolved' ? 'Тикет решён.' : `Тикет ведёт ${assigneeLabel(t.assigned_engineer_id, meId)}.`} Действия
                 доступны назначенному инженеру.
@@ -155,14 +217,15 @@ export function TicketPanel({
               <ol className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-6 py-4">
                 <li className="rounded-md bg-surface-subtle p-3 text-body-sm">
                   <span className="text-label">Обращение: </span>
-                  {t.description}
+                  <span className="whitespace-pre-line">{t.description}</span>
+                  <Attachments items={t.attachments} onExpired={onExpired} />
                 </li>
-                {messages.error ? (
+                {live.messagesError ? (
                   <li>
-                    <ErrorState error={messages.error} onRetry={messages.reload} />
+                    <ErrorState error={live.messagesError} onRetry={live.reload} />
                   </li>
                 ) : (
-                  (messages.data?.items ?? []).map((m) => <Message key={m.id} message={m} meId={meId} />)
+                  live.messages.map((m) => <Message key={m.id} message={m} meId={meId} onExpired={onExpired} />)
                 )}
               </ol>
 
@@ -223,7 +286,7 @@ function replyHint(ticket: TicketDetail, meId: number): string | undefined {
   return `Тикет ведёт ${assigneeLabel(ticket.assigned_engineer_id, meId)} — ответить может только он`
 }
 
-function Message({ message, meId }: { message: TicketMessage; meId: number }) {
+function Message({ message, meId, onExpired }: { message: TicketMessage; meId: number; onExpired: () => void }) {
   const fromClient = message.author.role === 'client'
   const author = fromClient ? 'Клиент' : message.author.id === meId ? 'Вы' : `Инженер #${message.author.id}`
   return (
@@ -237,6 +300,7 @@ function Message({ message, meId }: { message: TicketMessage; meId: number }) {
           {author} · {formatDateTime(message.created_at)}
         </span>
         <span className="whitespace-pre-line">{message.body}</span>
+        <Attachments items={message.attachments} onExpired={onExpired} />
       </div>
     </li>
   )
