@@ -36,5 +36,7 @@ export type { HttpRepositoryOptions } from "./data/http/HttpEngineerRepository.t
 export { openTicketLive, webSocketUrl } from "./data/http/ticketLive.ts";
 export { StaffSessionGate, ThemeSelect } from "./ui/StaffSessionGate.tsx";
 export { ConfirmDialog } from "./ui/ConfirmDialog.tsx";
+export { Pager } from "./ui/Pager.tsx";
+export type { PagerProps } from "./ui/Pager.tsx";
 export type { StaffSessionGateProps } from "./ui/StaffSessionGate.tsx";
 export type { TicketLiveOptions, Visibility } from "./data/http/ticketLive.ts";

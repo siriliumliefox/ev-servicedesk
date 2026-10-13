@@ -36,8 +36,8 @@ from e2e_backend import (
     digits,
     register_client,
     staff_login,
+    write_private,
 )
-from e2e_engineer import write_private
 
 BACKEND = Path(__file__).resolve().parents[1]
 AGGREGATE = "cabin_filter"

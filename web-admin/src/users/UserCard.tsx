@@ -1,7 +1,7 @@
 // Карточка пользователя (глава 22, ADR 0026 п. 4–7): роль сотрудника (инженер ↔ администратор),
 // блокировка и разблокировка, сброс пароля, нерешённые тикеты инженера с переназначением. Своя учётная
 // запись — только просмотр (п. 6); анонимизированный — «Данные удалены», без действий.
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import {
   Button,
   Card,
@@ -17,8 +17,11 @@ import {
   fetchAllPages,
   formatDate,
   formatDateTime,
+  plural,
   useAsync,
+  type AdminRepository,
   type AsyncState,
+  type ButtonVariant,
   type Ticket,
   type UserPublic,
 } from '@ev-servicedesk/web-shared'
@@ -27,22 +30,29 @@ import { passwordProblem } from './password.ts'
 import { PasswordInput, PasswordReveal } from './PasswordParts.tsx'
 import { UserStatus } from './Users.tsx'
 
-type Pending = { kind: 'block' | 'unblock' } | { kind: 'role'; role: 'engineer' | 'admin' } | { kind: 'password' }
-
-const PAGE = 100
-
-/** Нерешённые тикеты, назначенные инженеру (`assigned_engineer_id`), — все страницы. */
-async function openTicketsOf(repo: ReturnType<typeof useAdmin>['repo'], engineerId: number): Promise<Ticket[]> {
-  const all = await fetchAllPages((page) => repo.listTickets({ assigned_engineer_id: engineerId, page, page_size: PAGE }))
-  return all.filter((t) => t.status !== 'resolved')
+/** Подтверждаемое действие: текст диалога и запрос собираются при нажатии кнопки — один диалог на все. */
+interface Confirmation {
+  title: string
+  body: ReactNode
+  label: string
+  variant?: ButtonVariant
+  act: () => Promise<unknown>
+  /** После успеха (например, показать новый пароль). */
+  done?: () => void
 }
 
-function ticketsLabel(n: number): string {
-  const mod10 = n % 10
-  const mod100 = n % 100
-  if (mod10 === 1 && mod100 !== 11) return `${n} нерешённый тикет`
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return `${n} нерешённых тикета`
-  return `${n} нерешённых тикетов`
+const PAGE = 100
+/** Нерешённый тикет с исполнителем — только эти статусы: в `new` тикет попадает лишь со снятием исполнителя. */
+const ASSIGNED_OPEN = ['in_progress', 'waiting_vendor'] as const
+
+/** Нерешённые тикеты инженера — без истории решённых: по запросу на статус, параллельно, по сроку SLA. */
+async function openTicketsOf(repo: AdminRepository, engineerId: number): Promise<Ticket[]> {
+  const lists = await Promise.all(
+    ASSIGNED_OPEN.map((status) =>
+      fetchAllPages((page) => repo.listTickets({ assigned_engineer_id: engineerId, status, page, page_size: PAGE })),
+    ),
+  )
+  return lists.flat().sort((a, b) => a.sla_due_at.localeCompare(b.sla_due_at))
 }
 
 export function UserCard({ userId, onBack }: { userId: number; onBack: () => void }) {
@@ -79,7 +89,7 @@ export function UserCard({ userId, onBack }: { userId: number; onBack: () => voi
 
 function UserActions({ user, openTickets, onChanged }: { user: UserPublic; openTickets: number; onChanged: () => void }) {
   const { repo, me } = useAdmin()
-  const [pending, setPending] = useState<Pending | null>(null)
+  const [pending, setPending] = useState<Confirmation | null>(null)
   const [role, setRole] = useState<'engineer' | 'admin'>(user.role === 'admin' ? 'admin' : 'engineer')
   const [password, setPassword] = useState('')
   const [problem, setProblem] = useState<string | null>(null)
@@ -91,48 +101,81 @@ function UserActions({ user, openTickets, onChanged }: { user: UserPublic; openT
   const deleted = user.phone === null
   const phone = user.phone ?? `#${user.id}`
   // Предупреждение о тикетах — при блокировке инженера и при смене его роли (ADR 0026 п. 7).
-  const ticketsWarning =
-    openTickets > 0
-      ? `У сотрудника ${ticketsLabel(openTickets)} — переназначьте ${openTickets === 1 ? 'его' : 'их'} в списке слева.`
-      : null
+  const ticketsWarning = openTickets > 0 && (
+    <p className="text-status-yellow-fg">
+      У сотрудника {plural(openTickets, 'нерешённый тикет', 'нерешённых тикета', 'нерешённых тикетов')} — переназначьте{' '}
+      {openTickets === 1 ? 'его' : 'их'} в списке слева.
+    </p>
+  )
 
-  const run = async (action: () => Promise<unknown>, after?: () => void) => {
+  const confirm = async ({ act, done }: Confirmation) => {
     setBusy(true)
     setError(null)
     try {
-      await action()
-      setPending(null)
-      after?.()
+      await act()
+      done?.()
       onChanged()
     } catch (e) {
       setError(e)
-      setPending(null)
     } finally {
+      setPending(null)
       setBusy(false)
     }
   }
 
-  const confirm = () => {
-    if (!pending) return
-    if (pending.kind === 'block') void run(() => repo.updateUser(user.id, { is_active: false }))
-    if (pending.kind === 'unblock') void run(() => repo.updateUser(user.id, { is_active: true }))
-    if (pending.kind === 'role') void run(() => repo.updateUser(user.id, { role: pending.role }))
-    if (pending.kind === 'password') {
-      const next = password
-      void run(
-        () => repo.resetUserPassword(user.id, next),
-        () => {
-          setRevealed(next)
-          setPassword('')
-        },
-      )
-    }
-  }
+  const block = (): Confirmation => ({
+    title: `Заблокировать ${phone}?`,
+    label: 'Заблокировать',
+    variant: 'danger',
+    body: (
+      <>
+        <p>Вход будет запрещён, все сессии и push-уведомления на устройствах — отключены.</p>
+        {ticketsWarning}
+      </>
+    ),
+    act: () => repo.updateUser(user.id, { is_active: false }),
+  })
+
+  const unblock = (): Confirmation => ({
+    title: `Разблокировать ${phone}?`,
+    label: 'Разблокировать',
+    body: <p>Пользователь снова сможет войти.</p>,
+    act: () => repo.updateUser(user.id, { is_active: true }),
+  })
+
+  const changeRole = (next: 'engineer' | 'admin'): Confirmation => ({
+    title: `Сделать ${phone} — ${USER_ROLE_LABELS[next].toLowerCase()}?`,
+    label: 'Сменить роль',
+    body: (
+      <>
+        <p>
+          {next === 'admin'
+            ? 'Администратор управляет регламентами, базой знаний, публикациями и пользователями; кабинет инженера ему недоступен.'
+            : 'Инженер работает с тикетами в кабинете инженера; админ-панель ему недоступна.'}
+        </p>
+        <p>Роль меняется сразу, без повторного входа.</p>
+        {next === 'admin' && ticketsWarning}
+      </>
+    ),
+    act: () => repo.updateUser(user.id, { role: next }),
+  })
+
+  const resetPassword = (next: string): Confirmation => ({
+    title: `Сбросить пароль ${phone}?`,
+    label: 'Сбросить пароль',
+    variant: 'danger',
+    body: <p>Прежний пароль перестанет действовать, сотрудник выйдет на всех устройствах и войдёт с новым паролем.</p>,
+    act: () => repo.resetUserPassword(user.id, next),
+    done: () => {
+      setRevealed(next)
+      setPassword('')
+    },
+  })
 
   const askPassword = () => {
     const tooShort = passwordProblem(password)
     setProblem(tooShort)
-    if (!tooShort) setPending({ kind: 'password' })
+    if (!tooShort) setPending(resetPassword(password))
   }
 
   return (
@@ -162,7 +205,7 @@ function UserActions({ user, openTickets, onChanged }: { user: UserPublic; openT
                   <option value="engineer">{USER_ROLE_LABELS.engineer}</option>
                   <option value="admin">{USER_ROLE_LABELS.admin}</option>
                 </Select>
-                <Button variant="secondary" disabled={busy || role === user.role} onClick={() => setPending({ kind: 'role', role })}>
+                <Button variant="secondary" disabled={busy || role === user.role} onClick={() => setPending(changeRole(role))}>
                   Сменить роль
                 </Button>
               </div>
@@ -194,7 +237,7 @@ function UserActions({ user, openTickets, onChanged }: { user: UserPublic; openT
                   Заблокированный не сможет войти; его сессии завершатся сразу. Данные и тикеты сохранятся.
                 </p>
                 <div>
-                  <Button variant="danger" disabled={busy} onClick={() => setPending({ kind: 'block' })}>
+                  <Button variant="danger" disabled={busy} onClick={() => setPending(block())}>
                     Заблокировать
                   </Button>
                 </div>
@@ -203,7 +246,7 @@ function UserActions({ user, openTickets, onChanged }: { user: UserPublic; openT
               <>
                 <p className="text-body-sm text-fg-muted">Разблокированный снова сможет войти; прежние сессии не вернутся.</p>
                 <div>
-                  <Button variant="secondary" disabled={busy} onClick={() => setPending({ kind: 'unblock' })}>
+                  <Button variant="secondary" disabled={busy} onClick={() => setPending(unblock())}>
                     Разблокировать
                   </Button>
                 </div>
@@ -215,37 +258,16 @@ function UserActions({ user, openTickets, onChanged }: { user: UserPublic; openT
 
       <InlineError error={error} />
 
-      {pending?.kind === 'block' && (
-        <ConfirmDialog title={`Заблокировать ${phone}?`} confirmLabel="Заблокировать" confirmVariant="danger" busy={busy} onConfirm={confirm} onCancel={() => setPending(null)}>
-          <p>Вход будет запрещён, все сессии и push-уведомления на устройствах — отключены.</p>
-          {ticketsWarning && <p className="text-status-yellow-fg">{ticketsWarning}</p>}
-        </ConfirmDialog>
-      )}
-      {pending?.kind === 'unblock' && (
-        <ConfirmDialog title={`Разблокировать ${phone}?`} confirmLabel="Разблокировать" busy={busy} onConfirm={confirm} onCancel={() => setPending(null)}>
-          <p>Пользователь снова сможет войти.</p>
-        </ConfirmDialog>
-      )}
-      {pending?.kind === 'role' && (
+      {pending && (
         <ConfirmDialog
-          title={`Сделать ${phone} — ${USER_ROLE_LABELS[pending.role].toLowerCase()}?`}
-          confirmLabel="Сменить роль"
+          title={pending.title}
+          confirmLabel={pending.label}
+          confirmVariant={pending.variant}
           busy={busy}
-          onConfirm={confirm}
+          onConfirm={() => void confirm(pending)}
           onCancel={() => setPending(null)}
         >
-          <p>
-            {pending.role === 'admin'
-              ? 'Администратор управляет регламентами, базой знаний, публикациями и пользователями; кабинет инженера ему недоступен.'
-              : 'Инженер работает с тикетами в кабинете инженера; админ-панель ему недоступна.'}
-          </p>
-          <p>Роль меняется сразу, без повторного входа.</p>
-          {pending.role === 'admin' && ticketsWarning && <p className="text-status-yellow-fg">{ticketsWarning}</p>}
-        </ConfirmDialog>
-      )}
-      {pending?.kind === 'password' && (
-        <ConfirmDialog title={`Сбросить пароль ${phone}?`} confirmLabel="Сбросить пароль" confirmVariant="danger" busy={busy} onConfirm={confirm} onCancel={() => setPending(null)}>
-          <p>Прежний пароль перестанет действовать, сотрудник выйдет на всех устройствах и войдёт с новым паролем.</p>
+          {pending.body}
         </ConfirmDialog>
       )}
     </Card>

@@ -27,7 +27,6 @@ import type {
   PublishedNotificationList,
   StaffUserCreateRequest,
   TicketDetail,
-  TicketList,
   TicketResolutionStats,
   UserList,
   UserPublic,
@@ -37,7 +36,6 @@ import type {
   AdminRepository,
   AnalyticsQuery,
   ListPublishedQuery,
-  ListTicketsQuery,
   ListUsersQuery,
 } from "../repository.ts";
 import { fetchAllPages } from "../paging.ts";
@@ -191,10 +189,6 @@ export class HttpAdminRepository extends HttpCommonRepository implements AdminRe
     return this.session.request((c) =>
       c.POST("/users/{userId}/password", { params: { path: { userId } }, body: { password } }),
     );
-  }
-
-  listTickets(query: ListTicketsQuery = {}): Promise<TicketList> {
-    return this.session.request((c) => c.GET("/tickets", { params: { query } }));
   }
 
   assignTicket(ticketId: number, engineerId: number | null): Promise<TicketDetail> {

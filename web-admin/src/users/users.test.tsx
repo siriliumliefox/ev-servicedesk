@@ -107,6 +107,15 @@ describe('карточка пользователя', () => {
     await vi.waitFor(() => expect(within(section).queryByText(`#${ticket.id}`)).not.toBeInTheDocument())
   })
 
+  it('нерешённые тикеты инженера — запросами по открытым статусам, без истории решённых', async () => {
+    const { repo } = setup(`/users/${ENGINEER_ID}`)
+    const listTickets = vi.spyOn(repo, 'listTickets')
+    await screen.findByRole('region', { name: 'Нерешённые тикеты сотрудника' })
+    await vi.waitFor(() => expect(listTickets).toHaveBeenCalled())
+    const statuses = listTickets.mock.calls.map(([query]) => query?.status)
+    expect(new Set(statuses)).toEqual(new Set(['in_progress', 'waiting_vendor']))
+  })
+
   it('роль инженер → администратор; последний администратор — понятная ошибка', async () => {
     const { user } = setup(`/users/${ENGINEER_ID}`)
     await user.selectOptions(await screen.findByLabelText('Роль сотрудника'), 'Администратор')

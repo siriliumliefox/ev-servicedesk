@@ -1,7 +1,8 @@
-// Общие операции сотрудника на реальном API (главы 21–22, ADR 0025 п. 6, ADR 0026 п. 2): профиль и
-// справочники. Кабинет инженера и админ-панель наследуют его — один способ ходить в API через `ApiSession`.
-import type { AggregateType, KnowledgeArticleList, UserPublic, VehicleModel } from "../models.ts";
-import type { CommonRepository, ListArticlesQuery } from "../repository.ts";
+// Общие операции сотрудника на реальном API (главы 21–22, ADR 0025 п. 6, ADR 0026 п. 2): профиль,
+// справочники и выборка тикетов. Кабинет инженера и админ-панель наследуют его — один способ ходить в API
+// через `ApiSession`.
+import type { AggregateType, KnowledgeArticleList, TicketList, UserPublic, VehicleModel } from "../models.ts";
+import type { CommonRepository, ListArticlesQuery, ListTicketsQuery } from "../repository.ts";
 import { fetchAllPages } from "../paging.ts";
 import type { ApiSession } from "./session.ts";
 
@@ -33,5 +34,10 @@ export class HttpCommonRepository implements CommonRepository {
 
   listKnowledgeArticles(query: ListArticlesQuery = {}): Promise<KnowledgeArticleList> {
     return this.session.request((c) => c.GET("/knowledge-articles", { params: { query } }));
+  }
+
+  /** Одна страница выборки: доска инженера, тикеты инженера в карточке пользователя админ-панели. */
+  listTickets(query: ListTicketsQuery = {}): Promise<TicketList> {
+    return this.session.request((c) => c.GET("/tickets", { params: { query } }));
   }
 }

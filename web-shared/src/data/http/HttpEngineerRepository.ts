@@ -1,10 +1,9 @@
 // Кабинет инженера на реальном API (глава 21, ADR 0025 п. 6): операции `EngineerRepository` через
 // `ApiSession` (Bearer, refresh, тексты ошибок по коду), события тикета — `openTicketLive`.
 // Общие операции — `HttpCommonRepository`; история сообщений выгружается всеми страницами.
-import type { MaintenanceRecordList, TicketDetail, TicketList, TicketMessage, TicketStatus } from "../models.ts";
+import type { MaintenanceRecordList, TicketDetail, TicketMessage, TicketStatus } from "../models.ts";
 import type {
   EngineerRepository,
-  ListTicketsQuery,
   PageQuery,
   TicketLiveHandlers,
 } from "../repository.ts";
@@ -24,10 +23,6 @@ export class HttpEngineerRepository extends HttpCommonRepository implements Engi
   constructor(session: ApiSession, options: HttpRepositoryOptions = {}) {
     super(session);
     this.options = options;
-  }
-
-  listTickets(query: ListTicketsQuery = {}): Promise<TicketList> {
-    return this.session.request((c) => c.GET("/tickets", { params: { query } }));
   }
 
   getTicket(ticketId: number): Promise<TicketDetail> {

@@ -11,6 +11,7 @@ import {
   ErrorState,
   InlineError,
   LoadingState,
+  Pager,
   Select,
   TextField,
   USER_ROLE_LABELS,
@@ -145,24 +146,7 @@ export function Users({ onOpen }: { onOpen: (id: number) => void }) {
                 </tbody>
               </table>
             </Card>
-            {data.data.meta.total_pages > 1 && (
-              <nav aria-label="Страницы" className="flex items-center gap-3 text-body-sm">
-                <Button size="sm" variant="secondary" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
-                  Назад
-                </Button>
-                <span>
-                  Страница {data.data.meta.page} из {data.data.meta.total_pages} · всего {data.data.meta.total_items}
-                </span>
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  disabled={page >= data.data.meta.total_pages}
-                  onClick={() => setPage((p) => p + 1)}
-                >
-                  Вперёд
-                </Button>
-              </nav>
-            )}
+            <Pager label="Страницы" meta={data.data.meta} onPage={setPage} />
           </>
         )}
       </section>
