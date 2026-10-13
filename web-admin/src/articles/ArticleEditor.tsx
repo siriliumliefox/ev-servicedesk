@@ -15,6 +15,8 @@ import {
   InlineError,
   LoadingState,
   Select,
+  TICKET_CATEGORIES,
+  TICKET_CATEGORY_LABELS,
   TextArea,
   TextField,
   errorText,
@@ -22,6 +24,7 @@ import {
   type ArticleType,
   type DecisionTreeNode,
   type KnowledgeArticle,
+  type TicketCategory,
   type VehicleModel,
 } from '@ev-servicedesk/web-shared'
 import { modelName, useAdmin } from '../repo.ts'
@@ -123,14 +126,21 @@ function ArticleForm({
   const [firmwareId, setFirmwareId] = useState<string>(article?.firmware_release_id?.toString() ?? '')
   const [title, setTitle] = useState(article?.title ?? '')
   const [content, setContent] = useState(article?.content ?? '')
+  // Категория ошибки = категория тикета; у «Устранения неполадок» обязательна (CATEGORY_REQUIRED).
+  const [category, setCategory] = useState<TicketCategory | ''>(article?.category ?? '')
+  const [noCategory, setNoCategory] = useState(false)
   const [error, setError] = useState<unknown>(null)
   const [busy, setBusy] = useState(false)
   const firmware = useAsync(
     () => (modelId ? repo.listFirmwareReleases({ vehicle_model_id: Number(modelId) }) : Promise.resolve([])),
     [repo, modelId],
   )
-  const dirty = !isNew && (title !== article.title || content !== (article.content ?? ''))
   const troubleshooting = (article?.article_type ?? type) === 'troubleshooting'
+  const dirty =
+    !isNew &&
+    (title !== article.title || content !== (article.content ?? '') || (troubleshooting && category !== (article.category ?? '')))
+  /** Поля правки: категория — только у «Устранения неполадок». */
+  const changes = () => ({ title, content, ...(troubleshooting && category ? { category } : {}) })
   const hasTree = !isNew && troubleshooting
   const [tab, setTab] = useState<Tab>('text')
   const [treeVersion, setTreeVersion] = useState(0)
@@ -140,7 +150,15 @@ function ArticleForm({
   )
   const tabsId = useId()
 
+  /** Категория не выбрана — подсказка у поля, запрос не уходит. */
+  const missingCategory = () => {
+    const missing = troubleshooting && !category
+    setNoCategory(missing)
+    return missing
+  }
+
   const run = async (action: () => Promise<number>, next?: Notice) => {
+    if (missingCategory()) return
     setBusy(true)
     setError(null)
     try {
@@ -158,11 +176,12 @@ function ArticleForm({
       content,
       vehicle_model_id: modelId ? Number(modelId) : null,
       firmware_release_id: firmwareId ? Number(firmwareId) : null,
+      ...(troubleshooting && category ? { category } : {}),
     })
 
   const save = (e?: FormEvent) => {
     e?.preventDefault()
-    return run(async () => (isNew ? (await create()).id : (await repo.updateKnowledgeArticle(article.id, { title, content })).id))
+    return run(async () => (isNew ? (await create()).id : (await repo.updateKnowledgeArticle(article.id, changes())).id))
   }
 
   /**
@@ -170,6 +189,7 @@ function ArticleForm({
    * не прошла — открываем черновик с причиной (созданное не теряется).
    */
   const createAndPublish = async () => {
+    if (missingCategory()) return
     setBusy(true)
     setError(null)
     let created: KnowledgeArticle
@@ -194,7 +214,7 @@ function ArticleForm({
         if (article!.is_published) {
           await repo.unpublishKnowledgeArticle(article!.id)
         } else {
-          await repo.updateKnowledgeArticle(article!.id, { title, content, is_published: true })
+          await repo.updateKnowledgeArticle(article!.id, { ...changes(), is_published: true })
         }
         return article!.id
       },
@@ -204,6 +224,26 @@ function ArticleForm({
     )
 
   const published = !isNew && article.is_published
+
+  const categorySelect = (
+    <Select
+      label="Категория ошибки"
+      hint="Как категория тикета: по ней клиент находит статью в «Неполадках»"
+      error={noCategory ? 'Выберите категорию ошибки' : undefined}
+      value={category}
+      onChange={(e) => {
+        setCategory(e.target.value as TicketCategory | '')
+        setNoCategory(false)
+      }}
+    >
+      <option value="">— выберите —</option>
+      {TICKET_CATEGORIES.map((c) => (
+        <option key={c} value={c}>
+          {TICKET_CATEGORY_LABELS[c]}
+        </option>
+      ))}
+    </Select>
+  )
 
   /** Вкладки — по шаблону WAI-ARIA Tabs: стрелки, Home/End. */
   const onTabKey = (e: KeyboardEvent) => {
@@ -236,7 +276,7 @@ function ArticleForm({
           </div>
 
           {isNew ? (
-            <div className="grid grid-cols-3 gap-4">
+            <div className={`grid gap-4 ${troubleshooting ? 'grid-cols-4' : 'grid-cols-3'}`}>
               <Select label="Тип" value={type} onChange={(e) => setType(e.target.value as ArticleType)}>
                 {(['guide', 'troubleshooting'] as const).map((t) => (
                   <option key={t} value={t}>
@@ -273,6 +313,7 @@ function ArticleForm({
                   </option>
                 ))}
               </Select>
+              {troubleshooting && categorySelect}
             </div>
           ) : (
             <p className="text-body-sm text-fg-muted">
@@ -282,6 +323,7 @@ function ArticleForm({
                 : ''}
             </p>
           )}
+          {!isNew && troubleshooting && <div className="max-w-xs">{categorySelect}</div>}
 
           <TextField
             label="Заголовок"

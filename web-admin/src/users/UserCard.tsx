@@ -92,7 +92,9 @@ function UserActions({ user, openTickets, onChanged }: { user: UserPublic; openT
   const phone = user.phone ?? `#${user.id}`
   // Предупреждение о тикетах — при блокировке инженера и при смене его роли (ADR 0026 п. 7).
   const ticketsWarning =
-    openTickets > 0 ? `У сотрудника ${ticketsLabel(openTickets)} — переназначьте их в списке слева.` : null
+    openTickets > 0
+      ? `У сотрудника ${ticketsLabel(openTickets)} — переназначьте ${openTickets === 1 ? 'его' : 'их'} в списке слева.`
+      : null
 
   const run = async (action: () => Promise<unknown>, after?: () => void) => {
     setBusy(true)

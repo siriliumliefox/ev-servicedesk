@@ -45,7 +45,7 @@ export function ConfirmDialog({
         e.preventDefault();
         onCancel();
       }}
-      className="m-auto w-[28rem] rounded-lg border border-border bg-surface p-6 text-fg shadow-lg backdrop:bg-black/50"
+      className="m-auto w-[28rem] rounded-lg border border-border bg-surface p-6 text-fg shadow-lg backdrop:bg-[rgb(0_0_0/0.5)]"
     >
       <h2 id="confirm-title" className="text-h3">
         {title}

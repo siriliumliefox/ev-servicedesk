@@ -270,7 +270,7 @@ describe('конструктор регламентов ТО', () => {
     const { click } = setup('/regulations')
     await click(await screen.findByRole('button', { name: 'Изменить интервал: Масляный фильтр' }))
     const form = screen.getByRole('form', { name: 'Интервал: Масляный фильтр' })
-    expect(within(form).getByText(/Масло двигателя у этой модели — 10 000 км, 12 мес./)).toBeInTheDocument()
+    expect(within(form).getByText('Масло двигателя у этой модели: 10 000 км, 12 мес.; фильтр обычно меняют вместе с маслом.')).toBeInTheDocument()
     await click(within(form).getByRole('button', { name: 'Как у масла' }))
     expect(within(form).getByLabelText('Интервал, км')).toHaveValue('10000')
     expect(within(form).getByLabelText('Интервал, мес.')).toHaveValue('12')
@@ -415,6 +415,22 @@ describe('конструктор статей базы знаний', () => {
     await user.selectOptions(await screen.findByLabelText('Тип'), 'Устранение неполадок')
     expect(screen.getByLabelText('Вступление')).toHaveAccessibleDescription(/в дереве решений — после сохранения черновика/)
     expect(screen.queryByRole('tablist')).not.toBeInTheDocument()
+  })
+
+  it('новая статья «Устранение неполадок»: категория ошибки обязательна; с категорией — черновик и вкладка дерева', async () => {
+    const { user, click, repo } = setup('/articles/new')
+    const create = vi.spyOn(repo, 'createKnowledgeArticle')
+    await user.selectOptions(await screen.findByLabelText('Тип'), 'Устранение неполадок')
+    await user.type(screen.getByLabelText('Заголовок'), 'Не работает Bluetooth')
+    await user.type(screen.getByLabelText('Вступление'), 'Телефон не находит мультимедиа.')
+    await click(screen.getByRole('button', { name: 'Сохранить черновик' }))
+    expect(screen.getByLabelText('Категория ошибки')).toHaveAccessibleDescription('Выберите категорию ошибки')
+    expect(create).not.toHaveBeenCalled()
+    await user.selectOptions(screen.getByLabelText('Категория ошибки'), 'Аудио')
+    await click(screen.getByRole('button', { name: 'Сохранить черновик' }))
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ article_type: 'troubleshooting', category: 'audio' }))
+    expect(await screen.findByRole('tab', { name: /^Дерево решений/ })).toBeInTheDocument()
+    expect(screen.getByLabelText('Категория ошибки')).toHaveValue('audio')
   })
 
   it('инструкция — без вкладок: поле «Текст статьи», как раньше', async () => {

@@ -153,3 +153,18 @@ test('статья: «Сохранить и опубликовать» — кл�
   )
   expect(found.items.map((a) => a.title)).toContain(title)
 })
+
+test('статья «Устранение неполадок»: категория ошибки обязательна, черновик открывает дерево решений', async ({ page }) => {
+  await signInAdmin(page, seed)
+  await page.getByRole('link', { name: 'База знаний' }).click()
+  await page.getByRole('button', { name: 'Новая статья' }).click()
+  await page.getByLabel('Тип').selectOption({ label: 'Устранение неполадок' })
+  await page.getByLabel('Заголовок').fill(`E2E: пропал звук ${Date.now()}`)
+  await page.getByLabel('Вступление').fill('Нет звука в музыке и навигации.')
+  await page.getByRole('button', { name: 'Сохранить черновик' }).click()
+  await expect(page.getByText('Выберите категорию ошибки', { exact: true })).toBeVisible()
+  await page.getByLabel('Категория ошибки').selectOption({ label: 'Аудио' })
+  await page.getByRole('button', { name: 'Сохранить черновик' }).click()
+  await expect(page.getByRole('tab', { name: /^Дерево решений/ })).toBeVisible()
+  await expect(page.getByLabel('Категория ошибки')).toHaveValue('audio')
+})

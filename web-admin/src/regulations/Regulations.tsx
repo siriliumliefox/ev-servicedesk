@@ -357,7 +357,7 @@ function RegulationForm({
           </div>
           {oil && (
             <p className="flex flex-wrap items-center gap-2 text-body-sm">
-              Масло двигателя у этой модели — {intervals(oil)}. Фильтр обычно меняют вместе с маслом.
+              Масло двигателя у этой модели: {intervals(oil)}; фильтр обычно меняют вместе с маслом.
               <Button
                 size="sm"
                 variant="secondary"

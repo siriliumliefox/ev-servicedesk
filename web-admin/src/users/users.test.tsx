@@ -96,7 +96,7 @@ describe('карточка пользователя', () => {
     const section = await screen.findByRole('region', { name: 'Нерешённые тикеты сотрудника' })
     await within(section).findByRole('table')
     await user.click(screen.getByRole('button', { name: 'Заблокировать' }))
-    expect(screen.getByRole('dialog')).toHaveTextContent(/нерешённ\S+ тикет\S* — переназначьте их/)
+    expect(screen.getByRole('dialog')).toHaveTextContent(/нерешённ\S+ тикет\S* — переназначьте (его|их) в списке слева/)
     await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Отмена' }))
 
     const ticket = before[0]
