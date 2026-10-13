@@ -1,17 +1,24 @@
 name: web-e2e
 
-# E2E веб-кабинета инженера (Глава 21, ADR 0025 п. 14): Playwright (Chromium) против стека backend из
-# образа-кандидата (scripts/integration_stack.sh). Кабинет — production-сборка (`/v1`, CSP) в
-# `vite preview` с прокси на стек. Сценарии чек-листа: тикет в работу перетаскиванием → быстрый ответ
-# из базы знаний → «Решено» с клавиатуры, клиент получает события по WebSocket не позже 2 с; конкурентный
-# доступ — два инженера берут один тикет. Данные — backend/scripts/e2e_engineer.py seed.
-# Вызывается из ci.yml при изменениях web-engineer/, web-shared/ или backend/ — Chromium. Firefox и WebKit —
-# локально (web-engineer/scripts/e2e.sh) или ручным запуском ci.yml с web_browsers="chromium firefox webkit":
+# E2E веб-приложений (Playwright, Chromium) против стека backend из образа-кандидата
+# (scripts/integration_stack.sh); приложение — production-сборка (`/v1`, CSP) в `vite preview` с прокси
+# на стек. `app` — какое:
+# - web-engineer (глава 21, ADR 0025 п. 14): тикет в работу перетаскиванием → быстрый ответ из базы знаний →
+#   «Решено» с клавиатуры, клиент получает события по WebSocket не позже 2 с; два инженера берут один тикет.
+#   Данные — backend/scripts/e2e_engineer.py seed.
+# - web-admin (глава 22, ADR 0026 п. 13–15): пересмотр регламента → статус клиента без деплоя, дашборд =
+#   контрольный набор аналитики, пользователи, публикация, статья. Данные — backend/scripts/e2e_admin.py seed.
+# Вызывается из ci.yml (матрица по приложениям) при изменениях web-*/ или backend/ — Chromium. Firefox и
+# WebKit — локально (<app>/scripts/e2e.sh) или ручным запуском ci.yml с web_browsers="chromium firefox webkit":
 # Firefox из Playwright не запускается на macOS 27 («Could not find profile folder»).
 
 on:
   workflow_call:
     inputs:
+      app:
+        description: "Приложение: web-engineer или web-admin"
+        required: true
+        type: string
       browsers:
         description: "Браузеры через пробел: chromium firefox webkit"
         default: "chromium"
@@ -51,7 +58,7 @@ jobs:
       - run: npm ci
 
       - name: Браузеры Playwright
-        working-directory: web-engineer
+        working-directory: ${{ inputs.app }}
         env:
           BROWSERS: ${{ inputs.browsers || 'chromium' }}
         run: |
@@ -70,19 +77,21 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Стек backend, данные кабинета и Playwright
+      - name: Стек backend, данные приложения и Playwright
         env:
+          APP: ${{ inputs.app }}
           BROWSERS: ${{ inputs.browsers || 'chromium' }}
           E2E_BACKEND_IMAGE: backend:integration
         run: |
+          [[ "$APP" =~ ^web-(engineer|admin)$ ]] || { echo "app: web-engineer или web-admin, получено: '$APP'"; exit 1; }
           read -ra list <<<"$BROWSERS"
-          web-engineer/scripts/e2e.sh "${list[@]/#/--project=}"
+          "$APP/scripts/e2e.sh" "${list[@]/#/--project=}"
 
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
-          name: playwright-report
+          name: playwright-report-${{ inputs.app }}
           path: |
-            web-engineer/playwright-report
-            web-engineer/test-results
+            ${{ inputs.app }}/playwright-report
+            ${{ inputs.app }}/test-results
           retention-days: 7

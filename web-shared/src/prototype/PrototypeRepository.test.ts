@@ -210,19 +210,26 @@ describe("база знаний и дерево решений", () => {
     for (const id of [10, 11, 12, 13]) expect((await repo.validateDecisionTree(id)).is_valid).toBe(true);
   });
 
-  it("проверка находит тупик, битую ссылку, недостижимый шаг и второй корень", async () => {
+  it("проверка находит тупик и недостижимые шаги; шаг сохраняется только с переходами в это дерево (ADR 0026 п. 9)", async () => {
     const repo = admin();
-    const dead = await repo.createDecisionTreeNode(10, {
-      question_text: "Тупик",
-      is_root: false,
-      is_escalation: false,
-      options: [{ label: "Дальше", next_node_id: null }],
-    });
-    await repo.createDecisionTreeNode(10, { question_text: "Второй корень", is_root: true, is_escalation: false, options: [{ label: "x", next_node_id: 999 }] });
+    // Дерево опубликованной статьи не меняется — как backend (409 ARTICLE_PUBLISHED).
+    const step = { question_text: "Шаг", is_root: false, is_escalation: false, options: [] };
+    expect((await apiError(repo.createDecisionTreeNode(10, step))).code).toBe("ARTICLE_PUBLISHED");
+    await repo.unpublishKnowledgeArticle(10);
+    // Переход «никуда», на чужой шаг и второй корень отклоняются сразу.
+    const nowhere = { ...step, options: [{ label: "Дальше", next_node_id: 999 }] };
+    expect((await apiError(repo.createDecisionTreeNode(10, nowhere))).code).toBe("INVALID_NEXT_NODE");
+    expect((await apiError(repo.createDecisionTreeNode(10, { ...step, is_root: true }))).code).toBe("DECISION_TREE_ROOT_EXISTS");
+    // Цикл из двух шагов без выхода: тупик и недостижимость из корня.
+    const a = await repo.createDecisionTreeNode(10, { ...step, question_text: "А" });
+    const b = await repo.createDecisionTreeNode(10, { ...step, question_text: "Б", options: [{ label: "К А", next_node_id: a.id }] });
+    await repo.updateDecisionTreeNode(a.id, { ...step, question_text: "А", options: [{ label: "К Б", next_node_id: b.id }] });
     const { is_valid, issues } = await repo.validateDecisionTree(10);
     expect(is_valid).toBe(false);
-    expect(new Set(issues.map((i) => i.problem))).toEqual(new Set(["DEAD_END", "BROKEN_REFERENCE", "UNREACHABLE", "MULTIPLE_ROOTS"]));
-    expect(issues).toContainEqual({ node_id: dead.id, problem: "DEAD_END" });
+    expect(new Set(issues.map((i) => i.problem))).toEqual(new Set(["DEAD_END", "UNREACHABLE"]));
+    expect(issues).toContainEqual({ node_id: a.id, problem: "DEAD_END" });
+    // На шаг ведут варианты — удалить нельзя.
+    expect((await apiError(repo.deleteDecisionTreeNode(a.id))).code).toBe("DECISION_TREE_NODE_REFERENCED");
   });
 
   it("цикл без выхода — тупик; нет корня и нет эскалации — проблемы дерева целиком (ADR 0018)", async () => {
@@ -260,8 +267,9 @@ describe("база знаний и дерево решений", () => {
     expect((await repo.updateKnowledgeArticle(draft.id, { content: "Текст 3" })).version).toBe(2);
 
     const ts = await repo.createKnowledgeArticle({ article_type: "troubleshooting", category: "sim", title: "Без дерева?", content: "x" });
-    await repo.createDecisionTreeNode(ts.id, { question_text: "?", is_root: true, is_escalation: false, options: [{ label: "a", next_node_id: null }] });
-    expect((await apiError(repo.updateKnowledgeArticle(ts.id, { is_published: true }))).field).toBe("is_published");
+    // Один шаг-решение без эскалации — обращение создать нельзя (NO_ESCALATION): как backend, 409.
+    await repo.createDecisionTreeNode(ts.id, { question_text: "?", is_root: true, is_escalation: false, options: [] });
+    expect((await apiError(repo.updateKnowledgeArticle(ts.id, { is_published: true }))).code).toBe("DECISION_TREE_INVALID");
   });
 
   it("прошивка статьи должна относиться к её модели", async () => {
@@ -281,7 +289,7 @@ describe("публикации и аналитика", () => {
   it("релиз прошивки создаёт уведомление type=firmware с таргетингом по модели", async () => {
     const repo = admin();
     const release = await repo.createFirmwareRelease({ vehicle_model_id: 2, version: "RU 5.2.0", released_at: "2026-10-10" });
-    const [latest] = await repo.listPublishedNotifications();
+    const [latest] = (await repo.listPublishedNotifications()).items;
     expect(latest).toMatchObject({ type: "firmware", target_vehicle_model_id: 2, firmware_release_id: release.id });
     expect((await apiError(repo.createFirmwareRelease({ vehicle_model_id: 2, version: "RU 5.2.0", released_at: "2026-10-10" }))).status).toBe(409);
   });
@@ -290,7 +298,7 @@ describe("публикации и аналитика", () => {
     const repo = admin();
     expect((await apiError(repo.createNotification({ type: "news", message: " " }))).field).toBe("message");
     const n = await repo.createNotification({ type: "promo", message: "Акция", target_vehicle_model_id: null });
-    expect((await repo.listPublishedNotifications())[0].id).toBe(n.id);
+    expect((await repo.listPublishedNotifications()).items[0].id).toBe(n.id);
   });
 
   it("аналитика пропорциональна периоду; пустая система — нули и null", async () => {

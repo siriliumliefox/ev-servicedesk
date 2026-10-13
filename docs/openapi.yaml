@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: EV-ServiceDesk API
-  version: "1.10.0"
+  version: "1.11.0"
   description: >
     API дипломного проекта «EV-ServiceDesk» (ООО «ЕТСавтоГомель»).
     Контракты сервисов: Auth, Vehicle, Aggregates & Maintenance, Tickets,
@@ -70,7 +70,8 @@ tags:
       Профиль (/me) и управление пользователями администратором (Глава 17, ADR 0021 п. 3):
       сотрудники создаются через createStaffUser (первый администратор среды — CLI образа
       `python -m app.cli create-admin`), клиенты регистрируются сами. Блокировка
-      (is_active=false) — глоссарий «Блокировка пользователя». Реализовано в 1.7.1.
+      (is_active=false) — глоссарий «Блокировка пользователя». Реализовано в 1.7.1. Сброс пароля
+      сотрудника администратором (resetUserPassword) — 1.11.0 (глава 22, ADR 0026).
   - name: Analytics
     description: >
       Дашборд администратора (A-05, A-06; ADR 0020). Показатели считаются по витрине фактов,
@@ -1935,6 +1936,36 @@ paths:
         '409': { $ref: '#/components/responses/Conflict' }
         '422': { $ref: '#/components/responses/ValidationError' }
 
+  /users/{userId}/password:
+    parameters:
+      - { name: userId, in: path, required: true, schema: { type: integer } }
+    post:
+      tags: [Users]
+      summary: Сбросить пароль сотрудника
+      operationId: resetUserPassword
+      description: >
+        Администратор задаёт сотруднику (engineer/admin, в том числе заблокированному) новый
+        пароль — глоссарий «Учётная запись сотрудника». Пароль хранится как argon2id; все
+        refresh-токены сотрудника отзываются (сессии заканчиваются), выданный access-токен
+        доживает свой срок. У клиента пароля нет — 409 PASSWORD_NOT_ALLOWED; несуществующий или
+        анонимизированный пользователь — 404 USER_NOT_FOUND. Добавлено в 1.11.0 (глава 22,
+        ADR 0026).
+      x-required-roles: [admin]
+      x-rbac-action: ["Управление пользователями и ролями"]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UserPasswordResetRequest' }
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '204': { description: "Пароль изменён; сессии сотрудника завершены" }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
   # ===================== ANALYTICS SERVICE (A-05, A-06; реализация — Глава 16) =====================
   /analytics/ticket-resolution:
     get:
@@ -2971,6 +3002,12 @@ components:
       properties:
         phone: { $ref: '#/components/schemas/PhoneE164' }
         role: { type: string, enum: [engineer, admin] }
+        password: { type: string, format: password, minLength: 12, maxLength: 128 }
+
+    UserPasswordResetRequest:
+      type: object
+      required: [password]
+      properties:
         password: { type: string, format: password, minLength: 12, maxLength: 128 }
 
     UserUpdateRequest:
