@@ -147,6 +147,7 @@ class Ticket {
     required this.status,
     required this.summary,
     required this.createdAt,
+    this.description,
     this.attachments = const [],
   });
 
@@ -158,6 +159,10 @@ class Ticket {
   /// Краткое описание (Ticket.summary, до 140 символов) — для списка обращений.
   final String summary;
   final DateTime createdAt;
+
+  /// Полное описание и вложения обращения — только в карточке (TicketDetail): в переписку они не входят,
+  /// чат показывает их первым сообщением клиента.
+  final String? description;
   final List<TicketAttachment> attachments;
 }
 

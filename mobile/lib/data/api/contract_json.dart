@@ -98,6 +98,7 @@ Ticket parseTicket(Json j) => Ticket(
       status: _statusCodes[j['status']]!,
       summary: j['summary']! as String,
       createdAt: _dateTime(j['created_at']),
+      description: j['description'] as String?,
       attachments: _attachments(j['attachments']),
     );
 

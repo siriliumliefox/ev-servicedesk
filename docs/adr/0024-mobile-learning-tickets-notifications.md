@@ -34,8 +34,9 @@
 1. **E2E «на staging» (Q1)** — стек из образа-кандидата (`scripts/integration_stack.sh`, как
    ADR 0021/0022): staging-сервера нет до главы 26. `api_e2e` (Dart, `HttpClientRepository`)
    проходит сценарий «дерево решений → эскалация → тикет с фото → ответ инженера через staff API
-   → сообщение пришло клиенту по WebSocket» в `mobile-e2e` на каждом PR; UI E2E
-   (`integration_test`) — в симуляторе, результат в отчёте.
+   → сообщение пришло клиенту по WebSocket» в `mobile-e2e` на каждом PR (свой тестовый номер
+   `E2E_SUPPORT_PHONE`, данные — `docs/specs/support_flow.json`); UI E2E (`integration_test`) — в
+   симуляторе, результат в отчёте.
 2. **Хранилище на стеке (Q2).** MinIO публикуется на `INTEGRATION_BIND:19000`, адрес presigned URL
    (`S3_PUBLIC_ENDPOINT`) задают скрипты: CI и симулятор — `http://127.0.0.1:19000`, iPhone —
    `http://<mac>.local:19000` (`device_run.sh`). Логика backend не меняется.
@@ -75,8 +76,10 @@
     (редактируется), `source_article_id`/`source_node_id`. Без авто — общие статьи.
 11. **Контракт (Q11)** — без изменений (1.9.0, AsyncAPI 1.1.1); backend не меняется, кроме
     compose и скриптов стека (п. 2, 5).
-12. **Ответ инженера на устройстве (Q12)** — `mobile/scripts/engineer_reply.sh <тикет> "текст"`
-    (claim + сообщение через staff API): веб-кабинета инженера нет до главы 21.
+12. **Ответ инженера на устройстве (Q12)** — меню инженера в Terminal (`mobile/scripts/staff_menu.sh`, его
+    запускают `device_run.sh` и `android_push_run.sh`): ответ в чат тикета (claim или переназначение +
+    сообщение через staff API), решение, новость и акция — `backend/scripts/e2e_support.py`. Веб-кабинета
+    инженера нет до главы 21. Уточнено при реализации: стек и инженер — в одном окне.
 13. **SMS-код (Q13)** — остаётся 4 цифры (ADR 0013 п. 4), не в этой главе.
 14. **Термины** — глоссарий v1.12: «Центр уведомлений», «Вложение».
 

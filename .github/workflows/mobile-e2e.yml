@@ -2,7 +2,9 @@ name: mobile-e2e
 
 # E2E мобильного клиента на уровне API (Глава 18, ADR 0022 п. 2): настоящий HttpClientRepository
 # (test_api_e2e) против стека backend из образа-кандидата — регистрация → авто → карточка → сессия;
-# схема агрегатов (Глава 19, ADR 0023 п. 7) — seed 5 тестовых авто и сверка статусов клиента с таблицей.
+# схема агрегатов (Глава 19, ADR 0023 п. 7) — seed 5 тестовых авто и сверка статусов клиента с таблицей;
+# клиентский сценарий (Глава 20, ADR 0024 п. 1) — статьи с деревом решений, тикет с фото в MinIO стека,
+# ответ инженера по WebSocket, новости (docs/specs/support_flow.json, backend/scripts/e2e_support.py).
 # Вызывается из ci.yml при изменениях mobile/ или backend/: изменение backend может сломать клиент.
 # UI E2E (integration_test в iOS Simulator) — локально, mobile/scripts/e2e_ui.sh: на macOS-раннерах нет Docker.
 
@@ -53,8 +55,9 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Стек backend, сценарий backend, 5 тестовых авто и E2E клиента
+      - name: Стек backend, сценарий backend, 5 тестовых авто, статьи поддержки и E2E клиента
         run: >-
           scripts/integration_stack.sh backend:integration --
-          bash -c '(cd backend && poetry run python scripts/seed_scheme_vehicles.py) &&
+          bash -c '(cd backend && poetry run python scripts/seed_scheme_vehicles.py &&
+          poetry run python scripts/e2e_support.py seed) &&
           cd mobile && flutter test test_api_e2e'

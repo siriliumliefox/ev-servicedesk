@@ -1,4 +1,5 @@
-// Чат по обращению (ADR 0024 п. 8): переписка по REST, новые сообщения и смена статуса — по WebSocket (TicketLive);
+// Чат по обращению (ADR 0024 п. 8): первым сообщением — само обращение (описание и вложения из карточки тикета:
+// в переписку они не входят), дальше переписка по REST, новые сообщения и смена статуса — по WebSocket (TicketLive);
 // повторы отбрасываются по id. Свёрнутое приложение закрывает сокет, возврат — переподключение и догрузка.
 // Вложения — фото и видео (ADR 0024 п. 9).
 import 'dart:async';
@@ -71,12 +72,13 @@ class _TicketChatScreenState extends State<TicketChatScreen> {
           ],
         ),
       ),
-      body: AsyncView<List<TicketMessage>>(
+      body: AsyncView<(Ticket, List<TicketMessage>)>(
         reloadKey: app.revision,
-        load: () => app.repository.messages(_ticket.id),
-        builder: (context, messages, _) => _Chat(
+        load: () async => (await app.repository.ticket(_ticket.id), await app.repository.messages(_ticket.id)),
+        builder: (context, data, _) => _Chat(
           ticket: _ticket,
-          initial: messages,
+          opening: data.$1,
+          initial: data.$2,
           notice: widget.notice,
           onTicket: (t) => setState(() => _ticket = t),
         ),
@@ -86,9 +88,18 @@ class _TicketChatScreenState extends State<TicketChatScreen> {
 }
 
 class _Chat extends StatefulWidget {
-  const _Chat({required this.ticket, required this.initial, required this.onTicket, this.notice});
+  const _Chat({
+    required this.ticket,
+    required this.opening,
+    required this.initial,
+    required this.onTicket,
+    this.notice,
+  });
 
   final Ticket ticket;
+
+  /// Карточка тикета (TicketDetail): описание и вложения обращения.
+  final Ticket opening;
   final List<TicketMessage> initial;
   final ValueChanged<Ticket> onTicket;
   final String? notice;
@@ -121,6 +132,24 @@ class _ChatState extends State<_Chat> {
     _live.state.addListener(_onLiveState);
     _onLiveState();
     _lifecycle = AppLifecycleListener(onPause: _live.pause, onResume: _live.resume);
+    // Статус из карточки может быть новее, чем в списке, откуда открыт чат.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && widget.opening.status != widget.ticket.status) widget.onTicket(widget.opening);
+    });
+  }
+
+  /// Обращение — первым сообщением клиента (в прототипе у старых обращений описания нет).
+  TicketMessage? get _openingMessage {
+    final description = widget.opening.description;
+    if (description == null) return null;
+    return TicketMessage(
+      id: 0,
+      fromClient: true,
+      authorName: 'Вы',
+      body: description,
+      createdAt: widget.opening.createdAt,
+      attachments: widget.opening.attachments,
+    );
   }
 
   @override
@@ -211,7 +240,11 @@ class _ChatState extends State<_Chat> {
   Widget build(BuildContext context) {
     final c = context.evColors;
     final resolved = widget.ticket.status == TicketStatus.resolved;
-    final messages = _messages.values.toList()..sort((a, b) => a.id.compareTo(b.id));
+    final opening = _openingMessage;
+    final messages = [
+      if (opening != null) opening,
+      ...(_messages.values.toList()..sort((a, b) => a.id.compareTo(b.id))),
+    ];
     return Column(
       children: [
         if (_showReconnecting && _live.state.value != LiveState.live)

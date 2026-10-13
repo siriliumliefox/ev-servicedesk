@@ -203,6 +203,7 @@ class PrototypeRepository implements ClientRepository {
 
   @override
   Future<Ticket> createTicket(TicketDraft draft) => _call(() {
+        // Как backend: описание и вложения — в самом тикете, переписка начинается пустой.
         final ticket = Ticket(
           id: _nextId++,
           vehicleId: draft.vehicleId,
@@ -210,19 +211,11 @@ class PrototypeRepository implements ClientRepository {
           status: TicketStatus.newTicket,
           summary: draft.description,
           createdAt: now,
+          description: draft.description,
           attachments: draft.attachments,
         );
         _tickets = [..._tickets, ticket];
-        _messages[ticket.id] = [
-          TicketMessage(
-            id: _nextId++,
-            fromClient: true,
-            authorName: 'Вы',
-            body: draft.description,
-            createdAt: now,
-            attachments: draft.attachments,
-          ),
-        ];
+        _messages[ticket.id] = [];
         return ticket;
       });
 
