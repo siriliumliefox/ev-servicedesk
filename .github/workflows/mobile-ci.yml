@@ -64,4 +64,12 @@ jobs:
           channel: "stable"
 
       - name: Build iOS (без подписи)
-        run: flutter build ios --debug --no-codesign
+        # При сбое — ошибки xcodebuild: без -v Flutter показывает только общий текст про Development Team.
+        run: |
+          set -o pipefail
+          flutter build ios --debug --no-codesign -v > build-ios.log 2>&1 || {
+            grep -nE "error:|Signing for|requires a development team" build-ios.log | head -40
+            tail -60 build-ios.log
+            exit 1
+          }
+          grep -E "\*\* BUILD SUCCEEDED" build-ios.log
