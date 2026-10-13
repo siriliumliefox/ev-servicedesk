@@ -1,25 +1,10 @@
 // Канбан-доска тикетов (ТЗ 4.3, E-01; глоссарий «Канбан-доска»): колонки — статусы, внутри — по сроку
 // SLA, «Решено» — сначала последние решённые. Фильтры SLA / категория / исполнитель — по загруженной
-// выборке. Перенос карточки меняет статус (ADR 0025 п. 7): мышью (dnd-kit) или с клавиатуры кнопкой
-// «Перенести» (Пробел — взять, ←/→ — колонка, Пробел — положить, Esc — отмена); подсвечены только допустимые колонки. «Новые → В работе»
-// — взять в работу, «→ Решено» — с подтверждением. Перенос оптимистичный: при ошибке карточка
-// возвращается, причина — в уведомлении (конфликт взятия — ADR 0025 п. 10).
-import { useEffect, useMemo, useState, type KeyboardEvent, type PointerEventHandler, type ReactNode } from 'react'
+// выборке. Перенос карточки меняет статус (ADR 0025 п. 7) — механика в `useMoves`: подсвечены только
+// допустимые колонки, «Новые → В работе» — взять в работу, «→ Решено» — с подтверждением.
+import { useEffect, useState, type ReactNode } from 'react'
+import { DndContext, DragOverlay, PointerSensor, pointerWithin, useDroppable, useSensor, useSensors } from '@dnd-kit/core'
 import {
-  DndContext,
-  DragOverlay,
-  PointerSensor,
-  pointerWithin,
-  useDraggable,
-  useDroppable,
-  useSensor,
-  useSensors,
-  type Announcements,
-  type DragEndEvent,
-  type DragStartEvent,
-} from '@dnd-kit/core'
-import {
-  ApiError,
   Chip,
   EmptyState,
   ErrorState,
@@ -31,8 +16,8 @@ import {
   TICKET_STATUSES,
   TICKET_STATUS_LABELS,
   bySlaDue,
+  engineerMoves,
   errorText,
-  formatDateTime,
   matchesSla,
   type SlaFilter,
   type Ticket,
@@ -40,11 +25,11 @@ import {
   type TicketStatus,
 } from '@ev-servicedesk/web-shared'
 import { useEngineer } from '../repo.ts'
-import { assigneeLabel } from '../text.ts'
-import { ConfirmDialog } from '../ui/Notices.tsx'
+import { ConfirmDialog } from '../ui/ConfirmDialog.tsx'
 import { useNotify } from '../ui/notify.ts'
-import { SlaBadge } from './SlaBadge.tsx'
-import { MAX_PAGES, PAGE_SIZE, allowedTargets, useBoardData, type Column } from './boardData.ts'
+import { CardOverlay, TicketCard } from './TicketCard.tsx'
+import { MAX_PAGES, PAGE_SIZE, useBoardData, type Column } from './boardData.ts'
+import { DRAG_HELP, useMoves } from './useMoves.ts'
 
 type AssigneeFilter = 'all' | 'mine' | 'unassigned'
 
@@ -52,57 +37,31 @@ const SLA_FILTERS: SlaFilter[] = ['all', 'overdue', 'due_soon', 'ok']
 /** «Решено» свёрнута до 20 карточек (ADR 0025 п. 9). */
 const RESOLVED_FOLDED = 20
 
-interface PendingMove {
-  ticket: Ticket
-  to: TicketStatus
-}
-
-/** Перенос с клавиатуры: тикет и колонка, над которой он сейчас. */
-interface KeyboardMove {
-  ticket: Ticket
-  over: TicketStatus
-}
+/** Объявления dnd-kit не нужны: перенос объявляет `useMoves` в своей живой области. */
+const SILENT = { onDragStart: () => undefined, onDragOver: () => undefined, onDragEnd: () => undefined, onDragCancel: () => undefined }
 
 export function Board({
   version,
   selectedId,
   onSelect,
-  onChanged,
 }: {
   /** Меняется после действий в карточке тикета — доска перечитывает тикеты. */
   version: number
   selectedId: number | null
   onSelect: (ticketId: number) => void
-  /** Тикет изменён переносом — карточка тикета перечитывает данные. */
-  onChanged: () => void
 }) {
   const { repo, now: clock, meId } = useEngineer()
   const notify = useNotify()
   const { columns, error, reload, fresh, seen } = useBoardData(repo, clock, version)
+  const moves = useMoves({ repo, meId, notify, reload })
   const [sla, setSla] = useState<SlaFilter>('all')
   const [category, setCategory] = useState<TicketCategory | 'all'>('all')
   const [assignee, setAssignee] = useState<AssigneeFilter>('all')
   const [showAllResolved, setShowAllResolved] = useState(false)
-  // Оптимистичные переносы до ответа сервера; убранные — проигранный claim (тикет ушёл к другому).
-  const [moving, setMoving] = useState<ReadonlyMap<number, TicketStatus>>(new Map())
-  const [hidden, setHidden] = useState<ReadonlySet<number>>(new Set())
-  const [dragging, setDragging] = useState<Ticket | null>(null)
-  const [confirm, setConfirm] = useState<PendingMove | null>(null)
-  const [keyboard, setKeyboard] = useState<KeyboardMove | null>(null)
-  const [announcement, setAnnouncement] = useState('')
   const now = clock()
+  const { session } = moves
 
-  const all = useMemo(() => {
-    const list = columns ? TICKET_STATUSES.flatMap((s) => columns[s].items) : []
-    return list
-      .filter((t) => !hidden.has(t.id))
-      .map((t) => {
-        const to = moving.get(t.id)
-        if (!to) return t
-        return { ...t, status: to, assigned_engineer_id: t.status === 'new' ? meId : t.assigned_engineer_id }
-      })
-  }, [columns, hidden, moving, meId])
-
+  const all = moves.view(columns ? TICKET_STATUSES.flatMap((s) => columns[s].items) : [])
   const base = all.filter(
     (t) =>
       (category === 'all' || t.category === category) &&
@@ -110,88 +69,11 @@ export function Board({
   )
   const visible = base.filter((t) => matchesSla(t, sla, now))
   const slaCount = (f: SlaFilter) => base.filter((t) => matchesSla(t, f, now)).length
-  const queueSize = columns?.new.total ?? 0
-  useTabTitle(queueSize)
-
-  const move = async ({ ticket, to }: PendingMove) => {
-    setMoving((m) => new Map(m).set(ticket.id, to))
-    try {
-      if (ticket.status === 'new') await repo.claimTicket(ticket.id)
-      else await repo.updateTicketStatus(ticket.id, to)
-      onChanged()
-    } catch (e) {
-      if (e instanceof ApiError && e.code === 'TICKET_ALREADY_CLAIMED') {
-        setHidden((h) => new Set(h).add(ticket.id))
-        notify(`Тикет #${ticket.id} уже взял в работу другой инженер.`)
-      } else {
-        notify(`Тикет #${ticket.id} не перенесён: ${errorText(e)}`, 'error')
-      }
-    } finally {
-      setMoving((m) => {
-        const next = new Map(m)
-        next.delete(ticket.id)
-        return next
-      })
-      reload()
-    }
-  }
+  useTabTitle(columns?.new.total ?? 0)
 
   // Мышь — dnd-kit: клик по карточке открывает её, перенос начинается после сдвига на 6 px.
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }))
-
-  const active = dragging ?? keyboard?.ticket ?? null
-  const targets = active ? allowedTargets(active, meId) : []
-
-  const drop = (ticket: Ticket, to: TicketStatus | undefined) => {
-    if (!to || to === ticket.status || !allowedTargets(ticket, meId).includes(to)) return
-    if (to === 'resolved') setConfirm({ ticket, to })
-    else void move({ ticket, to })
-  }
-
-  const onDragStart = ({ active: item }: DragStartEvent) => {
-    setDragging(all.find((t) => t.id === item.id) ?? null)
-  }
-
-  const onDragEnd = ({ active: item, over }: DragEndEvent) => {
-    setDragging(null)
-    const ticket = all.find((t) => t.id === item.id)
-    if (ticket) drop(ticket, over?.id as TicketStatus | undefined)
-  }
-
-  /**
-   * Клавиатура — без геометрии (колонки узкие, карточка шире колонки — датчик клавиатуры dnd-kit прокручивал
-   * бы список): Пробел/Enter — взять, ←/→ — соседняя допустимая колонка, Пробел/Enter — положить, Esc — отмена.
-   */
-  const onMoveKey = (ticket: Ticket, e: KeyboardEvent<HTMLButtonElement>) => {
-    const picking = e.key === ' ' || e.key === 'Enter'
-    if (keyboard?.ticket.id !== ticket.id) {
-      if (!picking) return
-      e.preventDefault()
-      setKeyboard({ ticket, over: ticket.status })
-      setAnnouncement(`Тикет #${ticket.id} взят для переноса. ${DRAG_HELP}`)
-      return
-    }
-    if (picking) {
-      e.preventDefault()
-      setKeyboard(null)
-      setAnnouncement(`Тикет #${ticket.id} отпущен: ${columnName(keyboard.over)}.`)
-      drop(ticket, keyboard.over)
-    } else if (e.key === 'Escape') {
-      e.preventDefault()
-      e.stopPropagation()
-      setKeyboard(null)
-      setAnnouncement(`Перенос тикета #${ticket.id} отменён.`)
-    } else if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
-      e.preventDefault()
-      const allowed = [ticket.status, ...allowedTargets(ticket, meId)]
-      const step = e.key === 'ArrowRight' ? 1 : -1
-      let i = TICKET_STATUSES.indexOf(keyboard.over) + step
-      while (i >= 0 && i < TICKET_STATUSES.length && !allowed.includes(TICKET_STATUSES[i])) i += step
-      if (i < 0 || i >= TICKET_STATUSES.length) return
-      setKeyboard({ ticket, over: TICKET_STATUSES[i] })
-      setAnnouncement(`Тикет #${ticket.id}: ${columnName(TICKET_STATUSES[i])}.`)
-    }
-  }
+  const pointer = moves.pointer((id) => all.find((t) => t.id === id))
 
   return (
     <section aria-label="Канбан-доска тикетов" className="flex min-h-0 min-w-0 flex-1 flex-col gap-4 p-6">
@@ -246,14 +128,7 @@ export function Board({
               Доска не обновилась: {errorText(error)} Показаны данные последней загрузки.
             </p>
           ) : null}
-          <DndContext
-            sensors={sensors}
-            collisionDetection={pointerWithin}
-            onDragStart={onDragStart}
-            onDragEnd={onDragEnd}
-            onDragCancel={() => setDragging(null)}
-            accessibility={{ announcements: ANNOUNCEMENTS, screenReaderInstructions: { draggable: DRAG_HELP } }}
-          >
+          <DndContext sensors={sensors} collisionDetection={pointerWithin} accessibility={{ announcements: SILENT }} {...pointer}>
             <div className="grid min-h-0 flex-1 grid-cols-4 gap-3">
               {TICKET_STATUSES.map((status) => {
                 const sorted = visible
@@ -267,8 +142,8 @@ export function Board({
                     status={status}
                     count={sorted.length}
                     source={columns[status]}
-                    target={active ? targets.includes(status) : null}
-                    keyboardOver={keyboard?.over === status}
+                    target={session ? moves.targets.includes(status) : null}
+                    over={session?.over === status}
                     footer={
                       folded ? (
                         <button
@@ -287,15 +162,22 @@ export function Board({
                           ticket={t}
                           now={now}
                           meId={meId}
-                          selected={t.id === selectedId}
+                          highlight={
+                            session?.via === 'keyboard' && session.ticket.id === t.id
+                              ? 'moving'
+                              : t.id === selectedId
+                                ? 'selected'
+                                : fresh.has(t.id)
+                                  ? 'fresh'
+                                  : null
+                          }
                           fresh={fresh.has(t.id)}
-                          movable={allowedTargets(t, meId).length > 0 && !moving.has(t.id)}
-                          keyboardMoving={keyboard?.ticket.id === t.id}
-                          onMoveKey={(e) => onMoveKey(t, e)}
-                          onMoveCancel={() => keyboard?.ticket.id === t.id && setKeyboard(null)}
-                          onSelect={(id) => {
-                            seen(id)
-                            onSelect(id)
+                          movable={engineerMoves(t, meId).length > 0 && !moves.isPending(t.id)}
+                          onMoveKey={(e) => moves.onMoveKey(t, e)}
+                          onMoveBlur={() => moves.onMoveBlur(t.id)}
+                          onSelect={() => {
+                            seen(t.id)
+                            onSelect(t.id)
                           }}
                         />
                       </li>
@@ -305,7 +187,7 @@ export function Board({
               })}
             </div>
             <DragOverlay dropAnimation={null}>
-              {dragging ? <CardOverlay ticket={dragging} now={now} meId={meId} /> : null}
+              {session?.via === 'pointer' ? <CardOverlay ticket={session.ticket} now={now} meId={meId} /> : null}
             </DragOverlay>
           </DndContext>
         </>
@@ -315,18 +197,15 @@ export function Board({
         {DRAG_HELP}
       </p>
       <p aria-live="assertive" className="sr-only">
-        {announcement}
+        {moves.announcement}
       </p>
 
-      {confirm && (
+      {moves.confirm && (
         <ConfirmDialog
-          title={`Решить тикет #${confirm.ticket.id}?`}
+          title={`Решить тикет #${moves.confirm.ticket.id}?`}
           confirmLabel="Решено"
-          onCancel={() => setConfirm(null)}
-          onConfirm={() => {
-            void move(confirm)
-            setConfirm(null)
-          }}
+          onCancel={moves.cancelConfirm}
+          onConfirm={moves.confirmMove}
         >
           Клиент увидит, что обращение решено, и не сможет писать в чат, пока тикет не вернут в работу.
         </ConfirmDialog>
@@ -335,26 +214,12 @@ export function Board({
   )
 }
 
-const DRAG_HELP =
-  'Чтобы перенести тикет, нажмите Пробел, выберите колонку стрелками влево и вправо и нажмите Пробел ещё раз. Esc — отмена.'
-
-
-const columnName = (id: string | number | undefined) =>
-  id ? `колонка «${TICKET_STATUS_LABELS[id as TicketStatus]}»` : 'вне колонок'
-
-const ANNOUNCEMENTS: Announcements = {
-  onDragStart: ({ active }) => `Тикет #${active.id} взят для переноса.`,
-  onDragOver: ({ active, over }) => `Тикет #${active.id}: ${columnName(over?.id)}.`,
-  onDragEnd: ({ active, over }) => `Тикет #${active.id} отпущен: ${columnName(over?.id)}.`,
-  onDragCancel: ({ active }) => `Перенос тикета #${active.id} отменён.`,
-}
-
 function BoardColumn({
   status,
   count,
   source,
   target,
-  keyboardOver,
+  over,
   footer,
   children,
 }: {
@@ -363,17 +228,17 @@ function BoardColumn({
   source: Column
   /** Идёт перенос: true — сюда можно, false — нельзя; null — переноса нет. */
   target: boolean | null
-  /** Над колонкой тикет, переносимый с клавиатуры. */
-  keyboardOver: boolean
+  /** Над колонкой переносимый тикет. */
+  over: boolean
   footer: ReactNode
   children: ReactNode
 }) {
-  const { setNodeRef, isOver } = useDroppable({ id: status, disabled: target === false })
+  const { setNodeRef } = useDroppable({ id: status, disabled: target === false })
   const tone =
     target === null
       ? ''
       : target
-        ? isOver || keyboardOver
+        ? over
           ? 'ring-2 ring-primary'
           : 'ring-2 ring-primary/40'
         : 'opacity-50'
@@ -382,7 +247,7 @@ function BoardColumn({
       ref={setNodeRef}
       aria-labelledby={`col-${status}`}
       data-drop-target={target === null ? undefined : String(target)}
-      data-drop-over={isOver || keyboardOver ? 'true' : undefined}
+      data-drop-over={over ? 'true' : undefined}
       className={`flex min-h-0 min-w-0 flex-col rounded-lg bg-surface-subtle transition-opacity ${tone}`}
     >
       <h2 id={`col-${status}`} className="flex items-center justify-between px-3 pt-3 pb-2 text-label text-fg">
@@ -408,118 +273,6 @@ function BoardColumn({
 
 function byResolvedDesc(a: Ticket, b: Ticket): number {
   return (b.resolved_at ?? '').localeCompare(a.resolved_at ?? '')
-}
-
-/** Содержимое карточки — в колонке и в копии, которая едет за указателем (DragOverlay). */
-function CardBody({ ticket, now, meId, fresh }: { ticket: Ticket; now: Date; meId: number; fresh: boolean }) {
-  return (
-    <>
-      <span className="flex flex-wrap items-baseline gap-x-2 pr-8">
-        <span className="text-label tabular-nums">#{ticket.id}</span>
-        <span className="text-body text-fg">{TICKET_CATEGORY_LABELS[ticket.category]}</span>
-        {fresh && <span className="text-caption text-primary-text">Новый</span>}
-      </span>
-      <span className="grid gap-0.5">
-        <span className="text-caption text-fg-muted">
-          {ticket.vehicle_model.brand} {ticket.vehicle_model.model}
-        </span>
-        <span className="line-clamp-2 text-body-sm text-fg">{ticket.summary}</span>
-      </span>
-      <span>
-        <SlaBadge ticket={ticket} now={now} />
-      </span>
-      <span className="flex flex-wrap items-center justify-between gap-x-2 text-caption text-fg-muted">
-        <span>{formatDateTime(ticket.created_at)}</span>
-        <span>{assigneeLabel(ticket.assigned_engineer_id, meId)}</span>
-      </span>
-    </>
-  )
-}
-
-const CARD_CLASS = 'grid w-full gap-2 rounded-md border bg-surface p-3 text-left shadow-sm'
-
-/** Копия карточки над доской во время переноса: не обрезается колонкой и не сдвигает её прокрутку. */
-function CardOverlay({ ticket, now, meId }: { ticket: Ticket; now: Date; meId: number }) {
-  return (
-    <div aria-hidden="true" className={`${CARD_CLASS} cursor-grabbing border-primary shadow-lg ring-2 ring-primary`}>
-      <CardBody ticket={ticket} now={now} meId={meId} fresh={false} />
-    </div>
-  )
-}
-
-function TicketCard({
-  ticket,
-  now,
-  meId,
-  selected,
-  fresh,
-  movable,
-  keyboardMoving,
-  onMoveKey,
-  onMoveCancel,
-  onSelect,
-}: {
-  ticket: Ticket
-  now: Date
-  meId: number
-  selected: boolean
-  fresh: boolean
-  movable: boolean
-  keyboardMoving: boolean
-  onMoveKey: (e: KeyboardEvent<HTMLButtonElement>) => void
-  onMoveCancel: () => void
-  onSelect: (id: number) => void
-}) {
-  // Мышь: едет копия (DragOverlay), оригинал на месте — не обрезается колонкой и не сдвигает её прокрутку.
-  const { listeners, setNodeRef, isDragging } = useDraggable({
-    id: ticket.id,
-    disabled: !movable,
-  })
-  return (
-    <div
-      ref={setNodeRef}
-      onPointerDown={listeners?.onPointerDown as PointerEventHandler<HTMLDivElement> | undefined}
-      className={`relative ${isDragging ? 'opacity-40' : ''} ${movable ? 'cursor-grab' : ''}`}
-    >
-      <button
-        type="button"
-        aria-current={selected ? 'true' : undefined}
-        aria-label={`Тикет #${ticket.id}, ${TICKET_CATEGORY_LABELS[ticket.category]}`}
-        onClick={() => onSelect(ticket.id)}
-        className={`${CARD_CLASS} min-w-0 overflow-hidden transition-colors duration-(--duration-fast) hover:border-border-strong ${
-          keyboardMoving || selected
-            ? keyboardMoving
-              ? 'border-primary ring-2 ring-primary'
-              : 'border-fg ring-2 ring-fg'
-            : fresh
-              ? 'border-primary ring-2 ring-primary'
-              : 'border-border'
-        }`}
-      >
-        <CardBody ticket={ticket} now={now} meId={meId} fresh={fresh} />
-      </button>
-      {movable && (
-        <button
-          type="button"
-          onKeyDown={onMoveKey}
-          onBlur={onMoveCancel}
-          aria-pressed={keyboardMoving}
-          aria-describedby="board-drag-help"
-          aria-label={`Перенести тикет #${ticket.id}`}
-          className="absolute top-2 right-2 grid size-7 place-items-center rounded-md text-fg-muted hover:bg-surface-subtle hover:text-fg"
-        >
-          <svg viewBox="0 0 16 16" className="size-4" fill="currentColor" aria-hidden="true">
-            <circle cx="5.5" cy="3.5" r="1.25" />
-            <circle cx="10.5" cy="3.5" r="1.25" />
-            <circle cx="5.5" cy="8" r="1.25" />
-            <circle cx="10.5" cy="8" r="1.25" />
-            <circle cx="5.5" cy="12.5" r="1.25" />
-            <circle cx="10.5" cy="12.5" r="1.25" />
-          </svg>
-        </button>
-      )}
-    </div>
-  )
 }
 
 /** Размер очереди в заголовке вкладки (ADR 0025 п. 8): «(3) Очередь · …». */

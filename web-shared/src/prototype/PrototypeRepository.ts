@@ -36,6 +36,7 @@ import type {
   VehicleModel,
 } from "../data/models.ts";
 import { TICKET_CATEGORIES } from "../data/models.ts";
+import { allowedTransitions } from "../data/ticketFlow.ts";
 import {
   ApiError,
   type AdminRepository,
@@ -74,18 +75,6 @@ export interface PrototypeOptions {
   /** Искусственная задержка ответа, мс (показывает состояния загрузки). В тестах — 0. */
   latencyMs?: number;
   scenario?: PrototypeScenario;
-}
-
-/** Переходы статуса, которые прототип разрешает инженеру. new → in_progress — только через claim. */
-const TRANSITIONS: Record<TicketStatus, readonly TicketStatus[]> = {
-  new: [],
-  in_progress: ["waiting_vendor", "resolved"],
-  waiting_vendor: ["in_progress", "resolved"],
-  resolved: ["in_progress"],
-};
-
-export function allowedTransitions(status: TicketStatus): readonly TicketStatus[] {
-  return TRANSITIONS[status];
 }
 
 /** `Ticket.summary` — первые 140 символов описания (OpenAPI 1.4.0, ADR 0017). */
@@ -259,7 +248,7 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
       if (this.role === "engineer" && t.assigned_engineer_id !== ENGINEER_ID) {
         throw new ApiError("FORBIDDEN", "Статус меняет инженер, назначенный на тикет", 403);
       }
-      if (t.status !== status && !TRANSITIONS[t.status].includes(status)) {
+      if (t.status !== status && !allowedTransitions(t.status).includes(status)) {
         throw new ApiError("INVALID_STATUS_TRANSITION", "Такой переход статуса недоступен", 409);
       }
       if (t.status !== status) {

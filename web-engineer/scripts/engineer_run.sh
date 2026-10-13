@@ -27,14 +27,6 @@ INTEGRATION_PORT="$PORT" "$ROOT/scripts/integration_stack.sh" backend:smoke -- b
   set -e
   ROOT="$1"; OUT="$2"; WEB_PORT="$3"; SIMULATOR="$4"
   (cd "$ROOT/backend" && poetry run python scripts/e2e_engineer.py seed --out "$OUT")
-  # Номер и код клиента — в тот же файл (код тестового номера одноразовый для этого стека).
-  python3 - "$OUT" "$E2E_CODE" <<'"'"'PY'"'"'
-import json, sys
-path, code = sys.argv[1], sys.argv[2]
-data = json.load(open(path, encoding="utf-8"))
-data["client"]["sms_code"] = code
-json.dump(data, open(path, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
-PY
   if [ -n "$SIMULATOR" ]; then
     echo "Мобильное приложение в симуляторе $SIMULATOR (лог: /tmp/ev-engineer-run-mobile.log)"
     (cd "$ROOT/mobile" && flutter run -d "$SIMULATOR" --dart-define=API_BASE_URL="$API_BASE_URL" \

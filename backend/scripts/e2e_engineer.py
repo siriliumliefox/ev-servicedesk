@@ -8,9 +8,10 @@
                      статья для быстрого ответа, тикеты клиента разных категорий для доски
                      (--board-tickets, по умолчанию все из таблицы) и наборы тикетов Playwright
                      (--e2e-sets: по набору из 3 тикетов на браузер). В FILE (0600) — входы
-                     инженеров, токены клиента, id авто и тикетов, заголовок статьи; на экран
-                     пароли и токены не выводятся. Клиент создаёт не больше 10 тикетов в час
-                     (ticket_create_per_user_hour) — тикеты заводятся здесь, а не в тестах.
+                     инженеров, токены и SMS-код клиента, id авто и тикетов, заголовок статьи;
+                     на экран пароли, токены и код не выводятся. Клиент создаёт не больше
+                     10 тикетов в час (ticket_create_per_user_hour) — тикеты заводятся здесь,
+                     а не в тестах.
 
   cd backend && poetry run python scripts/e2e_engineer.py seed --out /tmp/seed.json --e2e-sets 1
 
@@ -108,6 +109,8 @@ def seed(
             "access_token": client.headers["Authorization"].removeprefix("Bearer "),
             "refresh_token": client.refresh_token,
             "vehicle_id": car["id"],
+            # Код тестового номера стека — вход клиента в мобильном приложении (engineer_run.sh).
+            "sms_code": code,
         },
         "quick_reply_title": table["quick_reply"]["title"],
         "tickets": tickets,

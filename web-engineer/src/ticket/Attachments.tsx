@@ -42,7 +42,12 @@ export function Attachments({ items, onExpired }: { items: Attachment[] | undefi
           aria-label="Фото во весь экран"
           className="fixed inset-0 z-50 grid place-items-center bg-black/80 p-8"
           onClick={() => setOpened(null)}
-          onKeyDown={(e) => e.key === 'Escape' && setOpened(null)}
+          onKeyDown={(e) => {
+            // Esc закрывает только фото, а не карточку тикета (слушатель Esc у окна в App).
+            if (e.key !== 'Escape') return
+            e.stopPropagation()
+            setOpened(null)
+          }}
         >
           <img src={opened} alt="Фото во весь экран" className="max-h-full max-w-full rounded-md" />
           <button

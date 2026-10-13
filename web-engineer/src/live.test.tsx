@@ -140,6 +140,24 @@ describe('перенос с клавиатуры (ADR 0025 п. 7)', () => {
   })
 })
 
+describe('Esc', () => {
+  it('в диалоге подтверждения закрывает диалог, а не карточку тикета', async () => {
+    const { user } = setup()
+    await user.click(await card(1042))
+    await panel(1042)
+    screen.getByRole('button', { name: 'Перенести тикет #1042' }).focus()
+    await user.keyboard(' {ArrowRight}{ArrowRight} ')
+    const dialog = await screen.findByRole('dialog', { name: 'Решить тикет #1042?' })
+    // Браузер при showModal переводит фокус в диалог, jsdom — нет.
+    within(dialog).getByRole('button', { name: 'Отмена' }).focus()
+    await user.keyboard('{Escape}')
+    expect(screen.getByRole('complementary', { name: 'Карточка тикета #1042' })).toBeInTheDocument()
+    await user.click(within(dialog).getByRole('button', { name: 'Отмена' }))
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('complementary', { name: 'Карточка тикета #1042' })).toBeNull()
+  })
+})
+
 describe('доска и оформление', () => {
   it('размер очереди — в заголовке вкладки', async () => {
     setup()

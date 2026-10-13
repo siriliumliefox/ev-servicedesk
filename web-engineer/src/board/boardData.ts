@@ -4,7 +4,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   TICKET_STATUSES,
-  allowedTransitions,
   fetchPages,
   type EngineerRepository,
   type Ticket,
@@ -38,12 +37,6 @@ export async function loadColumns(repo: EngineerRepository, now: Date): Promise<
   return Object.fromEntries(entries) as Columns
 }
 
-/** Куда инженер может перенести тикет (граф ADR 0017 п. 4): из очереди — взять в работу, свой — по графу. */
-export function allowedTargets(ticket: Ticket, meId: number): readonly TicketStatus[] {
-  if (ticket.status === 'new') return ticket.assigned_engineer_id == null ? ['in_progress'] : []
-  return ticket.assigned_engineer_id === meId ? allowedTransitions(ticket.status) : []
-}
-
 export interface BoardData {
   columns: Columns | undefined
   error: unknown
@@ -61,16 +54,12 @@ export function useBoardData(repo: EngineerRepository, clock: () => Date, versio
   const [fresh, setFresh] = useState<ReadonlySet<number>>(new Set())
   const [attempt, setAttempt] = useState(0)
   const known = useRef<Set<number> | null>(null)
-  const clockRef = useRef(clock)
-  useEffect(() => {
-    clockRef.current = clock
-  }, [clock])
 
   const reload = useCallback(() => setAttempt((n) => n + 1), [])
 
   useEffect(() => {
     let cancelled = false
-    loadColumns(repo, clockRef.current()).then(
+    loadColumns(repo, clock()).then(
       (next) => {
         if (cancelled) return
         const queue = next.new.items.map((t) => t.id)
@@ -88,7 +77,7 @@ export function useBoardData(repo: EngineerRepository, clock: () => Date, versio
     return () => {
       cancelled = true
     }
-  }, [repo, version, attempt])
+  }, [repo, clock, version, attempt])
 
   // Опрос — только на видимой вкладке; вернулись на вкладку — перечитать сразу.
   useEffect(() => {

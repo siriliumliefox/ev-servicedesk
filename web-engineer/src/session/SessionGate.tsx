@@ -2,10 +2,11 @@
 // перезагрузки, экран входа по телефону и паролю, только роль engineer (client и admin — отказ).
 // Сессия завершилась (refresh отклонён: истекла, сотрудник заблокирован) — вход с объяснением.
 // Адрес (`#/tickets/…`) при входе не меняется — после входа открывается запрошенный тикет.
-import { useEffect, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import {
   ApiError,
   Button,
+  ERROR_TEXTS,
   LoadingState,
   TextField,
   errorText,
@@ -18,59 +19,70 @@ import App from '../App.tsx'
 
 type Phase = 'resuming' | 'anonymous' | 'signed-in'
 
+/** Вошёл не инженер — кабинет не открывается, сессия завершается. */
+class NotEngineer extends Error {
+  readonly role: UserPublic['role']
+
+  constructor(role: UserPublic['role']) {
+    super(role)
+    this.role = role
+  }
+}
+
 export function SessionGate({ session, repo }: { session: ApiSession; repo: EngineerRepository }) {
   const [phase, setPhase] = useState<Phase>(session.canResume ? 'resuming' : 'anonymous')
   const [notice, setNotice] = useState<string | null>(null)
+
+  /** Один путь для входа и восстановления: аутентификация → кто вошёл → только инженер. */
+  const admit = useCallback(
+    async (authenticate: () => Promise<void>) => {
+      await authenticate()
+      const user = await repo.getCurrentUser()
+      if (user.role !== 'engineer') {
+        await session.logout()
+        throw new NotEngineer(user.role)
+      }
+    },
+    [session, repo],
+  )
+  const enter = () => {
+    setNotice(null)
+    setPhase('signed-in')
+  }
 
   useEffect(
     () =>
       session.onEnd((end) => {
         setPhase('anonymous')
-        setNotice(end === 'expired' ? 'Сессия завершена, войдите снова.' : null)
+        setNotice(end === 'expired' ? ERROR_TEXTS.UNAUTHORIZED : null)
       }),
     [session],
   )
 
   useEffect(() => {
     if (phase !== 'resuming') return
-    let cancelled = false
-    session
-      .resume()
-      .then(() => repo.getCurrentUser())
-      .then(
-        (user) => {
-          if (cancelled) return
-          if (user.role === 'engineer') setPhase('signed-in')
-          else void session.logout()
-        },
-        (e: unknown) => {
-          if (cancelled) return
-          setPhase('anonymous')
-          if (e instanceof ApiError && e.code === 'NETWORK') setNotice(errorText(e))
-        },
-      )
-    return () => {
-      cancelled = true
-    }
-  }, [phase, session, repo])
+    admit(() => session.resume()).then(enter, (e: unknown) => {
+      setPhase('anonymous')
+      // Отклонённый refresh объявляет onEnd («Сессия завершена»); здесь — сеть и чужая роль.
+      if (e instanceof NotEngineer || (e instanceof ApiError && e.code === 'NETWORK')) setNotice(signInError(e))
+    })
+  }, [phase, session, admit])
 
   if (phase === 'resuming') return <LoadingState label="Восстановление сессии…" />
   if (phase === 'anonymous') {
     return (
-      <LoginScreen
-        session={session}
-        notice={notice}
-        onSignedIn={() => {
-          setNotice(null)
-          setPhase('signed-in')
-        }}
-      />
+      <LoginScreen notice={notice} onSubmit={(phone, password) => admit(() => session.login(phone, password)).then(enter)} />
     )
   }
   return <App repo={repo} onLogout={() => void session.logout()} />
 }
 
-function loginError(e: unknown): string {
+function signInError(e: unknown): string {
+  if (e instanceof NotEngineer) {
+    return e.role === 'admin'
+      ? 'Кабинет инженера — только для инженеров. Администратор работает в админ-панели.'
+      : 'Кабинет инженера — только для инженеров.'
+  }
   if (!(e instanceof ApiError)) return errorText(e)
   if (e.code === 'UNAUTHORIZED') return 'Неверный номер телефона или пароль.'
   if (e.code === 'VALIDATION_ERROR') return 'Проверьте номер: формат +375XXXXXXXXX.'
@@ -83,13 +95,11 @@ function loginError(e: unknown): string {
 }
 
 function LoginScreen({
-  session,
   notice,
-  onSignedIn,
+  onSubmit,
 }: {
-  session: ApiSession
   notice: string | null
-  onSignedIn: (user: UserPublic) => void
+  onSubmit: (phone: string, password: string) => Promise<void>
 }) {
   useTheme('dark')
   const [phone, setPhone] = useState('+375')
@@ -102,20 +112,9 @@ function LoginScreen({
     setBusy(true)
     setError(null)
     try {
-      const user = await session.login(phone.replace(/[\s()-]/g, ''), password)
-      if (user.role !== 'engineer') {
-        await session.logout()
-        setError(
-          user.role === 'admin'
-            ? 'Кабинет инженера — только для инженеров. Администратор работает в админ-панели.'
-            : 'Кабинет инженера — только для инженеров.',
-        )
-        return
-      }
-      onSignedIn(user)
+      await onSubmit(phone.replace(/[\s()-]/g, ''), password)
     } catch (err) {
-      setError(loginError(err))
-    } finally {
+      setError(signInError(err))
       setBusy(false)
       setPassword('')
     }

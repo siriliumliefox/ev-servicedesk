@@ -85,20 +85,19 @@ export function TicketPanel({
     return () => clearTimeout(id)
   }, [live.lost, onClose])
 
-  const run = async (action: () => Promise<unknown>, after?: (result: unknown) => void) => {
+  /** Действие с карточкой: проигранный claim — тикет потерян; прочий 409 — показать актуальные данные. */
+  const run = async <T,>(action: () => Promise<T>, done: (result: T) => void) => {
     setBusy(true)
     setActionError(null)
     try {
-      const result = await action()
-      after?.(result)
+      done(await action())
       onChanged()
     } catch (e) {
       if (e instanceof ApiError && e.code === 'TICKET_ALREADY_CLAIMED') {
-        live.markLost('claimed_by_other')
+        live.lose()
         onChanged()
       } else {
         setActionError(e)
-        // Переход вне графа или тикет решён другим действием — показать актуальные данные.
         if (e instanceof ApiError && e.status === 409) live.reload()
       }
     } finally {
@@ -110,13 +109,13 @@ export function TicketPanel({
     run(
       () => repo.createTicketMessage(ticketId, text),
       (message) => {
-        live.append(message as TicketMessage)
+        live.append(message)
         setDraft('')
         setShowReplies(false)
       },
     )
 
-  const act = (action: () => Promise<TicketDetail>) => run(action, (t) => live.apply(t as TicketDetail))
+  const act = (action: () => Promise<TicketDetail>) => run(action, live.apply)
 
   // Ссылки на вложения живут 15 минут: перечитать карточку, но не чаще раза в 30 с.
   const onExpired = () => {
@@ -125,8 +124,7 @@ export function TicketPanel({
     live.reload()
   }
 
-  const ticket = { data: live.ticket, error: live.error, reload: live.reload }
-  const t = ticket.data
+  const t = live.ticket
   const readOnly = live.lost !== null
   const isMine = !readOnly && t?.assigned_engineer_id === meId
   // В решённый тикет не пишет никто (409 TICKET_RESOLVED) — сначала «Вернуть в работу».
@@ -180,9 +178,9 @@ export function TicketPanel({
         </div>
       )}
 
-      {ticket.error ? (
+      {live.error ? (
         <div className="p-6">
-          <ErrorState error={ticket.error} onRetry={ticket.reload} />
+          <ErrorState error={live.error} onRetry={live.reload} />
         </div>
       ) : !t ? (
         <LoadingState label="Загрузка тикета…" />

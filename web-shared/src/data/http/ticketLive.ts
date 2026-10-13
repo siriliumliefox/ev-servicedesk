@@ -119,8 +119,9 @@ export function openTicketLive(options: TicketLiveOptions): () => void {
     if (code === 4429) return schedule(Math.max(RATE_LIMIT_DELAY_MS, backoff()));
     if (code === 4401) {
       state("offline");
+      // Истёк access-токен — первое переподключение сразу; 4401 подряд (без ready) — с паузой.
       const delay = failures === 0 ? 0 : backoff();
-      if (failures === 0) failures = 1;
+      failures = Math.max(failures, 1);
       options.refresh().then(
         () => !stopped && schedule(delay),
         (error: unknown) => {

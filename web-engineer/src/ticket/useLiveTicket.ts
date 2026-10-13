@@ -1,7 +1,8 @@
 // Тикет и переписка «вживую» (docs/asyncapi.yaml, ADR 0025 п. 6, 10): REST-загрузка + события WebSocket.
 // После каждого `ready` — догрузка сообщений с `after_id` = наибольший id из REST и перечитывание тикета;
-// сообщения упорядочены и без повторов по id. Тикет ушёл к другому инженеру (`ticket.updated` с чужим
-// исполнителем, `4403`, `404`) — `lost`: карточка только для чтения.
+// сообщения упорядочены и без повторов по id. Тикет ушёл к другому инженеру — `ticket.updated` с чужим
+// исполнителем, закрытие `4403`, `404` при чтении, `409 TICKET_ALREADY_CLAIMED` — один путь `lose()`:
+// причина выводится из последнего своего исполнителя (очередь — взял другой, вы — переназначен).
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ApiError,
@@ -28,7 +29,8 @@ export interface LiveTicket {
   apply: (ticket: TicketDetail) => void
   /** Своё отправленное сообщение — сразу в ленту (WebSocket пришлёт его же, повтор отбросится). */
   append: (message: TicketMessage) => void
-  markLost: (reason: LostReason) => void
+  /** Тикет больше не ваш (например, проигран claim) — только чтение. */
+  lose: () => void
 }
 
 const merge = (list: TicketMessage[], incoming: TicketMessage[]) => {
@@ -55,23 +57,28 @@ export function useLiveTicket(
   const [attempt, setAttempt] = useState(0)
   // Курсор догрузки — наибольший id из REST-истории, а не из кадров WebSocket (docs/asyncapi.yaml).
   const cursor = useRef(0)
-  const assignee = useRef<number | null | undefined>(undefined)
   const external = useRef(onExternalChange)
   useEffect(() => {
     external.current = onExternalChange
   }, [onExternalChange])
 
-  const markLost = useCallback((reason: LostReason) => setLost((current) => current ?? reason), [])
+  // Последний исполнитель, при котором тикет был виден как свой или из очереди (undefined — ещё не читали).
+  const assignee = useRef<number | null | undefined>(undefined)
 
+  const lose = useCallback(() => {
+    const was = assignee.current
+    setLost((current) => current ?? (was === null ? 'claimed_by_other' : was === meId ? 'reassigned' : 'unavailable'))
+  }, [meId])
+
+  /** Новые данные тикета: исполнитель сменился на чужого — тикет потерян; иначе запомнить исполнителя. */
   const track = useCallback(
     (next: Pick<Ticket, 'assigned_engineer_id'>) => {
-      const before = assignee.current
       const after = next.assigned_engineer_id ?? null
-      assignee.current = after
-      if (before === undefined || before === after || after === null || after === meId) return
-      markLost(before === meId ? 'reassigned' : 'claimed_by_other')
+      const foreign = after !== null && after !== meId && after !== assignee.current
+      if (foreign && assignee.current !== undefined) lose()
+      else assignee.current = after
     },
-    [meId, markLost],
+    [meId, lose],
   )
 
   const acceptTicket = useCallback(
@@ -84,10 +91,10 @@ export function useLiveTicket(
   )
   const rejectTicket = useCallback(
     (e: unknown) => {
-      if (gone(e) && assignee.current !== undefined) markLost('unavailable')
+      if (gone(e) && assignee.current !== undefined) lose()
       else setError(e)
     },
-    [markLost],
+    [lose],
   )
   const loadTicket = useCallback(
     () => repo.getTicket(ticketId).then(acceptTicket, rejectTicket),
@@ -128,15 +135,13 @@ export function useLiveTicket(
         setTicket((current) => (current ? { ...current, ...t } : current))
         external.current()
       },
-      // 4403: доступ потерян. Смотрели из очереди — взял другой инженер; был свой — переназначен.
       onLost: () => {
-        const was = assignee.current
-        markLost(was === null ? 'claimed_by_other' : was === meId ? 'reassigned' : 'unavailable')
+        lose()
         external.current()
       },
       onState: setLive,
     })
-  }, [repo, ticketId, meId, loadMessages, loadTicket, track, markLost])
+  }, [repo, ticketId, loadMessages, loadTicket, track, lose])
 
   return {
     ticket,
@@ -154,6 +159,6 @@ export function useLiveTicket(
       [track],
     ),
     append: useCallback((m: TicketMessage) => setMessages((list) => merge(list, [m])), []),
-    markLost,
+    lose,
   }
 }

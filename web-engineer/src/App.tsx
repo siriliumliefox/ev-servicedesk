@@ -38,14 +38,12 @@ export default function App({
 }) {
   const { theme, preference, setPreference, toggle } = useTheme('dark')
   const [path, navigate] = useHashRoute()
-  // version — данные всего приложения (панель «Демо»); boardTick — доска после действий в карточке;
-  // panelTick — карточка после переноса на доске.
+  // version — данные всего приложения (панель «Демо»); boardTick — доска после изменений тикета в карточке.
+  // Карточка о переносах на доске узнаёт сама — из событий тикета (watchTicket).
   const [version, setVersion] = useState(0)
   const [boardTick, setBoardTick] = useState(0)
-  const [panelTick, setPanelTick] = useState(0)
   const bump = useCallback(() => setVersion((v) => v + 1), [])
   const refreshBoard = useCallback(() => setBoardTick((v) => v + 1), [])
-  const refreshPanel = useCallback(() => setPanelTick((v) => v + 1), [])
   const me = useAsync(() => repo.getCurrentUser(), [repo, version])
   const [, setTick] = useState(0)
 
@@ -61,7 +59,8 @@ export default function App({
 
   useEffect(() => {
     if (selectedId === null) return
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && !document.querySelector('dialog[open]') && closeTicket()
+    // Esc диалогов и просмотра фото до окна не доходит — они останавливают его сами.
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && closeTicket()
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [selectedId, closeTicket])
@@ -121,13 +120,12 @@ export default function App({
                 version={version + boardTick}
                 selectedId={selectedId}
                 onSelect={(id) => navigate(`/tickets/${id}`)}
-                onChanged={refreshPanel}
               />
               {selectedId !== null && (
                 <TicketPanel
                   key={selectedId}
                   ticketId={selectedId}
-                  version={version + panelTick}
+                  version={version}
                   onChanged={refreshBoard}
                   onClose={closeTicket}
                 />
