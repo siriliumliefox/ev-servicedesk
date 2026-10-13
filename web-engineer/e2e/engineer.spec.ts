@@ -80,7 +80,7 @@ test('конкурентный доступ: два инженера берут 
     return (await won.isVisible()) ? 'won' : 'lost'
   }
   const results = [await outcome(a), await outcome(b)]
-  expect(results.sort()).toEqual(['lost', 'won'])
+  expect([...results].sort()).toEqual(['lost', 'won'])
   const loser = results[0] === 'lost' ? a : b
   // Карточка проигравшего закрывается, тикет пропадает с его доски.
   await expect(loser.getByRole('complementary', { name: `Карточка тикета #${first.id}` })).toBeHidden({ timeout: 8000 })

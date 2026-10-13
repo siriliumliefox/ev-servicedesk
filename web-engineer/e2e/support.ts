@@ -93,10 +93,29 @@ export class ClientSide {
   }
 }
 
-/** Вход инженера через экран входа; нарушения CSP в консоли — падение теста. */
+/** Нарушения CSP за тест — проверяются после каждого теста (afterEach). */
+const violations: string[] = []
+
+test.afterEach(() => {
+  const found = violations.splice(0)
+  expect(found, 'нарушения CSP').toEqual([])
+})
+
+/** Вход инженера через экран входа; нарушения CSP собираются и валят тест в конце. */
 export async function signIn(page: Page, account: { phone: string; password: string }) {
+  // Нарушение CSP — с директивой и источником (securitypolicyviolation). Без источника — инъекция самого
+  // Playwright: в WebKit скриншот трассировки прячет курсор встроенным <style> (проверено на page.screenshot);
+  // стиль или скрипт кабинета указал бы на файл сборки.
+  await page.addInitScript(() => {
+    document.addEventListener('securitypolicyviolation', (e) => {
+      if (!e.sourceFile) return
+      console.error(
+        `CSP-VIOLATION ${e.violatedDirective} blocked=${e.blockedURI} source=${e.sourceFile}:${e.lineNumber} sample=${e.sample}`,
+      )
+    })
+  })
   page.on('console', (message) => {
-    if (/Content[- ]Security[- ]Policy/i.test(message.text())) throw new Error(`CSP: ${message.text()}`)
+    if (message.text().startsWith('CSP-VIOLATION')) violations.push(message.text())
   })
   await page.goto('/')
   await page.getByLabel('Телефон').fill(account.phone)
