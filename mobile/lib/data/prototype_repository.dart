@@ -3,6 +3,7 @@
 import 'api/error_text.dart';
 import 'models.dart';
 import 'repository.dart';
+import 'ticket_live.dart';
 
 /// Набор авто на аккаунте для ревью прототипа.
 enum AccountScenario {
@@ -61,9 +62,6 @@ class PrototypeRepository implements ClientRepository {
     if (offline) throw const OfflineException();
     return body();
   }
-
-  @override
-  bool get supportsAttachments => true;
 
   /// Сессию в прототипе сервер не завершает.
   @override
@@ -190,7 +188,7 @@ class PrototypeRepository implements ClientRepository {
   // ---------- Knowledge base ----------
 
   @override
-  Future<List<KnowledgeArticle>> articles(int vehicleModelId, ArticleType type) => _call(() => _articles
+  Future<List<KnowledgeArticle>> articles(int? vehicleModelId, ArticleType type) => _call(() => _articles
       .where((a) => a.articleType == type && (a.vehicleModelId == null || a.vehicleModelId == vehicleModelId))
       .toList());
 
@@ -205,6 +203,7 @@ class PrototypeRepository implements ClientRepository {
 
   @override
   Future<Ticket> createTicket(TicketDraft draft) => _call(() {
+        // Как backend: описание и вложения — в самом тикете, переписка начинается пустой.
         final ticket = Ticket(
           id: _nextId++,
           vehicleId: draft.vehicleId,
@@ -212,27 +211,38 @@ class PrototypeRepository implements ClientRepository {
           status: TicketStatus.newTicket,
           summary: draft.description,
           createdAt: now,
-          attachments: draft.attachments,
+          description: draft.description,
+          attachments: _shown(draft.attachments),
         );
         _tickets = [..._tickets, ticket];
-        _messages[ticket.id] = [
-          TicketMessage(
-            id: _nextId++,
-            fromClient: true,
-            authorName: 'Вы',
-            body: draft.description,
-            createdAt: now,
-            attachments: draft.attachments,
-          ),
-        ];
+        _messages[ticket.id] = [];
         return ticket;
       });
 
   @override
-  Future<List<TicketMessage>> messages(int ticketId) => _call(() => List.unmodifiable(_messages[ticketId] ?? []));
+  Future<Ticket> ticket(int ticketId) => _call(() => _tickets.firstWhere((t) => t.id == ticketId));
 
   @override
-  Future<TicketMessage> sendMessage(int ticketId, String body, {List<TicketAttachment> attachments = const []}) =>
+  Future<List<TicketMessage>> messages(int ticketId, {int? afterId}) => _call(() => List.unmodifiable(
+      (_messages[ticketId] ?? const <TicketMessage>[]).where((m) => afterId == null || m.id > afterId)));
+
+  @override
+  Future<UploadedAttachment> uploadAttachment(LocalAttachment file, {void Function(double progress)? onProgress}) =>
+      _call(() {
+        onProgress?.call(1);
+        return UploadedAttachment(fileName: file.fileName, fileType: file.fileType, key: 'prototype/${file.fileName}');
+      });
+
+  /// Загруженное в «S3» прототипа — вложение в ответе (ссылки на скачивание нет).
+  static List<TicketAttachment> _shown(List<UploadedAttachment> uploaded) =>
+      [for (final a in uploaded) TicketAttachment(fileName: a.fileName, fileType: a.fileType)];
+
+  /// Сервера нет — переписка не меняется сама.
+  @override
+  TicketLive watchTicket(int ticketId, {required int afterId}) => OfflineTicketLive();
+
+  @override
+  Future<TicketMessage> sendMessage(int ticketId, String body, {List<UploadedAttachment> attachments = const []}) =>
       _call(() {
         final message = TicketMessage(
           id: _nextId++,
@@ -240,7 +250,7 @@ class PrototypeRepository implements ClientRepository {
           authorName: 'Вы',
           body: body,
           createdAt: now,
-          attachments: attachments,
+          attachments: _shown(attachments),
         );
         _messages[ticketId] = [...?_messages[ticketId], message];
         return message;
@@ -258,6 +268,16 @@ class PrototypeRepository implements ClientRepository {
           for (final n in _notifications) n.id == notificationId && !n.isRead ? n.markRead(now) : n,
         ];
       });
+
+  @override
+  Future<void> markNotificationOpened(int notificationId, String pushToken) => markNotificationRead(notificationId);
+
+  /// Push в прототипе нет (без Firebase канал не создаётся).
+  @override
+  Future<void> registerPushToken(String token) async {}
+
+  @override
+  Future<void> unregisterPushToken(String token) async {}
 
   int get unreadCount => _notifications.where((n) => !n.isRead).length;
 
@@ -643,6 +663,7 @@ class PrototypeRepository implements ClientRepository {
             type: NotificationType.maintenance,
             message: 'Скоро замена салонного фильтра\nLi Auto L7: осталось около 1 100 км или 21 день.',
             createdAt: DateTime(2026, 10, 7, 9),
+            vehicleId: 101,
           ),
         ],
         NotificationItem(

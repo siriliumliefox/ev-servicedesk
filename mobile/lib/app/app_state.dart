@@ -1,16 +1,20 @@
-// Состояние приложения клиента: сессия, авто на аккаунте, выбранное авто, непрочитанные уведомления.
-// Без внешних пакетов: ChangeNotifier + InheritedNotifier (AppScope).
+// Состояние приложения клиента: сессия, авто на аккаунте, выбранное авто, раздел, непрочитанные уведомления,
+// push (глава 20). Без внешних пакетов: ChangeNotifier + InheritedNotifier (AppScope).
 import 'dart:async';
 
 import 'package:flutter/material.dart';
 
 import '../data/api/error_text.dart';
+import '../data/attachments.dart';
 import '../data/models.dart';
 import '../data/prototype_repository.dart';
 import '../data/repository.dart';
+import 'push_service.dart';
 
 class AppState extends ChangeNotifier {
-  AppState(this.repository, {bool signedIn = false}) : _signedIn = signedIn {
+  AppState(this.repository, {bool signedIn = false, this.push, AttachmentSource? attachmentSource})
+      : _signedIn = signedIn,
+        attachmentSource = attachmentSource ?? ImagePickerSource() {
     _sessionEndedSubscription = repository.sessionEnded.listen((_) => _sessionEnded());
   }
 
@@ -23,6 +27,12 @@ class AppState extends ChangeNotifier {
   }
 
   final ClientRepository repository;
+
+  /// null — push выключен (нет Firebase в сборке, прототип, тесты).
+  final PushService? push;
+
+  /// Камера и галерея; в автотестах — фейк (ADR 0024 п. 9).
+  final AttachmentSource attachmentSource;
 
   /// Панель «Демо» доступна только в прототипе.
   PrototypeRepository? get prototype => repository is PrototypeRepository ? repository as PrototypeRepository : null;
@@ -42,7 +52,23 @@ class AppState extends ChangeNotifier {
   }
 
   int _unread = 0;
+  int _unreadNews = 0;
+
+  /// Непрочитанные в центре уведомлений (все типы).
   int get unreadNotifications => _unread;
+
+  /// Непрочитанные новости и акции — счётчик на вкладке «Новости».
+  int get unreadNews => _unreadNews;
+
+  /// Номер тикета, чат которого на экране: push по нему не показывается баннером (ADR 0024 п. 4).
+  int? _openChatTicketId;
+  int? get openChatTicketId => _openChatTicketId;
+
+  void chatOpened(int ticketId) => _openChatTicketId = ticketId;
+
+  void chatClosed(int ticketId) {
+    if (_openChatTicketId == ticketId) _openChatTicketId = null;
+  }
 
   ThemeMode _themeMode = ThemeMode.system;
   ThemeMode get themeMode => _themeMode;
@@ -85,17 +111,20 @@ class AppState extends ChangeNotifier {
 
   Future<void> signIn() async {
     _signedIn = true;
+    unawaited(push?.register());
     await refresh();
   }
 
-  /// Выход с устройства.
+  /// Выход с устройства: push-токен удаляется до выхода, пока сессия действует.
   Future<void> signOut() async {
+    await push?.unregister();
     await repository.signOut();
     _clearSession();
   }
 
   /// Отзыв согласия на обработку ПД: завершает все сессии пользователя.
   Future<void> withdrawPdConsent() async {
+    await push?.unregister();
     await repository.withdrawPdConsent();
     _clearSession();
   }
@@ -111,6 +140,8 @@ class AppState extends ChangeNotifier {
     _selectedVehicleId = null;
     _vehiclesError = null;
     _unread = 0;
+    _unreadNews = 0;
+    _openChatTicketId = null;
     _bump();
   }
 
@@ -131,8 +162,9 @@ class AppState extends ChangeNotifier {
 
   Future<void> refreshUnread() async {
     try {
-      final items = await repository.notifications();
-      _unread = items.where((n) => !n.isRead).length;
+      final unread = (await repository.notifications()).where((n) => !n.isRead);
+      _unread = unread.length;
+      _unreadNews = unread.where((n) => n.type.isNews).length;
       notifyListeners();
     } on Exception {
       // Счётчик непрочитанных не критичен: при ошибке остаётся прежним.

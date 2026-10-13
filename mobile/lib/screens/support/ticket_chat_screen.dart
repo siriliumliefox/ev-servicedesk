@@ -1,25 +1,190 @@
-// Чат по обращению (GET/POST /tickets/{id}/messages). Real-time (WebSocket) — глава 17.
+// Чат по обращению (ADR 0024 п. 8): первым сообщением — само обращение (описание и вложения из карточки тикета:
+// в переписку они не входят), дальше переписка по REST, новые сообщения и смена статуса — по WebSocket (TicketLive);
+// повторы отбрасываются по id. Свёрнутое приложение закрывает сокет, возврат — переподключение и догрузка.
+// Вложения — фото и видео (ADR 0024 п. 9).
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../app/app_state.dart';
 import '../../data/models.dart';
+import '../../data/ticket_live.dart';
 import '../../theme/app_theme.dart';
 import '../../ui/format.dart';
 import '../../ui/info_note.dart';
 import '../../ui/states.dart';
+import 'attachment_tray.dart';
 import 'support_screen.dart';
 
-class TicketChatScreen extends StatelessWidget {
+class TicketChatScreen extends StatefulWidget {
   const TicketChatScreen({super.key, required this.ticket, this.notice});
 
+  /// Тикет из списка или из push: шапка видна, пока грузится карточка.
   final Ticket ticket;
 
   /// Пояснение над перепиской сразу после отправки: что будет дальше (заявка на запись — глава 9).
   final String? notice;
 
   @override
+  State<TicketChatScreen> createState() => _TicketChatScreenState();
+}
+
+/// Один владелец всего чата: тикет (шапка и поле ввода следуют за его статусом), обращение, переписка, сокет,
+/// вложения.
+class _TicketChatScreenState extends State<TicketChatScreen> {
+  late final AppState _app = AppScope.read(context);
+  late Ticket _ticket = widget.ticket;
+
+  /// Обращение — первым сообщением клиента (в прототипе у старых обращений описания нет).
+  TicketMessage? _opening;
+
+  /// Сообщения по id: кадр сокета и догрузка могут прийти дважды.
+  final Map<int, TicketMessage> _messages = {};
+  bool _loaded = false;
+  Object? _loadError;
+
+  TicketLive? _live;
+  StreamSubscription<TicketLiveEvent>? _events;
+  late final AppLifecycleListener _lifecycle;
+
+  final _controller = TextEditingController();
+  final _scroll = ScrollController();
+  late final AttachmentUploads _uploads = AttachmentUploads(_app.repository)..addListener(_changed);
+  bool _sending = false;
+
+  /// «Переподключаемся…» — только если связи нет дольше мгновения: короткое подключение при открытии не мигает.
+  bool _showReconnecting = false;
+  Timer? _reconnectingTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _app.chatOpened(widget.ticket.id);
+    _lifecycle = AppLifecycleListener(onPause: () => _live?.pause(), onResume: () => _live?.resume());
+    _load();
+  }
+
+  @override
+  void dispose() {
+    _app.chatClosed(widget.ticket.id);
+    _lifecycle.dispose();
+    _reconnectingTimer?.cancel();
+    _live?.state.removeListener(_onLiveState);
+    unawaited(_events?.cancel());
+    unawaited(_live?.close());
+    _uploads.dispose();
+    _controller.dispose();
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  /// Карточка тикета (описание, вложения, свежий статус) и переписка; затем — сокет с догрузкой после них.
+  Future<void> _load() async {
+    final repository = _app.repository;
+    try {
+      final detail = await repository.ticket(widget.ticket.id);
+      final messages = await repository.messages(widget.ticket.id);
+      if (!mounted) return;
+      setState(() {
+        _ticket = detail;
+        _opening = _openingOf(detail);
+        _messages.addEntries(messages.map((m) => MapEntry(m.id, m)));
+        _loaded = true;
+      });
+      _watch(afterId: messages.fold(0, (id, m) => m.id > id ? m.id : id));
+    } on Exception catch (e) {
+      if (mounted) setState(() => _loadError = e);
+    }
+  }
+
+  void _retry() {
+    setState(() => _loadError = null);
+    _load();
+  }
+
+  static TicketMessage? _openingOf(Ticket detail) {
+    final description = detail.description;
+    if (description == null) return null;
+    return TicketMessage(
+      id: 0,
+      fromClient: true,
+      authorName: 'Вы',
+      body: description,
+      createdAt: detail.createdAt,
+      attachments: detail.attachments,
+    );
+  }
+
+  void _watch({required int afterId}) {
+    final live = _live = _app.repository.watchTicket(widget.ticket.id, afterId: afterId);
+    _events = live.events.listen(_onEvent);
+    live.state.addListener(_onLiveState);
+    _onLiveState();
+  }
+
+  void _changed() => setState(() {});
+
+  void _onEvent(TicketLiveEvent e) {
+    if (!mounted) return;
+    switch (e) {
+      case LiveMessage(:final message):
+        final isNew = !_messages.containsKey(message.id);
+        setState(() => _messages[message.id] = message);
+        if (isNew) _scrollToEnd();
+      case LiveTicket(:final ticket):
+        setState(() => _ticket = ticket);
+    }
+  }
+
+  void _onLiveState() {
+    final live = _live?.state.value == LiveState.live;
+    _reconnectingTimer?.cancel();
+    if (live) {
+      if (_showReconnecting) setState(() => _showReconnecting = false);
+    } else {
+      _reconnectingTimer = Timer(const Duration(milliseconds: 1500), () {
+        if (mounted) setState(() => _showReconnecting = true);
+      });
+    }
+  }
+
+  void _scrollToEnd() => WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_scroll.hasClients) {
+          _scroll.animateTo(_scroll.position.maxScrollExtent, duration: EvDuration.normal, curve: Curves.easeOut);
+        }
+      });
+
+  Future<void> _send() async {
+    final body = _controller.text.trim();
+    if (body.isEmpty && _uploads.isEmpty) return;
+    final blocker = _uploads.blocker;
+    if (blocker != null) {
+      showErrorSnack(context, blocker);
+      return;
+    }
+    setState(() => _sending = true);
+    try {
+      final m = await _app.repository.sendMessage(
+        widget.ticket.id,
+        body.isEmpty ? 'Вложение' : body,
+        attachments: _uploads.uploaded,
+      );
+      setState(() {
+        _messages[m.id] = m;
+        _controller.clear();
+        _uploads.clear();
+      });
+      _scrollToEnd();
+    } on Exception catch (e) {
+      if (mounted) showErrorSnack(context, e);
+    } finally {
+      if (mounted) setState(() => _sending = false);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final app = AppScope.of(context);
     return Scaffold(
       appBar: AppBar(
         // Статус — под номером, а не в действиях справа: номер обращения виден целиком на узком экране;
@@ -31,84 +196,51 @@ class TicketChatScreen extends StatelessWidget {
             FittedBox(
               fit: BoxFit.scaleDown,
               alignment: Alignment.centerLeft,
-              child: Text('Обращение №${ticket.id}'),
+              child: Text('Обращение №${_ticket.id}'),
             ),
             Row(
               children: [
-                Flexible(child: Text(ticket.category.label, style: Theme.of(context).textTheme.bodySmall)),
+                Flexible(child: Text(_ticket.category.label, style: Theme.of(context).textTheme.bodySmall)),
                 const SizedBox(width: EvSpace.s2),
-                TicketStatusChip(status: ticket.status),
+                TicketStatusChip(key: const Key('chat-status'), status: _ticket.status),
               ],
             ),
           ],
         ),
       ),
-      body: AsyncView<List<TicketMessage>>(
-        reloadKey: app.revision,
-        load: () => app.repository.messages(ticket.id),
-        builder: (context, messages, _) => _Chat(ticket: ticket, initial: messages, notice: notice),
-      ),
+      body: switch ((_loadError, _loaded)) {
+        (final Object error, _) => ErrorState(error: error, onRetry: _retry),
+        (_, false) => const Center(child: CircularProgressIndicator()),
+        _ => _chat(context),
+      },
     );
   }
-}
 
-class _Chat extends StatefulWidget {
-  const _Chat({required this.ticket, required this.initial, this.notice});
-
-  final Ticket ticket;
-  final List<TicketMessage> initial;
-  final String? notice;
-
-  @override
-  State<_Chat> createState() => _ChatState();
-}
-
-class _ChatState extends State<_Chat> {
-  late List<TicketMessage> _messages = widget.initial;
-  final _controller = TextEditingController();
-  final List<TicketAttachment> _attachments = [];
-  bool _sending = false;
-
-  @override
-  void didUpdateWidget(covariant _Chat old) {
-    super.didUpdateWidget(old);
-    if (old.initial != widget.initial) _messages = widget.initial;
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  Future<void> _send() async {
-    final body = _controller.text.trim();
-    if (body.isEmpty && _attachments.isEmpty) return;
-    setState(() => _sending = true);
-    try {
-      final m = await AppScope.read(context).repository.sendMessage(
-            widget.ticket.id,
-            body.isEmpty ? 'Вложение' : body,
-            attachments: List.of(_attachments),
-          );
-      setState(() {
-        _messages = [..._messages, m];
-        _controller.clear();
-        _attachments.clear();
-      });
-    } on Exception catch (e) {
-      if (mounted) showErrorSnack(context, e);
-    } finally {
-      if (mounted) setState(() => _sending = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
+  Widget _chat(BuildContext context) {
     final c = context.evColors;
-    final resolved = widget.ticket.status == TicketStatus.resolved;
+    final resolved = _ticket.status == TicketStatus.resolved;
+    final messages = [
+      if (_opening case final opening?) opening,
+      ...(_messages.values.toList()..sort((a, b) => a.id.compareTo(b.id))),
+    ];
     return Column(
       children: [
+        if (_showReconnecting && _live?.state.value != LiveState.live)
+          Container(
+            key: const Key('chat-reconnecting'),
+            width: double.infinity,
+            color: c.surfaceSubtle,
+            padding: const EdgeInsets.symmetric(horizontal: EvSpace.s4, vertical: EvSpace.s2),
+            child: Semantics(
+              liveRegion: true,
+              child: Text(
+                _live?.state.value == LiveState.stopped
+                    ? 'Новые сообщения не обновляются — откройте чат заново'
+                    : 'Нет связи с сервером — переподключаемся…',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(color: c.fgMuted),
+              ),
+            ),
+          ),
         if (widget.notice != null)
           Padding(
             padding: const EdgeInsets.fromLTRB(EvSpace.s4, EvSpace.s4, EvSpace.s4, 0),
@@ -116,9 +248,11 @@ class _ChatState extends State<_Chat> {
           ),
         Expanded(
           child: ListView.builder(
+            key: const Key('chat-messages'),
+            controller: _scroll,
             padding: const EdgeInsets.all(EvSpace.s4),
-            itemCount: _messages.length,
-            itemBuilder: (context, i) => _Bubble(message: _messages[i]),
+            itemCount: messages.length,
+            itemBuilder: (context, i) => _Bubble(key: Key('message-${messages[i].id}'), message: messages[i]),
           ),
         ),
         if (resolved)
@@ -140,33 +274,18 @@ class _ChatState extends State<_Chat> {
             child: SafeArea(
               top: false,
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(EvSpace.s2, EvSpace.s2, EvSpace.s2, EvSpace.s2),
+                padding: const EdgeInsets.all(EvSpace.s2),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    if (_attachments.isNotEmpty)
-                      Wrap(
-                        spacing: EvSpace.s2,
-                        children: [
-                          for (final a in _attachments)
-                            InputChip(
-                              label: Text(a.fileName),
-                              onDeleted: () => setState(() => _attachments.remove(a)),
-                            ),
-                        ],
+                    if (!_uploads.isEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: EvSpace.s2),
+                        child: Align(alignment: Alignment.centerLeft, child: AttachmentTray(uploads: _uploads)),
                       ),
                     Row(
                       children: [
-                        // Вложения в HTTP-режиме — глава 20 (presign → S3, ADR 0022 п. 5).
-                        if (AppScope.of(context).repository.supportsAttachments)
-                          IconButton(
-                            tooltip: 'Прикрепить фото',
-                            icon: const Icon(Icons.attach_file),
-                            onPressed: () => setState(() => _attachments.add(TicketAttachment(
-                                  fileName: 'Фото ${_attachments.length + 1}.jpg',
-                                  fileType: AttachmentType.photo,
-                                ))),
-                          ),
+                        AttachButton(uploads: _uploads, compact: true),
                         Expanded(
                           child: TextField(
                             key: const Key('message'),
@@ -196,7 +315,7 @@ class _ChatState extends State<_Chat> {
 }
 
 class _Bubble extends StatelessWidget {
-  const _Bubble({required this.message});
+  const _Bubble({super.key, required this.message});
 
   final TicketMessage message;
 
@@ -205,6 +324,7 @@ class _Bubble extends StatelessWidget {
     final c = context.evColors;
     final text = Theme.of(context).textTheme;
     final mine = message.fromClient;
+    final muted = mine ? c.onPrimary : c.fgMuted;
     return Align(
       alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
       child: ConstrainedBox(
@@ -224,25 +344,81 @@ class _Bubble extends StatelessWidget {
               Text(message.body, style: text.bodyLarge?.copyWith(color: mine ? c.onPrimary : c.fg)),
               for (final a in message.attachments)
                 Padding(
-                  padding: const EdgeInsets.only(top: EvSpace.s1),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.image_outlined, size: EvSize.iconSm, color: mine ? c.onPrimary : c.fgMuted),
-                      const SizedBox(width: EvSpace.s1),
-                      Text(a.fileName, style: text.bodySmall?.copyWith(color: mine ? c.onPrimary : c.fgMuted)),
-                    ],
-                  ),
+                  padding: const EdgeInsets.only(top: EvSpace.s2),
+                  child: _AttachmentView(attachment: a, color: muted),
                 ),
               const SizedBox(height: EvSpace.s1),
-              Text(
-                formatDateTime(message.createdAt),
-                style: text.bodySmall?.copyWith(color: mine ? c.onPrimary : c.fgMuted),
-              ),
+              Text(formatDateTime(message.createdAt), style: text.bodySmall?.copyWith(color: muted)),
             ],
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Фото — миниатюра (нажатие — на весь экран), видео — открывается в системном плеере. Ссылка действует
+/// 15 минут: устаревшая обновится, когда переписка перечитается (возврат в приложение, повторное открытие).
+class _AttachmentView extends StatelessWidget {
+  const _AttachmentView({required this.attachment, required this.color});
+
+  final TicketAttachment attachment;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    final url = attachment.url;
+    final photo = attachment.fileType == AttachmentType.photo;
+    final label = Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(photo ? Icons.image_outlined : Icons.play_circle_outline, size: EvSize.iconMd, color: color),
+        const SizedBox(width: EvSpace.s1),
+        Flexible(
+          child: Text(photo ? 'Фото' : 'Видео', style: Theme.of(context).textTheme.bodySmall?.copyWith(color: color)),
+        ),
+      ],
+    );
+    if (url == null) return label; // прототип: файла нет
+    if (!photo) {
+      return InkWell(
+        onTap: () => launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication),
+        child: Semantics(button: true, label: 'Открыть видео', child: label),
+      );
+    }
+    return Semantics(
+      button: true,
+      label: 'Открыть фото',
+      child: GestureDetector(
+        onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => _PhotoScreen(url: url))),
+        child: ClipRRect(
+          borderRadius: const BorderRadius.all(Radius.circular(EvRadius.md)),
+          child: Image.network(
+            url,
+            height: 160,
+            fit: BoxFit.cover,
+            errorBuilder: (_, __, ___) => label,
+            loadingBuilder: (_, child, progress) => progress == null
+                ? child
+                : const SizedBox(height: 160, width: 120, child: Center(child: CircularProgressIndicator())),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _PhotoScreen extends StatelessWidget {
+  const _PhotoScreen({required this.url});
+
+  final String url;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(backgroundColor: Colors.black, foregroundColor: Colors.white),
+      body: InteractiveViewer(child: Center(child: Image.network(url))),
     );
   }
 }

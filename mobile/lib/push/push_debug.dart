@@ -14,6 +14,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 
+import 'push_channel.dart';
+
+export 'push_channel.dart';
+
 /// Значения --dart-define (scripts/push_e2e.py setup).
 class PushDebugConfig {
   const PushDebugConfig({
@@ -44,6 +48,14 @@ class PushDebugConfig {
   final String firebaseProjectId;
   final String iosBundleId;
 
+  FirebaseConfig get firebase => FirebaseConfig(
+        apiKey: firebaseApiKey,
+        appId: firebaseAppId,
+        senderId: firebaseSenderId,
+        projectId: firebaseProjectId,
+        iosBundleId: iosBundleId,
+      );
+
   /// Имена незаданных значений — экран показывает их вместо попытки подключиться.
   List<String> get missing => [
         if (apiBaseUrl.isEmpty) 'API_BASE_URL',
@@ -53,41 +65,6 @@ class PushDebugConfig {
         if (firebaseSenderId.isEmpty) 'FIREBASE_SENDER_ID',
         if (firebaseProjectId.isEmpty) 'FIREBASE_PROJECT_ID',
       ];
-}
-
-/// Push, полученный или открытый на устройстве.
-class PushEvent {
-  const PushEvent({
-    required this.title,
-    required this.body,
-    required this.data,
-    required this.receivedAt,
-    this.sentAt,
-    this.opened = false,
-  });
-
-  final String title;
-  final String body;
-  final Map<String, String> data;
-  final DateTime receivedAt;
-
-  /// Когда FCM принял сообщение (RemoteMessage.sentTime).
-  final DateTime? sentAt;
-  final bool opened;
-
-  int? get notificationId => int.tryParse(data['notification_id'] ?? '');
-
-  Duration? get latency => sentAt == null ? null : receivedAt.difference(sentAt!);
-}
-
-/// Seam над firebase_messaging: в тестах — фейк, на устройстве — FirebasePushChannel.
-abstract class PushChannel {
-  Future<String> permission();
-  Future<String?> token();
-  Stream<String> get tokenRefresh;
-  Stream<PushEvent> get received;
-  Stream<PushEvent> get opened;
-  Future<PushEvent?> initialOpened();
 }
 
 /// Вызовы backend: регистрация токена и отметка открытия.

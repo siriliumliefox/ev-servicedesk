@@ -45,3 +45,6 @@ htmlcov/
 # Push E2E (Глава 15, ADR 0019): конфигурация с access-токеном и ключи Firebase — не в git
 mobile/push_e2e.local.json
 **/GoogleService-Info.plist
+**/google-services.json
+mobile/firebase.local.json
+mobile/firebase.ios.local.json

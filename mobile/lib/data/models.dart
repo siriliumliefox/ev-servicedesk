@@ -116,11 +116,36 @@ enum TicketStatus {
 /// TicketAttachmentInput.file_type.
 enum AttachmentType { photo, video }
 
+/// Вложение тикета или сообщения в ответе API (ADR 0024 п. 9): url — ссылка на скачивание на 15 минут; в прототипе нет.
 class TicketAttachment {
-  const TicketAttachment({required this.fileName, required this.fileType});
+  const TicketAttachment({required this.fileName, required this.fileType, this.url});
 
   final String fileName;
   final AttachmentType fileType;
+  final String? url;
+}
+
+/// Файл, загруженный в S3 и готовый к привязке к тикету или сообщению (TicketAttachmentInput).
+class UploadedAttachment {
+  const UploadedAttachment({required this.fileName, required this.fileType, required this.key});
+
+  final String fileName;
+  final AttachmentType fileType;
+
+  /// Ключ объекта (PresignResponse.file_url).
+  final String key;
+}
+
+/// Файл, выбранный на устройстве, до загрузки.
+class LocalAttachment {
+  const LocalAttachment({required this.path, required this.fileType, required this.sizeBytes});
+
+  final String path;
+  final AttachmentType fileType;
+  final int sizeBytes;
+
+  String get fileName => path.split('/').last;
+  String get extension => fileName.contains('.') ? fileName.split('.').last.toLowerCase() : '';
 }
 
 /// Ticket / TicketDetail (поля, нужные клиенту).
@@ -132,6 +157,7 @@ class Ticket {
     required this.status,
     required this.summary,
     required this.createdAt,
+    this.description,
     this.attachments = const [],
   });
 
@@ -143,6 +169,10 @@ class Ticket {
   /// Краткое описание (Ticket.summary, до 140 символов) — для списка обращений.
   final String summary;
   final DateTime createdAt;
+
+  /// Полное описание и вложения обращения — только в карточке (TicketDetail): в переписку они не входят,
+  /// чат показывает их первым сообщением клиента.
+  final String? description;
   final List<TicketAttachment> attachments;
 }
 
@@ -162,7 +192,7 @@ class TicketDraft {
   final String description;
   final int? sourceArticleId;
   final int? sourceNodeId;
-  final List<TicketAttachment> attachments;
+  final List<UploadedAttachment> attachments;
 }
 
 /// TicketMessage.
@@ -248,6 +278,9 @@ enum NotificationType {
   const NotificationType(this.label);
 
   final String label;
+
+  /// Новости и акции — вкладка «Новости»; прошивки и ТО — только в центре уведомлений (ADR 0024 п. 6).
+  bool get isNews => this == news || this == promo;
 }
 
 /// NotificationListItem.
@@ -258,6 +291,7 @@ class NotificationItem {
     required this.message,
     required this.createdAt,
     this.readAt,
+    this.vehicleId,
   });
 
   final int id;
@@ -266,6 +300,9 @@ class NotificationItem {
   final DateTime createdAt;
   final DateTime? readAt;
 
+  /// Авто напоминания о ТО (type=maintenance) — запись на ТО из уведомления.
+  final int? vehicleId;
+
   bool get isRead => readAt != null;
 
   /// В контракте только message: заголовок — первая строка, текст — остальное.
@@ -273,5 +310,5 @@ class NotificationItem {
   String get body => message.split('\n').skip(1).join('\n').trim();
 
   NotificationItem markRead(DateTime at) =>
-      NotificationItem(id: id, type: type, message: message, createdAt: createdAt, readAt: at);
+      NotificationItem(id: id, type: type, message: message, createdAt: createdAt, readAt: at, vehicleId: vehicleId);
 }

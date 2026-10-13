@@ -262,15 +262,51 @@ void main() {
     expect(find.byKey(const Key('zone-cabin_filter')), findsOneWidget);
   });
 
-  testWidgets('новости: счётчик непрочитанных, прочтение уменьшает его', (tester) async {
+  testWidgets('центр уведомлений: счётчик на колокольчике, прочтение уменьшает его', (tester) async {
     await _pump(tester);
-    expect(find.descendant(of: find.byType(Badge), matching: find.text('2')), findsOneWidget);
-    await tester.tap(_nav('Новости'));
+    Finder bellBadge(String n) =>
+        find.descendant(of: find.byKey(const Key('notification-bell')), matching: find.text(n));
+    expect(bellBadge('2'), findsWidgets, reason: 'непрочитаны прошивка и напоминание о ТО');
+    // Прошивки и ТО — не новости: на вкладке «Новости» счётчика нет (ADR 0024 п. 6).
+    expect(find.descendant(of: find.byType(NavigationBar), matching: find.byType(Badge)), findsNothing);
+
+    await tester.tap(find.byKey(const Key('notification-bell')).first);
     await tester.pumpAndSettle();
+    expect(find.text('Уведомления'), findsOneWidget);
     await tester.tap(find.byKey(const Key('notification-1')));
     await tester.pumpAndSettle();
     expect(find.textContaining('Исправлена работа голосового помощника'), findsOneWidget);
-    expect(find.descendant(of: find.byType(Badge), matching: find.text('1')), findsOneWidget);
+    await tester.tapAt(const Offset(10, 10)); // закрыть шит
+    await tester.pumpAndSettle();
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    expect(bellBadge('1'), findsWidgets);
+  });
+
+  testWidgets('напоминание о ТО в центре уведомлений — «Записаться на ТО» по авто напоминания', (tester) async {
+    await _pump(tester);
+    await tester.tap(find.byKey(const Key('notification-bell')).first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('notification-2')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('book-maintenance')));
+    await tester.pumpAndSettle();
+    expect(find.text('Запись на ТО'), findsOneWidget);
+    expect(tester.widget<ChoiceChip>(find.byKey(const Key('vehicle-101'))).selected, isTrue,
+        reason: 'авто из напоминания выбрано');
+  });
+
+  testWidgets('«Новости» — только новости и акции; прошивки и ТО — в центре уведомлений', (tester) async {
+    await _pump(tester);
+    await tester.tap(_nav('Новости'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('notification-3')), findsOneWidget);
+    expect(find.byKey(const Key('notification-4')), findsOneWidget);
+    expect(find.byKey(const Key('notification-1')), findsNothing);
+    expect(find.byKey(const Key('filter-firmware')), findsNothing);
+    await tester.tap(find.byKey(const Key('filter-promo')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('notification-4')), findsNothing);
   });
 
   group('пустые состояния и ошибки', () {
@@ -289,9 +325,9 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Обращений пока нет'), findsOneWidget);
 
-      await tester.tap(_nav('Новости'));
+      await tester.tap(find.byKey(const Key('notification-bell')).first);
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Прошивка'));
+      await tester.tap(find.byKey(const Key('filter-firmware')));
       await tester.pumpAndSettle();
       expect(find.text('В разделе «Прошивка» пока пусто'), findsOneWidget);
     });

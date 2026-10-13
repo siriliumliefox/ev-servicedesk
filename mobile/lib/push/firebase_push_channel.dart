@@ -1,28 +1,34 @@
-// PushChannel на firebase_messaging (Глава 15, ADR 0019 п. 18). Только для устройства:
+// PushChannel на firebase_messaging (Глава 15, ADR 0019 п. 18; Глава 20, ADR 0024 п. 4–5). Только для устройства:
 // в flutter test не используется (там — фейк).
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter/foundation.dart';
 
-import 'push_debug.dart';
+import 'push_channel.dart';
 
 class FirebasePushChannel implements PushChannel {
   FirebasePushChannel._(this._messaging);
 
   final FirebaseMessaging _messaging;
 
-  static Future<FirebasePushChannel> init(PushDebugConfig config) async {
+  /// systemBannerInForeground — системный баннер и при открытом приложении (отладочный экран: видно, что push
+  /// дошёл); в приложении push на открытом экране показывает баннер внутри приложения (ADR 0024 п. 4).
+  static Future<FirebasePushChannel> init(FirebaseConfig config, {bool systemBannerInForeground = false}) async {
     await Firebase.initializeApp(
       options: FirebaseOptions(
-        apiKey: config.firebaseApiKey,
-        appId: config.firebaseAppId,
-        messagingSenderId: config.firebaseSenderId,
-        projectId: config.firebaseProjectId,
+        apiKey: config.apiKey,
+        appId: config.appId,
+        messagingSenderId: config.senderId,
+        projectId: config.projectId,
         iosBundleId: config.iosBundleId.isEmpty ? null : config.iosBundleId,
       ),
     );
     final messaging = FirebaseMessaging.instance;
-    // Баннер и при открытом приложении — видно, что push дошёл.
-    await messaging.setForegroundNotificationPresentationOptions(alert: true, badge: true, sound: true);
+    await messaging.setForegroundNotificationPresentationOptions(
+      alert: systemBannerInForeground,
+      badge: systemBannerInForeground,
+      sound: systemBannerInForeground,
+    );
     return FirebasePushChannel._(messaging);
   }
 
@@ -43,8 +49,8 @@ class FirebasePushChannel implements PushChannel {
 
   @override
   Future<String?> token() async {
-    // FCM-токен на iOS появляется после APNs-токена; без платного Apple Developer — null.
-    if (await _messaging.getAPNSToken() == null) {
+    // FCM-токен на iOS появляется после APNs-токена; без платного Apple Developer — null (глава 27).
+    if (defaultTargetPlatform == TargetPlatform.iOS && await _messaging.getAPNSToken() == null) {
       await Future<void>.delayed(const Duration(seconds: 2));
       if (await _messaging.getAPNSToken() == null) return null;
     }

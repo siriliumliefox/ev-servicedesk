@@ -2,7 +2,7 @@
 # Интеграционный стек backend (Глава 17, ADR 0021 п. 1, 8, 9): все сервисы из ОДНОГО
 # образа-кандидата в режиме ENVIRONMENT=staging — миграции, API, worker уведомлений, worker
 # аналитики, PostgreSQL, Redis, MinIO (docker-compose.yml + docker-compose.integration.yml,
-# отдельный проект: свои тома и сеть, порты инфраструктуры наружу не публикуются). На стеке —
+# отдельный проект: свои тома и сеть, порты PostgreSQL и Redis наружу не публикуются). На стеке —
 # сквозной сценарий backend/scripts/e2e_backend.py (каждый ответ сверяется с контрактом) и
 # аудит целостности. Секреты, ключи MinIO, пароль БД и код тестового номера — одноразовые
 # случайные; передаются через временный файл окружения и нигде не печатаются; логи — через
@@ -12,7 +12,12 @@
 # Команда после «--» выполняется на том же стеке после сценария backend (глава 18, ADR 0022 п. 2:
 # E2E мобильного клиента) с окружением API_BASE_URL, E2E_PHONE, E2E_CODE — свой тестовый номер,
 # не тот, что блокирует сценарий backend; E2E_SCHEME_PHONE — номер клиента 5 тестовых авто схемы
-# агрегатов, E2E_JOB_RUNNER — префикс разовой задачи в контейнере API (глава 19, ADR 0023 п. 7).
+# агрегатов, E2E_JOB_RUNNER — префикс разовой задачи в контейнере API (глава 19, ADR 0023 п. 7),
+# E2E_SUPPORT_PHONE — клиент сценария главы 20 (ADR 0024 п. 1).
+# Глава 20 (ADR 0024 п. 2, 5): MinIO открыт на INTEGRATION_S3_PORT (19000), presigned URL подписываются
+# для INTEGRATION_S3_PUBLIC (по умолчанию http://127.0.0.1:19000; iPhone — http://<mac>.local:19000).
+# FCM_SERVICE_ACCOUNT_FILE — JSON-ключ Firebase (scripts/firebase_dev_setup.sh): настоящий push вместо
+# фейка; ключ идёт только через файл окружения, логи проверяются на его утечку.
 
 set -euo pipefail
 
@@ -26,9 +31,12 @@ fi
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROJECT="ev-integration-$$"
 PORT="${INTEGRATION_PORT:-18080}"
+S3_PORT="${INTEGRATION_S3_PORT:-19000}"
+S3_PUBLIC="${INTEGRATION_S3_PUBLIC:-http://127.0.0.1:$S3_PORT}"
 E2E_PHONE="+375290009001"  # тестовый номер стека: SMS не отправляется (ADR 0021 п. 6)
 CLIENT_E2E_PHONE="+375290009002"  # тестовый номер для команды после «--» (ADR 0022 п. 2)
 SCHEME_E2E_PHONE="+375290009003"  # клиент 5 тестовых авто схемы агрегатов (ADR 0023 п. 7)
+SUPPORT_E2E_PHONE="+375290009004"  # клиентский сценарий главы 20: дерево → тикет → чат (ADR 0024 п. 1)
 
 ENV_FILE="$(mktemp)"
 chmod 600 "$ENV_FILE"
@@ -42,14 +50,24 @@ cat >"$ENV_FILE" <<EOF
 JWT_SECRET=$JWT_SECRET
 SMS_CODE_SECRET=$SMS_CODE_SECRET
 SMS_PROVIDER=fake
-PUSH_PROVIDER=fake
-SMS_TEST_PHONES=$E2E_PHONE,$CLIENT_E2E_PHONE,$SCHEME_E2E_PHONE
+SMS_TEST_PHONES=$E2E_PHONE,$CLIENT_E2E_PHONE,$SCHEME_E2E_PHONE,$SUPPORT_E2E_PHONE
 SMS_TEST_CODE=$E2E_CODE
 EOF
+# Фрагмент закрытого ключа Firebase — для проверки логов на утечку (сам ключ не печатается).
+FCM_KEY_PART=""
+if [ -n "${FCM_SERVICE_ACCOUNT_FILE:-}" ]; then
+  FCM_JSON="$(python3 -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1])), separators=(",", ":")))' \
+    "$FCM_SERVICE_ACCOUNT_FILE")"
+  FCM_KEY_PART="$(python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["private_key"][40:80])' <<<"$FCM_JSON")"
+  printf 'PUSH_PROVIDER=fcm\nFCM_SERVICE_ACCOUNT_JSON=%s\n' "$FCM_JSON" >>"$ENV_FILE"
+  unset FCM_JSON
+else
+  echo "PUSH_PROVIDER=fake" >>"$ENV_FILE"
+fi
 
 # Подстановки docker-compose.yml: образ, окружение, файл секретов, ключи MinIO, БД.
 export BACKEND_IMAGE="$IMAGE" BACKEND_ENV_FILE="$ENV_FILE" ENVIRONMENT=staging \
-  INTEGRATION_PORT="$PORT" S3_ACCESS_KEY S3_SECRET_KEY S3_BUCKET=ev-servicedesk-integration \
+  INTEGRATION_PORT="$PORT" INTEGRATION_S3_PORT="$S3_PORT" S3_PUBLIC_ENDPOINT="$S3_PUBLIC" S3_ACCESS_KEY S3_SECRET_KEY S3_BUCKET=ev-servicedesk-integration \
   POSTGRES_USER=integration POSTGRES_PASSWORD POSTGRES_DB=ev_servicedesk_integration
 COMPOSE=(docker compose -p "$PROJECT" -f "$ROOT/docker-compose.yml"
          -f "$ROOT/docker-compose.integration.yml" --profile full)
@@ -102,7 +120,7 @@ fi
 
 if [ "${#EXTRA[@]}" -gt 0 ]; then
   if (API_BASE_URL="http://127.0.0.1:$PORT" E2E_PHONE="$CLIENT_E2E_PHONE" E2E_CODE="$E2E_CODE" \
-      E2E_SCHEME_PHONE="$SCHEME_E2E_PHONE" E2E_JOB_RUNNER="$JOB_RUNNER" \
+      E2E_SCHEME_PHONE="$SCHEME_E2E_PHONE" E2E_SUPPORT_PHONE="$SUPPORT_E2E_PHONE" E2E_JOB_RUNNER="$JOB_RUNNER" \
       "${EXTRA[@]}" 2>&1 | redact); then
     echo "PASS  ${EXTRA[*]}"
   else
@@ -113,7 +131,7 @@ fi
 # Логи всех сервисов стека не содержат секретов, ключей S3, пароля БД и кода тестового номера.
 logs="$("${COMPOSE[@]}" logs --no-color 2>&1)"
 leak=none
-for value in "$JWT_SECRET" "$SMS_CODE_SECRET" "$S3_SECRET_KEY" "$POSTGRES_PASSWORD"; do
+for value in "$JWT_SECRET" "$SMS_CODE_SECRET" "$S3_SECRET_KEY" "$POSTGRES_PASSWORD" ${FCM_KEY_PART:+"$FCM_KEY_PART"}; do
   if grep -qF -- "$value" <<<"$logs"; then leak=found; fi
 done
 if [ "$leak" = none ]; then

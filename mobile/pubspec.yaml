@@ -15,9 +15,13 @@ dependencies:
   http: ^1.2.0
   flutter_secure_storage: ^9.2.0   # refresh-токен в Keychain/Keystore (Глава 18, ADR 0022)
   shared_preferences: ^2.3.0       # метка первого запуска: очистка Keychain после переустановки
-  firebase_core: ^3.15.2           # push: инициализация Firebase (Глава 15, ADR 0019)
-  firebase_messaging: ^15.0.0      # push: отладочный экран — Глава 15, экраны уведомлений — Глава 20
+  firebase_core: ^4.0.0            # push: инициализация Firebase (Глава 15, ADR 0019)
+  firebase_messaging: ^16.7.0      # push: 16.x — UIScene (iOS), иначе нажатие на push теряется (Глава 20)
   flutter_svg: ^2.3.0              # контур схемы агрегатов — SVG-ассет (Глава 19, ADR 0023)
+  image_picker: ^1.2.4             # вложения тикета: камера и галерея (Глава 20, ADR 0024 п. 9)
+  web_socket_channel: ^3.0.3       # чат по тикету в реальном времени (Глава 20, ADR 0024 п. 8)
+  flutter_markdown_plus: ^1.0.12   # текст статьи базы знаний — CommonMark (Глава 20, ADR 0024 п. 7)
+  url_launcher: ^6.3.3             # ссылки статей и видео вложений — во внешнем приложении
 
 dev_dependencies:
   flutter_test:

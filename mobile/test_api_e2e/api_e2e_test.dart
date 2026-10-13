@@ -1,10 +1,14 @@
 // E2E клиента на уровне API (глава 18, ADR 0022 п. 2): настоящий HttpClientRepository против стека backend из
 // образа-кандидата. Сценарий чек-листа «регистрация → добавление авто → просмотр карточки» плюс сессия:
 // восстановление по refresh-токену, выход, отзыв согласия. Схема агрегатов (глава 19, ADR 0023 п. 7): статусы
-// 5 тестовых авто в клиенте совпадают с таблицей docs/specs/scheme_test_vehicles.json.
+// 5 тестовых авто в клиенте совпадают с таблицей docs/specs/scheme_test_vehicles.json. Глава 20 (ADR 0024 п. 1):
+// «дерево решений → эскалация → тикет с фото → ответ инженера в чате» по WebSocket, новости и акции, push-токен;
+// данные — docs/specs/support_flow.json, действия персонала — backend/scripts/e2e_support.py.
 // Запуск: scripts/integration_stack.sh backend:smoke -- bash -c \
-//   '(cd backend && poetry run python scripts/seed_scheme_vehicles.py) && cd mobile && flutter test test_api_e2e'
-// (окружение API_BASE_URL, E2E_PHONE, E2E_CODE, E2E_SCHEME_PHONE задаёт стек; без него тест пропускается).
+//   '(cd backend && poetry run python scripts/seed_scheme_vehicles.py &&
+//     poetry run python scripts/e2e_support.py seed) && cd mobile && flutter test test_api_e2e'
+// (окружение API_BASE_URL, E2E_PHONE, E2E_CODE, E2E_SCHEME_PHONE, E2E_SUPPORT_PHONE, E2E_JOB_RUNNER задаёт стек;
+// без него тест пропускается).
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -16,12 +20,27 @@ import 'package:ev_servicedesk/data/api/token_store.dart';
 import 'package:ev_servicedesk/data/http_repository.dart';
 import 'package:ev_servicedesk/data/models.dart';
 import 'package:ev_servicedesk/data/repository.dart';
+import 'package:ev_servicedesk/data/ticket_live.dart';
 
 final _env = Platform.environment;
 final _baseUrl = _env['API_BASE_URL'] ?? '';
 final _phone = _env['E2E_PHONE'] ?? '';
 final _code = _env['E2E_CODE'] ?? '';
 final _schemePhone = _env['E2E_SCHEME_PHONE'] ?? '';
+final _supportPhone = _env['E2E_SUPPORT_PHONE'] ?? '';
+
+/// Действие персонала на стеке (backend/scripts/e2e_support.py): публикация, ответ инженера.
+Future<void> _staff(List<String> args) async {
+  final r =
+      await Process.run('poetry', ['run', 'python', 'scripts/e2e_support.py', ...args], workingDirectory: '../backend');
+  expect(r.exitCode, 0, reason: 'e2e_support.py ${args.join(' ')}\n${r.stdout}${r.stderr}');
+}
+
+/// JPEG 1×1 — настоящая картинка: в чате клиента и у инженера она откроется.
+final _jpeg = base64Decode(
+  '/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////'
+  '////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=',
+);
 
 /// VIN, который мок-декодер распознаёт как Zeekr 001 (ADR 0014); хвост случайный — стек может быть не пустым.
 String _zeekrVin() {
@@ -174,5 +193,109 @@ void main() {
             reason: where);
       }
     }
+  });
+
+  test('глава 20: дерево решений → эскалация → тикет с фото → ответ инженера в чате по WebSocket',
+      skip: skip ?? (_supportPhone.isEmpty ? 'нет E2E_SUPPORT_PHONE' : null),
+      timeout: const Timeout(Duration(minutes: 3)), () async {
+    final flow = jsonDecode(File('../docs/specs/support_flow.json').readAsStringSync()) as Map<String, dynamic>;
+    final trouble = flow['troubleshooting'] as Map<String, dynamic>;
+    final repo = _repository(MemoryTokenStore());
+    await _requestCode(repo, _supportPhone);
+    await repo.verifyCode(_supportPhone, _code, pdPolicyVersion: '2026-10');
+    final vehicle = await repo.addVehicle(_zeekrVin());
+
+    // «Обучение»: общая статья видна авто любой модели, текст — Markdown.
+    final guides = await repo.articles(vehicle.vehicleModel.id, ArticleType.guide);
+    final guide = guides.firstWhere((a) => a.title == (flow['guide'] as Map)['title']);
+    expect(guide.content, contains('## Как обновить'));
+
+    // «Устранение неполадок»: проход по дереву до эскалации — как на экране.
+    final articles = await repo.articles(vehicle.vehicleModel.id, ArticleType.troubleshooting);
+    final article = articles.firstWhere((a) => a.title == trouble['title']);
+    expect(article.category, TicketCategory.navigation);
+    final nodes = {for (final n in await repo.decisionTree(article.id)) n.id: n};
+    var node = nodes.values.singleWhere((n) => n.isRoot);
+    for (final answer in (trouble['path_to_escalation'] as List).cast<String>()) {
+      node = nodes[node.options.singleWhere((o) => o.label == answer).nextNodeId]!;
+    }
+    expect(node.isEscalation, isTrue);
+
+    // Вложение: presign → PUT в MinIO стека → привязка к тикету при создании.
+    final dir = await Directory.systemTemp.createTemp('ev-e2e');
+    addTearDown(() => dir.delete(recursive: true));
+    final photo = File('${dir.path}/screen.jpg')..writeAsBytesSync(_jpeg);
+    final progress = <double>[];
+    final attachment = await repo.uploadAttachment(
+      LocalAttachment(path: photo.path, fileType: AttachmentType.photo, sizeBytes: _jpeg.length),
+      onProgress: progress.add,
+    );
+    expect(progress.last, 1.0);
+    final ticket = await repo.createTicket(TicketDraft(
+      vehicleId: vehicle.id,
+      category: article.category!,
+      description: '${article.title}. Что уже пробовал(а): перезагрузка, геолокация',
+      sourceArticleId: article.id,
+      sourceNodeId: node.id,
+      attachments: [attachment],
+    ));
+    // Описание и фото — в карточке тикета (чат показывает их первым сообщением), переписка начинается пустой.
+    final detail = await repo.ticket(ticket.id);
+    expect(detail.description, startsWith(article.title));
+    expect(detail.attachments.single.fileType, AttachmentType.photo);
+    expect(await repo.messages(ticket.id), isEmpty);
+    final download = await HttpClient().getUrl(Uri.parse(detail.attachments.single.url!));
+    final response = await download.close();
+    expect(response.statusCode, 200, reason: 'фото скачивается по ссылке из ответа');
+    expect(await response.fold<int>(0, (n, chunk) => n + chunk.length), _jpeg.length);
+
+    // Чат в реальном времени: сокет на связи → инженер отвечает → сообщение приходит без запроса клиента.
+    final live = repo.watchTicket(ticket.id, afterId: 0);
+    addTearDown(live.close);
+    final events = <TicketLiveEvent>[];
+    final sub = live.events.listen(events.add);
+    addTearDown(sub.cancel);
+    Future<void> until(bool Function() ok, String what) async {
+      for (var i = 0; i < 150 && !ok(); i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      }
+      expect(ok(), isTrue, reason: what);
+    }
+
+    await until(() => live.state.value == LiveState.live, 'сокет авторизован (ready)');
+    await _staff(['reply', '--ticket', '${ticket.id}']);
+    await until(() => events.whereType<LiveMessage>().any((e) => !e.message.fromClient), 'ответ инженера по сокету');
+    final reply = events.whereType<LiveMessage>().firstWhere((e) => !e.message.fromClient).message;
+    expect(reply.body, flow['engineer_reply']);
+    expect(reply.authorName, 'Инженер поддержки', reason: 'контакты сотрудника клиенту не отдаются');
+    await until(() => events.whereType<LiveTicket>().any((e) => e.ticket.status == TicketStatus.inProgress),
+        'тикет взят в работу — ticket.updated');
+
+    // Ответ клиента с фото — в тот же чат.
+    final again = await repo
+        .uploadAttachment(LocalAttachment(path: photo.path, fileType: AttachmentType.photo, sizeBytes: _jpeg.length));
+    final mine = await repo.sendMessage(ticket.id, 'Обновил карты — не помогло', attachments: [again]);
+    expect(mine.attachments, hasLength(1));
+
+    // Инженер решает тикет — статус приходит по сокету.
+    await _staff(
+        ['reply', '--ticket', '${ticket.id}', '--text', 'Проверили удалённо, всё работает', '--status', 'resolved']);
+    await until(() => events.whereType<LiveTicket>().any((e) => e.ticket.status == TicketStatus.resolved),
+        'решён — ticket.updated');
+
+    // Догрузка после переподключения не теряет и не дублирует: вся переписка — по порядку id.
+    final all = await repo.messages(ticket.id);
+    expect(all.map((m) => m.id).toList(), [...all.map((m) => m.id)]..sort());
+    expect(all, hasLength(3), reason: 'ответ инженера, ответ клиента, решение');
+
+    // Центр уведомлений: новость и акция для клиента, появившегося до публикации.
+    await repo.registerPushToken('e2e-${DateTime.now().microsecondsSinceEpoch}');
+    await _staff(['publish']);
+    final feed = await repo.notifications();
+    expect(
+        feed.where((n) => n.type.isNews).map((n) => n.type).toSet(), {NotificationType.news, NotificationType.promo});
+    final news = feed.firstWhere((n) => n.type == NotificationType.news);
+    await repo.markNotificationRead(news.id);
+    expect((await repo.notifications()).firstWhere((n) => n.id == news.id).isRead, isTrue);
   });
 }

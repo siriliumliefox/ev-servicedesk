@@ -29,7 +29,7 @@ class _HomeShellState extends State<HomeShell> {
       bottomNavigationBar: EvBottomNav(
         current: _section,
         onSelected: (s) => setState(() => _section = s),
-        badges: {EvSection.news: app.unreadNotifications},
+        badges: {EvSection.news: app.unreadNews},
       ),
     );
   }

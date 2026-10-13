@@ -1,6 +1,8 @@
 // Доступ клиента к API (операции docs/openapi.yaml): HttpClientRepository — реальный backend (глава 18, ADR 0022),
 // PrototypeRepository — фикстуры прототипа (глава 7, ADR 0011), если сборка без API_BASE_URL.
+// Вложения, чат в реальном времени, push-токены — глава 20 (ADR 0024).
 import 'models.dart';
+import 'ticket_live.dart';
 
 /// Нет сети / сервер недоступен — экран показывает состояние ошибки с «Повторить».
 class OfflineException implements Exception {
@@ -43,9 +45,6 @@ class Profile {
 }
 
 abstract class ClientRepository {
-  /// Вложения тикета: в HTTP-режиме — глава 20 (presign → S3), до неё кнопки вложений скрыты.
-  bool get supportsAttachments;
-
   /// Сервер завершил сессию (refresh отклонён) — приложение возвращается к онбордингу.
   Stream<void> get sessionEnded;
 
@@ -91,8 +90,8 @@ abstract class ClientRepository {
     String? aggregateTypeCode,
   });
 
-  /// GET /knowledge-articles?vehicle_model_id=&article_type=.
-  Future<List<KnowledgeArticle>> articles(int vehicleModelId, ArticleType type);
+  /// GET /knowledge-articles?article_type= — статьи модели и общие; без модели (нет авто) — только общие.
+  Future<List<KnowledgeArticle>> articles(int? vehicleModelId, ArticleType type);
 
   /// GET /knowledge-articles/{id}/decision-tree.
   Future<List<DecisionTreeNode>> decisionTree(int articleId);
@@ -103,15 +102,33 @@ abstract class ClientRepository {
   /// POST /tickets.
   Future<Ticket> createTicket(TicketDraft draft);
 
-  /// GET /tickets/{id}/messages.
-  Future<List<TicketMessage>> messages(int ticketId);
+  /// GET /tickets/{id} — открытие чата из push (в push только номер тикета).
+  Future<Ticket> ticket(int ticketId);
 
-  /// POST /tickets/{id}/messages.
-  Future<TicketMessage> sendMessage(int ticketId, String body, {List<TicketAttachment> attachments});
+  /// GET /tickets/{id}/messages — вся переписка; afterId — только сообщения новее (догрузка чата).
+  Future<List<TicketMessage>> messages(int ticketId, {int? afterId});
 
-  /// GET /notifications.
+  /// POST /tickets/{id}/messages; вложения — загруженные uploadAttachment.
+  Future<TicketMessage> sendMessage(int ticketId, String body, {List<UploadedAttachment> attachments});
+
+  /// POST /uploads/presign и PUT файла в S3: вложение готово к привязке к тикету или сообщению.
+  Future<UploadedAttachment> uploadAttachment(LocalAttachment file, {void Function(double progress)? onProgress});
+
+  /// Чат в реальном времени (WebSocket); afterId — последнее сообщение, уже загруженное экраном.
+  TicketLive watchTicket(int ticketId, {required int afterId});
+
+  /// GET /notifications — лента центра уведомлений.
   Future<List<NotificationItem>> notifications();
 
-  /// POST /notifications/{id}/read.
+  /// PATCH /notifications/{id}/read.
   Future<void> markNotificationRead(int notificationId);
+
+  /// POST /notifications/{id}/opened — клиент открыл push (журнал открываемости, заодно прочитано).
+  Future<void> markNotificationOpened(int notificationId, String pushToken);
+
+  /// POST /push-tokens — после входа и при обновлении токена.
+  Future<void> registerPushToken(String token);
+
+  /// DELETE /push-tokens/{token} — до выхода, пока сессия действует.
+  Future<void> unregisterPushToken(String token);
 }

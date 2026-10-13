@@ -6,6 +6,7 @@ import '../../app/app_state.dart';
 import '../../data/models.dart';
 import '../../theme/app_theme.dart';
 import '../../ui/demo_panel.dart';
+import '../../ui/notification_bell.dart';
 import '../../ui/format.dart';
 import '../../ui/states.dart';
 import '../learning/learning_screen.dart';
@@ -25,7 +26,7 @@ class SupportScreen extends StatelessWidget {
       child: Scaffold(
         appBar: AppBar(
           title: const Text('Поддержка'),
-          actions: const [DemoButton()],
+          actions: const [NotificationBell(), DemoButton()],
           bottom: const TabBar(tabs: [Tab(text: 'Неполадки'), Tab(text: 'Обращения')]),
         ),
         floatingActionButton: vehicle == null
@@ -61,7 +62,8 @@ class _Troubleshooting extends StatelessWidget {
     final app = AppScope.of(context);
     return AsyncView<List<KnowledgeArticle>>(
       reloadKey: (modelId, revision),
-      load: () => app.repository.articles(modelId ?? 0, ArticleType.troubleshooting),
+      // Без авто — общие статьи (ADR 0024 п. 10).
+      load: () => app.repository.articles(modelId, ArticleType.troubleshooting),
       isEmpty: (items) => items.isEmpty,
       empty: const EmptyState(icon: Icons.build_outlined, title: 'Инструкций по неполадкам пока нет'),
       builder: (context, items, reload) => RefreshIndicator(
