@@ -1,5 +1,7 @@
 """Управление пользователями (тег Users, Глава 17, ADR 0021 п. 3): список, сотрудники, блокировка.
 
+Сброс пароля сотрудника (ADR 0026 п. 5) — глоссарий «Учётная запись сотрудника».
+
 Блокировка (`is_active=false`) — глоссарий «Блокировка пользователя»: отзываются все
 refresh-токены и push-токены пользователя; запросы с действующим access-токеном получают 401
 (`get_current_user` читает активность из БД), WebSocket закрывается при ближайшей проверке.
@@ -111,3 +113,21 @@ def update_user(
     db.commit()
     db.refresh(user)
     return user
+
+
+def reset_password(db: Session, user_id: int, password: str) -> None:
+    """POST /users/{id}/password: новый пароль сотрудника, все его refresh-токены отзываются.
+
+    Анонимизированный — 404 (данных пользователя нет); клиент — 409 (пароля у него нет).
+    Push-токены не трогаем: они только у клиентов.
+    """
+    user = get_user(db, user_id)
+    tokens.lock_user(db, user.id)
+    db.refresh(user)
+    if user.anonymized_at is not None:
+        raise _not_found()
+    if user.role not in STAFF_ROLES:
+        raise ApiError(409, "PASSWORD_NOT_ALLOWED", "У клиента нет пароля: вход по SMS-коду")
+    user.password_hash = hash_password(password)
+    tokens.revoke_all(db, user.id)
+    db.commit()

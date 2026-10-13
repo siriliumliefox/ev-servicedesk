@@ -1020,6 +1020,28 @@ export interface paths {
         patch: operations["updateUser"];
         trace?: never;
     };
+    "/users/{userId}/password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: number;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Сбросить пароль сотрудника
+         * @description Администратор задаёт сотруднику (engineer/admin, в том числе заблокированному) новый пароль — глоссарий «Учётная запись сотрудника». Пароль хранится как argon2id; все refresh-токены сотрудника отзываются (сессии заканчиваются), выданный access-токен доживает свой срок. У клиента пароля нет — 409 PASSWORD_NOT_ALLOWED; несуществующий или анонимизированный пользователь — 404 USER_NOT_FOUND. Добавлено в 1.11.0 (глава 22, ADR 0026).
+         */
+        post: operations["resetUserPassword"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/analytics/ticket-resolution": {
         parameters: {
             query?: never;
@@ -1641,6 +1663,10 @@ export interface components {
             phone: components["schemas"]["PhoneE164"];
             /** @enum {string} */
             role: "engineer" | "admin";
+            /** Format: password */
+            password: string;
+        };
+        UserPasswordResetRequest: {
             /** Format: password */
             password: string;
         };
@@ -3564,6 +3590,36 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["UserPublic"];
                 };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["ValidationError"];
+            default: components["responses"]["ServerError"];
+        };
+    };
+    resetUserPassword: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UserPasswordResetRequest"];
+            };
+        };
+        responses: {
+            /** @description Пароль изменён; сессии сотрудника завершены */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];

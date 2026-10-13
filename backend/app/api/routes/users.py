@@ -1,14 +1,15 @@
-"""Users — профиль (`/me`) и управление пользователями (Глава 17, ADR 0021 п. 3)."""
+"""Users — профиль (`/me`) и управление пользователями (Глава 17, ADR 0021 п. 3; ADR 0026)."""
 
 from typing import Annotated
 
-from fastapi import APIRouter, Path, Query, status
+from fastapi import APIRouter, Path, Query, Response, status
 
 from app.api.deps import ALL_ROLES, CurrentUser, DbDep, rbac
 from app.api.pagination import PageDep, paginate
 from app.api.schemas.auth import (
     StaffUserCreateRequest,
     UserList,
+    UserPasswordResetRequest,
     UserPublic,
     UserUpdateRequest,
 )
@@ -56,3 +57,15 @@ def get_user(user_id: UserId, db: DbDep) -> UserPublic:
 @router.patch("/users/{userId}", operation_id="updateUser", **rbac(UserRole.ADMIN))
 def update_user(user_id: UserId, body: UserUpdateRequest, db: DbDep) -> UserPublic:
     return UserPublic.model_validate(service.update_user(db, user_id, body.role, body.is_active))
+
+
+@router.post(
+    "/users/{userId}/password",
+    operation_id="resetUserPassword",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+    **rbac(UserRole.ADMIN),
+)
+def reset_user_password(user_id: UserId, body: UserPasswordResetRequest, db: DbDep) -> Response:
+    service.reset_password(db, user_id, body.password)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

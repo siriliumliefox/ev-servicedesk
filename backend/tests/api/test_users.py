@@ -4,6 +4,7 @@
 """
 
 import threading
+from datetime import UTC, datetime
 
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
@@ -341,3 +342,71 @@ def storm_each(fns: list) -> list[object]:
     for t in threads:
         t.join()
     return results
+
+
+# ---------- Сброс пароля сотрудника (контракт 1.11.0, ADR 0026 п. 5) ----------
+
+NEW_PASSWORD = "Brand-new-pass-22"
+
+
+def reset(client, headers, user_id: int, password: str = NEW_PASSWORD):
+    return client.post(
+        f"{API}/users/{user_id}/password", json={"password": password}, headers=headers
+    )
+
+
+def staff_login(client, phone: str, password: str):
+    return client.post(f"{API}/auth/staff/login", json={"phone": phone, "password": password})
+
+
+def test_reset_password_replaces_password_and_ends_sessions(client, as_staff):
+    admin_headers, _ = as_staff(ADMIN, UserRole.ADMIN)
+    _, eng = as_staff(ENGINEER)
+    session = staff_login(client, ENGINEER, STAFF_PASSWORD).json()
+
+    r = reset(client, admin_headers, eng.id)
+    assert r.status_code == 204 and r.content == b""
+
+    assert staff_login(client, ENGINEER, STAFF_PASSWORD).status_code == 401
+    assert staff_login(client, ENGINEER, NEW_PASSWORD).status_code == 200
+    # Прежняя сессия закончилась: refresh отозван.
+    r = client.post(f"{API}/auth/refresh", json={"refresh_token": session["refresh_token"]})
+    assert r.status_code == 401
+
+
+def test_reset_password_of_blocked_staff_works_after_unblock(client, as_staff):
+    admin_headers, _ = as_staff(ADMIN, UserRole.ADMIN)
+    _, eng = as_staff(ENGINEER)
+    assert patch(client, admin_headers, eng.id, is_active=False).status_code == 200
+    assert reset(client, admin_headers, eng.id).status_code == 204
+    assert staff_login(client, ENGINEER, NEW_PASSWORD).status_code == 401
+    assert patch(client, admin_headers, eng.id, is_active=True).status_code == 200
+    assert staff_login(client, ENGINEER, NEW_PASSWORD).status_code == 200
+
+
+def test_reset_password_rules(client, as_staff, as_client, make_client_user, make_staff, db):
+    admin_headers, admin = as_staff(ADMIN, UserRole.ADMIN)
+    eng_headers, eng = as_staff(ENGINEER)
+    client_headers = as_client(CLIENT)
+    customer = db.scalars(select(AppUser).where(AppUser.phone == CLIENT)).one()
+
+    # Только admin.
+    for headers in (eng_headers, client_headers):
+        assert reset(client, headers, eng.id).status_code == 403
+    # У клиента пароля нет.
+    r = reset(client, admin_headers, customer.id)
+    assert r.status_code == 409 and r.json()["error"]["code"] == "PASSWORD_NOT_ALLOWED"
+    # Нет пользователя или он анонимизирован.
+    gone = make_staff("+375296600020")
+    gone.anonymized_at = datetime.now(UTC)
+    db.commit()
+    for missing in (admin.id + 1000, gone.id):
+        r = reset(client, admin_headers, missing)
+        assert r.status_code == 404 and r.json()["error"]["code"] == "USER_NOT_FOUND"
+    # Длина пароля — как при создании.
+    for bad in ("x" * 11, "x" * 129):
+        assert reset(client, admin_headers, eng.id, bad).status_code == 422
+    r = client.post(f"{API}/users/{eng.id}/password", json={}, headers=admin_headers)
+    assert r.status_code == 422
+    # Старый пароль инженера не тронут отказами.
+    assert staff_login(client, ENGINEER, STAFF_PASSWORD).status_code == 200
