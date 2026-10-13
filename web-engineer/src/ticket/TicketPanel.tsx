@@ -129,6 +129,8 @@ export function TicketPanel({
   const t = ticket.data
   const readOnly = live.lost !== null
   const isMine = !readOnly && t?.assigned_engineer_id === meId
+  // В решённый тикет не пишет никто (409 TICKET_RESOLVED) — сначала «Вернуть в работу».
+  const canReply = isMine && t?.status !== 'resolved'
   const canClaim = !readOnly && t != null && t.assigned_engineer_id == null && t.status !== 'resolved'
   const model = t?.vehicle_context?.vehicle?.vehicle_model
   const modelName = model ? `${model.brand} ${model.model}` : null
@@ -233,7 +235,7 @@ export function TicketPanel({
                 {showReplies && (
                   <QuickReplies
                     modelName={modelName}
-                    disabled={!isMine || busy}
+                    disabled={!canReply || busy}
                     onInsert={(text) => {
                       setDraft((d) => (d.trim() ? `${d}\n\n${text}` : text))
                       setShowReplies(false)
@@ -245,7 +247,7 @@ export function TicketPanel({
                   label="Ответ клиенту"
                   rows={3}
                   value={draft}
-                  disabled={!isMine}
+                  disabled={!canReply}
                   hint={replyHint(t, meId)}
                   onChange={(e) => setDraft(e.target.value)}
                 />
@@ -253,12 +255,12 @@ export function TicketPanel({
                   <Button
                     variant="secondary"
                     aria-expanded={showReplies}
-                    disabled={!isMine}
+                    disabled={!canReply}
                     onClick={() => setShowReplies((v) => !v)}
                   >
                     Быстрые ответы
                   </Button>
-                  <Button type="submit" disabled={!isMine || busy || !draft.trim()}>
+                  <Button type="submit" disabled={!canReply || busy || !draft.trim()}>
                     Отправить
                   </Button>
                 </div>
@@ -280,8 +282,12 @@ export function TicketPanel({
  * нерешённого тикета, поэтому у чужого и решённого подсказка не зовёт его брать — иначе ведёт в тупик.
  */
 function replyHint(ticket: TicketDetail, meId: number): string | undefined {
+  if (ticket.status === 'resolved') {
+    return ticket.assigned_engineer_id === meId
+      ? 'Тикет решён — чтобы ответить, верните его в работу'
+      : 'Тикет решён — ответ недоступен'
+  }
   if (ticket.assigned_engineer_id === meId) return undefined
-  if (ticket.status === 'resolved') return 'Тикет решён — ответ недоступен'
   if (ticket.assigned_engineer_id == null) return 'Возьмите тикет в работу, чтобы ответить клиенту'
   return `Тикет ведёт ${assigneeLabel(ticket.assigned_engineer_id, meId)} — ответить может только он`
 }

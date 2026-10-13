@@ -32,6 +32,10 @@ jobs:
       mobile_e2e: >-
         ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.mobile == 'true'
         || steps.filter.outputs.backend == 'true' }}
+      # E2E веб-кабинета инженера (Глава 21, ADR 0025 п. 14): кабинет, общий web-слой или backend.
+      web_e2e: >-
+        ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.web_e2e == 'true'
+        || steps.filter.outputs.backend == 'true' }}
       docs: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.docs == 'true' }}
     steps:
       - uses: actions/checkout@v4
@@ -72,6 +76,12 @@ jobs:
               - "package-lock.json"
               - ".github/workflows/web-ci.yml"
               - ".github/workflows/ci.yml"
+            web_e2e:
+              - "web-engineer/**"
+              - "web-shared/**"
+              - "package.json"
+              - "package-lock.json"
+              - ".github/workflows/web-e2e.yml"
             mobile:
               - "mobile/**"
               - ".github/workflows/mobile-ci.yml"
@@ -110,6 +120,11 @@ jobs:
     if: needs.changes.outputs.mobile_e2e == 'true'
     uses: ./.github/workflows/mobile-e2e.yml
 
+  web-e2e:
+    needs: changes
+    if: needs.changes.outputs.web_e2e == 'true'
+    uses: ./.github/workflows/web-e2e.yml
+
   docs:
     needs: changes
     if: needs.changes.outputs.docs == 'true'
@@ -141,7 +156,7 @@ jobs:
   # `unicode-nfc` и `secret-scan` успешны, а каждая проверка сервиса — успешна или не нужна
   # (skipped). Падение, отмена или пропуск из-за упавшей зависимости — красный.
   ci-gate:
-    needs: [changes, backend, web, mobile, mobile-e2e, docs, unicode-nfc, secret-scan]
+    needs: [changes, backend, web, mobile, mobile-e2e, web-e2e, docs, unicode-nfc, secret-scan]
     if: always()
     runs-on: ubuntu-latest
     steps:

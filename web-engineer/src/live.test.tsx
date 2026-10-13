@@ -103,6 +103,43 @@ describe('карточка тикета вживую', () => {
   })
 })
 
+describe('перенос с клавиатуры (ADR 0025 п. 7)', () => {
+  const column = (name: string) => screen.getByRole('region', { name: new RegExp(`^${name}`) })
+
+  it('из очереди — только «В работе» (взять в работу); стрелки дальше не уводят', async () => {
+    const { user } = setup()
+    await card(1056)
+    screen.getByRole('button', { name: 'Перенести тикет #1056' }).focus()
+    await user.keyboard(' ')
+    expect(screen.getByRole('button', { name: 'Перенести тикет #1056' })).toHaveAttribute('aria-pressed', 'true')
+    expect(column('Новые')).toHaveAttribute('data-drop-target', 'false')
+    expect(column('Решено')).toHaveAttribute('data-drop-target', 'false')
+    await user.keyboard('{ArrowRight}{ArrowRight}{ArrowRight}')
+    expect(column('В работе')).toHaveAttribute('data-drop-over', 'true')
+    await user.keyboard(' ')
+    expect(await within(column('В работе')).findByRole('button', { name: /^Тикет #1056,/ })).toBeInTheDocument()
+  })
+
+  it('свой тикет: → «Ожидает вендора»; → → «Решено» — только после подтверждения; Esc — отмена', async () => {
+    const { user } = setup()
+    await card(1042)
+    const handle = () => screen.getByRole('button', { name: 'Перенести тикет #1042' })
+    handle().focus()
+    await user.keyboard(' {ArrowRight} ')
+    expect(await within(column('Ожидает вендора')).findByRole('button', { name: /^Тикет #1042,/ })).toBeInTheDocument()
+
+    handle().focus()
+    await user.keyboard(' {ArrowRight}{Escape}')
+    expect(handle()).toHaveAttribute('aria-pressed', 'false')
+    expect(within(column('Ожидает вендора')).getByRole('button', { name: /^Тикет #1042,/ })).toBeInTheDocument()
+
+    await user.keyboard(' {ArrowRight} ')
+    const dialog = await screen.findByRole('dialog', { name: 'Решить тикет #1042?' })
+    await user.click(within(dialog).getByRole('button', { name: 'Решено' }))
+    expect(await within(column('Решено')).findByRole('button', { name: /^Тикет #1042,/ })).toBeInTheDocument()
+  })
+})
+
 describe('доска и оформление', () => {
   it('размер очереди — в заголовке вкладки', async () => {
     setup()

@@ -125,9 +125,19 @@ jobs:
 
       - run: npm ci
 
+      # web-engineer — реальный API на том же origin (`/v1`, ADR 0025 п. 2, 14); фото и видео вложений —
+      # origin S3 из переменной окружения staging (до главы 26 пусто). web-admin до главы 22 — прототип.
       - run: npm run build --workspace ${{ matrix.app }}
         env:
-          VITE_API_BASE_URL: ${{ vars.STAGING_API_BASE_URL }}
+          VITE_API_BASE_URL: ${{ matrix.app == 'web-engineer' && '/v1' || '' }}
+          VITE_MEDIA_ORIGIN: ${{ vars.STAGING_MEDIA_ORIGIN }}
+
+      - name: Кабинет инженера — режим API и CSP в сборке
+        if: matrix.app == 'web-engineer'
+        working-directory: web-engineer/dist
+        run: |
+          grep -q 'http-equiv="Content-Security-Policy"' index.html
+          grep -qE "[\"'\`]/v1[\"'\`]" assets/*.js
 
       - uses: actions/upload-artifact@v4
         with:
