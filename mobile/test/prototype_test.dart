@@ -12,7 +12,6 @@ import 'package:ev_servicedesk/data/prototype_repository.dart';
 import 'package:ev_servicedesk/main.dart';
 import 'package:ev_servicedesk/screens/car/car_screen.dart';
 import 'package:ev_servicedesk/screens/support/ticket_create_screen.dart';
-import 'package:ev_servicedesk/theme/app_theme.dart';
 
 /// iPhone 15 (393×852) и минимальная ширина из ТЗ (360).
 const _phone = Size(393, 852);
@@ -342,22 +341,7 @@ void main() {
       });
     }
 
-    testWidgets('зоны схемы ≥ 44×44 и не перекрываются', (tester) async {
-      await _pump(tester, size: _narrow);
-      final rects = <Rect>[];
-      for (final code in ['ac_refrigerant', 'engine_oil', 'oil_filter', 'air_filter', 'cabin_filter', 'gearbox_oil']) {
-        final zone = find.byKey(Key('zone-$code'));
-        final size = tester.getSize(zone);
-        expect(size.width, greaterThanOrEqualTo(EvSize.tapTargetMin), reason: code);
-        expect(size.height, greaterThanOrEqualTo(EvSize.tapTargetMin), reason: code);
-        rects.add(tester.getRect(zone));
-      }
-      for (var i = 0; i < rects.length; i++) {
-        for (var j = i + 1; j < rects.length; j++) {
-          expect(rects[i].overlaps(rects[j]), isFalse, reason: 'зоны $i и $j');
-        }
-      }
-    });
+    // Тап-зоны схемы ≥ 44×44 и без наложений — на ширинах 360–430 и с крупным шрифтом: layout_real_font_test.
   });
 
   group('глава 9: правки по юзабилити-тесту, раунд 1', () {

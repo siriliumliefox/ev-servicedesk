@@ -55,8 +55,7 @@ class ApiClient {
   Future<Object?> delete(String path) => send('DELETE', path);
 
   /// Запрос с авторизацией: на 401 — обновление токена и один повтор; повторный 401 завершает сессию.
-  Future<Object?> send(String method, String path,
-      {Object? body, Map<String, Object?>? query, bool auth = true}) async {
+  Future<Object?> send(String method, String path, {Object? body, Map<String, Object?>? query, bool auth = true}) async {
     if (!auth) return _decode(await _raw(method, path, body: body, query: query));
     var access = _access ?? await _refresh(null);
     var response = await _raw(method, path, body: body, query: query, access: access);
@@ -140,8 +139,7 @@ class ApiClient {
     var code = response.statusCode >= 500 ? 'SERVER_ERROR' : 'HTTP_${response.statusCode}';
     Map<String, Object?>? details;
     try {
-      final error =
-          (jsonDecode(utf8.decode(response.bodyBytes)) as Map<String, Object?>)['error']! as Map<String, Object?>;
+      final error = (jsonDecode(utf8.decode(response.bodyBytes)) as Map<String, Object?>)['error']! as Map<String, Object?>;
       code = error['code']! as String;
       details = error['details'] as Map<String, Object?>?;
     } on Object {

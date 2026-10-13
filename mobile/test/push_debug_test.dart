@@ -53,8 +53,7 @@ void main() {
 
   testWidgets('регистрирует токен, показывает задержку и пишет opened', (tester) async {
     final channel = FakeChannel('fcm-token-1');
-    await tester
-        .pumpWidget(MaterialApp(home: PushDebugScreen(channel: channel, api: PushDebugApi(config, client: backend))));
+    await tester.pumpWidget(MaterialApp(home: PushDebugScreen(channel: channel, api: PushDebugApi(config, client: backend))));
     await tester.pumpAndSettle();
 
     expect(find.text('Токен: зарегистрирован (201)'), findsOneWidget);
@@ -87,8 +86,7 @@ void main() {
   });
 
   testWidgets('без APNs-токена — подсказка, запросов нет', (tester) async {
-    await tester.pumpWidget(
-        MaterialApp(home: PushDebugScreen(channel: FakeChannel(null), api: PushDebugApi(config, client: backend))));
+    await tester.pumpWidget(MaterialApp(home: PushDebugScreen(channel: FakeChannel(null), api: PushDebugApi(config, client: backend))));
     await tester.pumpAndSettle();
     expect(find.text('Токен: нет токена (APNs/разрешение?)'), findsOneWidget);
     expect(requests, isEmpty);

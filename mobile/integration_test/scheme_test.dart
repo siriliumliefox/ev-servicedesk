@@ -11,47 +11,26 @@ import 'package:ev_servicedesk/main.dart';
 import 'package:ev_servicedesk/screens/car/aggregate_scheme.dart';
 import 'package:ev_servicedesk/ui/status_badge.dart';
 
+import 'support.dart';
+
 const _phone = String.fromEnvironment('E2E_SCHEME_PHONE');
 const _code = String.fromEnvironment('E2E_CODE');
 
-/// Ждать, пока появится хотя бы один из виджетов: запросы идут к настоящему серверу, pumpAndSettle сеть не ждёт.
-Future<Finder> _waitForAny(WidgetTester tester, List<Finder> finders,
-    {Duration timeout = const Duration(seconds: 30)}) async {
-  final end = DateTime.now().add(timeout);
-  while (DateTime.now().isBefore(end)) {
-    await tester.pump(const Duration(milliseconds: 200));
-    for (final f in finders) {
-      if (f.evaluate().isNotEmpty) return f;
-    }
-  }
-  throw TestFailure('Не дождались: $finders');
-}
-
-Future<void> _waitFor(WidgetTester tester, Finder finder) => _waitForAny(tester, [finder]);
-
-Future<void> _tap(WidgetTester tester, Finder finder) async {
-  FocusManager.instance.primaryFocus?.unfocus();
-  await tester.pump(const Duration(milliseconds: 500));
-  await tester.ensureVisible(finder);
-  await tester.pump(const Duration(milliseconds: 300));
-  await tester.tap(finder);
-}
-
 /// Вход тестовым номером; seed только что запрашивал код этого номера — при паузе между запросами (429) ждём.
 Future<void> _signIn(WidgetTester tester) async {
-  await _waitFor(tester, find.text('Получить код'));
+  await waitFor(tester, find.text('Получить код'));
   await tester.enterText(find.byKey(const Key('phone')), _phone.substring(4));
   final codeField = find.byKey(const Key('code'));
   for (var attempt = 0;; attempt++) {
-    await _tap(tester, find.text('Получить код'));
-    final shown = await _waitForAny(tester, [codeField, find.textContaining('Слишком много попыток')]);
+    await tapLikeUser(tester, find.text('Получить код'));
+    final shown = await waitForAny(tester, [codeField, find.textContaining('Слишком много попыток')]);
     if (shown == codeField) break;
     expect(attempt, 0, reason: 'пауза между запросами кода — один раз');
     await Future<void>.delayed(const Duration(seconds: 61));
   }
   await tester.enterText(find.byKey(const Key('code')), _code);
-  await _tap(tester, find.descendant(of: find.byKey(const Key('consent')), matching: find.byType(Checkbox)));
-  await _tap(tester, find.text('Войти'));
+  await tapLikeUser(tester, find.descendant(of: find.byKey(const Key('consent')), matching: find.byType(Checkbox)));
+  await tapLikeUser(tester, find.text('Войти'));
 }
 
 void main() {
@@ -66,23 +45,23 @@ void main() {
     final repo = await createRepository();
     await tester.pumpWidget(EvServiceDeskApp(repository: repo));
     await _signIn(tester);
-    await _waitFor(tester, find.byKey(const Key('open-vehicle-card')));
+    await waitFor(tester, find.byKey(const Key('open-vehicle-card')));
 
     final vehicles = await repo.vehicles();
     expect(vehicles, hasLength(5));
     var compared = 0;
     for (final (i, vehicle) in vehicles.indexed) {
       if (i > 0) {
-        await _tap(tester, find.byKey(const Key('vehicle-switcher')));
-        await _waitFor(tester, find.textContaining(vehicle.vinMasked));
-        await _tap(tester, find.textContaining(vehicle.vinMasked).last);
+        await tapLikeUser(tester, find.byKey(const Key('vehicle-switcher')));
+        await waitFor(tester, find.textContaining(vehicle.vinMasked));
+        await tapLikeUser(tester, find.textContaining(vehicle.vinMasked).last);
       }
       final statuses = await repo.aggregateStatuses(vehicle.id);
       final onScheme = [
         for (final s in statuses)
           if (aggregateSchemePositions.containsKey(s.aggregateTypeCode)) s
       ];
-      await _waitFor(tester, find.byKey(Key('zone-${onScheme.first.aggregateTypeCode}')));
+      await waitFor(tester, find.byKey(Key('zone-${onScheme.first.aggregateTypeCode}')));
       // Экран «Авто» — ленивый ListView: схема вверху, строки списка строятся при прокрутке к ним.
       final screen = find.descendant(of: find.byType(RefreshIndicator), matching: find.byType(Scrollable)).first;
 
@@ -94,7 +73,7 @@ void main() {
         expect(tester.getSemantics(zone).label, expected, reason: vehicle.vinMasked);
         expect(zone.hitTestable(), findsOneWidget, reason: expected);
         await tester.tap(zone);
-        await _waitFor(tester, find.byType(BottomSheet));
+        await waitFor(tester, find.byType(BottomSheet));
         await tester.pumpAndSettle();
         final sheet = find.byType(BottomSheet);
         expect(find.descendant(of: sheet, matching: find.text(s.aggregateTypeName)), findsWidgets, reason: expected);

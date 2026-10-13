@@ -4,7 +4,8 @@
 // как на устройстве. Здесь в семейство EvTypeMobile.fontFamily загружаются начертания Inter из assets/fonts —
 // тот же шрифт, что в приложении (глава 18, ADR 0022 п. 9). У подписей схемы — запас 10 % на увеличенный
 // системный размер текста. Шрифт регистрируется на весь файл, поэтому тесты — отдельным файлом.
-// Глава 19 (ADR 0023 п. 6): схема на ширинах 360–430 px при масштабе текста 1.0 и 1.3 — группа в конце файла.
+// Глава 19 (ADR 0023 п. 6): подписи и зоны схемы (M6) — на ширинах 360–430 px при масштабе текста 1.0 и 1.1 (предел
+// подписей схемы), группа в конце файла.
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -64,33 +65,6 @@ void main() {
 
   for (final size in _widths) {
     final w = size.width.toInt();
-
-    testWidgets('M6: подписи схемы — до 2 строк, слова не разрываются, зоны не перекрываются ($w px)', (tester) async {
-      await _pump(tester, size);
-      final zones = <Rect>[];
-      for (final code in ['ac_refrigerant', 'engine_oil', 'oil_filter', 'air_filter', 'cabin_filter', 'gearbox_oil']) {
-        final zone = find.byKey(Key('zone-$code'));
-        // Подпись — Text зоны (иконка статуса тоже рисуется через RichText).
-        final label = _paragraph(tester, find.descendant(of: zone, matching: find.byType(Text)));
-        expect(label.didExceedMaxLines, isFalse, reason: code);
-        // Каждое слово целиком в строке (с запасом 10 %) — без переноса посреди слова.
-        final text = label.text.toPlainText();
-        for (final word in text.split(' ')) {
-          expect(_width(word, label.text.style) * 1.1, lessThanOrEqualTo(label.constraints.maxWidth),
-              reason: '$code: «$word»');
-        }
-        final rect = tester.getRect(zone);
-        expect(rect.left, greaterThanOrEqualTo(0), reason: code);
-        expect(rect.right, lessThanOrEqualTo(size.width), reason: code);
-        zones.add(rect);
-      }
-      for (var i = 0; i < zones.length; i++) {
-        for (var j = i + 1; j < zones.length; j++) {
-          expect(zones[i].overlaps(zones[j]), isFalse, reason: 'зоны $i и $j');
-        }
-      }
-      expect(tester.takeException(), isNull);
-    });
 
     testWidgets('M7а: номер обращения в шапке чата виден целиком, статус — под ним ($w px)', (tester) async {
       await _pump(tester, size);
@@ -193,6 +167,13 @@ void main() {
             expect(rect.right, lessThanOrEqualTo(size.width), reason: code);
             final label = _paragraph(tester, find.descendant(of: zone, matching: find.byType(Text)));
             expect(label.didExceedMaxLines, isFalse, reason: '$code: подпись целиком');
+            // M6 (глава 9): каждое слово целиком в строке — без переноса посреди слова. При обычном размере текста —
+            // с запасом 10 % на увеличенный системный размер, при увеличенном — с его масштабом.
+            final margin = scale == 1.0 ? 1.1 : 1.0;
+            for (final word in label.text.toPlainText().split(' ')) {
+              final width = label.textScaler.scale(_width(word, label.text.style));
+              expect(width * margin, lessThanOrEqualTo(label.constraints.maxWidth), reason: '$code: «$word»');
+            }
             // Центр зоны не перекрыт ничем (подписью соседа, контуром) — тап попадает в неё.
             expect(zone.hitTestable(), findsOneWidget, reason: code);
             await tester.tap(zone);

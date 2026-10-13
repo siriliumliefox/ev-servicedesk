@@ -356,80 +356,40 @@ class PrototypeRepository implements ClientRepository {
   /// Записи по агрегатам — их замены (совпадают со статусами выше), долив — работа (не сбрасывает выработку).
   static final Map<int, List<MaintenanceRecord>> _records = {
     101: [
-      MaintenanceRecord(
-        id: 14,
-        aggregateTypeCode: 'engine_oil',
-        performedAt: DateTime(2026, 3, 14),
-        mileageAtService: 34100,
-        kind: MaintenanceKind.work,
-        description: 'Долив масла',
-      ),
-      MaintenanceRecord(
-          id: 1,
-          aggregateTypeCode: 'gearbox_oil',
-          performedAt: DateTime(2026, 8, 30),
-          mileageAtService: 36450,
-          kind: MaintenanceKind.replacement),
-      MaintenanceRecord(
-          id: 2,
-          aggregateTypeCode: 'air_filter',
-          performedAt: DateTime(2026, 6, 20),
-          mileageAtService: 37750,
-          kind: MaintenanceKind.replacement),
-      MaintenanceRecord(
-          id: 3,
-          aggregateTypeCode: 'oil_filter',
-          performedAt: DateTime(2025, 12, 12),
-          mileageAtService: 32700,
-          kind: MaintenanceKind.replacement),
-      MaintenanceRecord(
-          id: 4,
-          aggregateTypeCode: 'cabin_filter',
-          performedAt: DateTime(2025, 11, 1),
-          mileageAtService: 31250,
-          kind: MaintenanceKind.replacement),
-      MaintenanceRecord(
-        id: 5,
-        aggregateTypeCode: 'engine_oil',
-        performedAt: DateTime(2025, 10, 2),
-        mileageAtService: 30800,
-        kind: MaintenanceKind.replacement,
-        description: 'Плановое ТО-2',
-      ),
-      MaintenanceRecord(
-          id: 6,
-          aggregateTypeCode: 'engine_oil',
-          performedAt: DateTime(2024, 10, 15),
-          mileageAtService: 15900,
-          kind: MaintenanceKind.replacement),
-      MaintenanceRecord(
-          id: 7,
-          aggregateTypeCode: 'cabin_filter',
-          performedAt: DateTime(2024, 10, 15),
-          mileageAtService: 15900,
-          kind: MaintenanceKind.replacement),
+      _work(14, 'engine_oil', DateTime(2026, 3, 14), 34100, 'Долив масла'),
+      _replacement(1, 'gearbox_oil', DateTime(2026, 8, 30), 36450),
+      _replacement(2, 'air_filter', DateTime(2026, 6, 20), 37750),
+      _replacement(3, 'oil_filter', DateTime(2025, 12, 12), 32700),
+      _replacement(4, 'cabin_filter', DateTime(2025, 11, 1), 31250),
+      _replacement(5, 'engine_oil', DateTime(2025, 10, 2), 30800, 'Плановое ТО-2'),
+      _replacement(6, 'engine_oil', DateTime(2024, 10, 15), 15900),
+      _replacement(7, 'cabin_filter', DateTime(2024, 10, 15), 15900),
     ],
     102: [
-      MaintenanceRecord(
-          id: 8,
-          aggregateTypeCode: 'cabin_filter',
-          performedAt: DateTime(2026, 5, 15),
-          mileageAtService: 12900,
-          kind: MaintenanceKind.replacement),
-      MaintenanceRecord(
-          id: 9,
-          aggregateTypeCode: 'ac_refrigerant',
-          performedAt: DateTime(2026, 4, 2),
-          mileageAtService: 11400,
-          kind: MaintenanceKind.replacement),
-      MaintenanceRecord(
-          id: 10,
-          aggregateTypeCode: 'gearbox_oil',
-          performedAt: DateTime(2024, 11, 20),
-          mileageAtService: 1200,
-          kind: MaintenanceKind.replacement),
+      _replacement(8, 'cabin_filter', DateTime(2026, 5, 15), 12900),
+      _replacement(9, 'ac_refrigerant', DateTime(2026, 4, 2), 11400),
+      _replacement(10, 'gearbox_oil', DateTime(2024, 11, 20), 1200),
     ],
   };
+
+  static MaintenanceRecord _replacement(int id, String code, DateTime at, int km, [String? description]) =>
+      MaintenanceRecord(
+        id: id,
+        aggregateTypeCode: code,
+        performedAt: at,
+        mileageAtService: km,
+        kind: MaintenanceKind.replacement,
+        description: description,
+      );
+
+  static MaintenanceRecord _work(int id, String code, DateTime at, int km, String description) => MaintenanceRecord(
+        id: id,
+        aggregateTypeCode: code,
+        performedAt: at,
+        mileageAtService: km,
+        kind: MaintenanceKind.work,
+        description: description,
+      );
 
   static const _articles = [
     KnowledgeArticle(
