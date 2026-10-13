@@ -64,11 +64,16 @@ jobs:
           channel: "stable"
 
       - name: Build iOS (без подписи)
-        # При сбое — ошибки xcodebuild: без -v Flutter показывает только общий текст про Development Team.
+        # При сбое — ошибки xcodebuild и хвост лога: без -v Flutter показывает только общий текст про Development Team.
         run: |
-          set -o pipefail
-          flutter build ios --debug --no-codesign -v > build-ios.log 2>&1 || {
-            grep -nE "error:|Signing for|requires a development team" build-ios.log | head -40
-            tail -60 build-ios.log
-            exit 1
-          }
+          flutter build ios --debug --no-codesign -v > build-ios.log 2>&1 && exit 0
+          grep -nE "error:|Signing for|requires a development team|BUILD FAILED" build-ios.log | head -40 || true
+          tail -150 build-ios.log
+          exit 1
+
+      - name: Лог сборки iOS
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-ios-log
+          path: mobile/build-ios.log
