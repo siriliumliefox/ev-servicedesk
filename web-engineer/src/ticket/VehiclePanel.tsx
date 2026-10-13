@@ -1,25 +1,60 @@
-// Контекст авто клиента из тикета (ТЗ 4.3): модель, VIN, пробег, прошивка, статусы агрегатов, история ТО.
+// Контекст авто клиента из тикета (ТЗ 4.3) — только чтение (ADR 0025 п. 12): модель, VIN, пробег,
+// прошивка на момент тикета и текущая, статусы агрегатов, история ТО постранично.
 // Авто и статусы приходят в TicketDetail.vehicle_context, история — listMaintenanceRecords.
+import { useEffect, useState } from 'react'
 import {
+  Button,
   ErrorState,
   LoadingState,
   StatusBadge,
   formatDate,
   formatKm,
-  useAsync,
   type AggregateStatus,
+  type MaintenanceRecord,
   type TicketDetail,
 } from '@ev-servicedesk/web-shared'
 import { useEngineer } from '../repo.ts'
 
-export function VehiclePanel({ ticket }: { ticket: TicketDetail }) {
+const HISTORY_PAGE = 20
+
+/** История ТО постранично: «Показать ещё» догружает следующую страницу. */
+function useHistory(vehicleId: number | undefined) {
   const { repo } = useEngineer()
+  const [items, setItems] = useState<MaintenanceRecord[]>()
+  const [page, setPage] = useState(1)
+  const [pages, setPages] = useState(1)
+  const [error, setError] = useState<unknown>(null)
+  const [attempt, setAttempt] = useState(0)
+
+  useEffect(() => {
+    if (vehicleId === undefined) return
+    let cancelled = false
+    repo.listMaintenanceRecords(vehicleId, { page, page_size: HISTORY_PAGE }).then(
+      (result) => {
+        if (cancelled) return
+        setItems((list) => (page === 1 ? result.items : [...(list ?? []), ...result.items]))
+        setPages(result.meta.total_pages)
+        setError(null)
+      },
+      (e: unknown) => !cancelled && setError(e),
+    )
+    return () => {
+      cancelled = true
+    }
+  }, [repo, vehicleId, page, attempt])
+
+  return {
+    items,
+    error,
+    more: page < pages ? () => setPage((p) => p + 1) : null,
+    retry: () => setAttempt((n) => n + 1),
+  }
+}
+
+export function VehiclePanel({ ticket }: { ticket: TicketDetail }) {
   const context = ticket.vehicle_context
   const vehicle = context?.vehicle
-  const records = useAsync(
-    () => (vehicle ? repo.listMaintenanceRecords(vehicle.id) : Promise.resolve(null)),
-    [repo, vehicle?.id],
-  )
+  const records = useHistory(vehicle?.id)
 
   if (!vehicle) return <p className="text-body-sm text-fg-muted">Авто не привязано к обращению.</p>
 
@@ -38,8 +73,10 @@ export function VehiclePanel({ ticket }: { ticket: TicketDetail }) {
           <dd className="font-mono">{vehicle.vin}</dd>
           <dt className="text-fg-muted">Пробег</dt>
           <dd className="tabular-nums">{formatKm(vehicle.mileage)}</dd>
-          <dt className="text-fg-muted">Прошивка</dt>
+          <dt className="text-fg-muted">Прошивка сейчас</dt>
           <dd>{vehicle.current_firmware_version ?? 'не зафиксирована'}</dd>
+          <dt className="text-fg-muted">На момент тикета</dt>
+          <dd>{ticket.firmware_version_at_creation ?? 'не зафиксирована'}</dd>
         </dl>
       </section>
 
@@ -65,14 +102,14 @@ export function VehiclePanel({ ticket }: { ticket: TicketDetail }) {
           История ТО
         </h3>
         {records.error ? (
-          <ErrorState error={records.error} onRetry={records.reload} />
-        ) : !records.data ? (
+          <ErrorState error={records.error} onRetry={records.retry} />
+        ) : !records.items ? (
           <LoadingState />
-        ) : records.data.items.length === 0 ? (
+        ) : records.items.length === 0 ? (
           <p className="text-body-sm text-fg-muted">Записей ТО нет.</p>
         ) : (
           <ul className="grid gap-1 text-body-sm">
-            {records.data.items.map((r) => (
+            {records.items.map((r) => (
               <li key={r.id} className="flex justify-between gap-3 border-b border-border py-1 last:border-b-0">
                 <span>
                   {r.aggregate_type_code ? (names.get(r.aggregate_type_code) ?? r.aggregate_type_code) : 'Общие работы'}
@@ -84,6 +121,11 @@ export function VehiclePanel({ ticket }: { ticket: TicketDetail }) {
               </li>
             ))}
           </ul>
+        )}
+        {records.more && (
+          <Button variant="secondary" size="sm" onClick={records.more}>
+            Показать ещё
+          </Button>
         )}
       </section>
     </div>

@@ -7,6 +7,7 @@
 """
 
 from collections.abc import Sequence
+from datetime import datetime
 
 from redis import Redis
 from sqlalchemy import Select, func, not_, select, update
@@ -72,8 +73,12 @@ def list_tickets_stmt(
     category: TicketCategory | None = None,
     assigned_engineer_id: int | None = None,
     overdue: bool | None = None,
+    resolved_since: datetime | None = None,
 ) -> Select:
     """GET /tickets: фильтры сужают видимую выборку (ADR 0017 п. 3).
+
+    `resolved_since` — решённые не раньше момента (колонка «Решено», ADR 0025 п. 9); у
+    переоткрытого тикета `resolved_at` сброшен, он в выборку не попадает.
 
     Персонал — по сроку SLA (приоритет следует из категории), клиент — новые первыми.
     """
@@ -91,6 +96,8 @@ def list_tickets_stmt(
         stmt = stmt.where(Ticket.assigned_engineer_id == assigned_engineer_id)
     if overdue is not None:
         stmt = stmt.where(Ticket.is_overdue if overdue else not_(Ticket.is_overdue))
+    if resolved_since is not None:
+        stmt = stmt.where(Ticket.resolved_at >= resolved_since)
     if user.role in STAFF_ROLES:
         return stmt.order_by(Ticket.sla_due_at, Ticket.id)
     return stmt.order_by(Ticket.created_at.desc(), Ticket.id.desc())

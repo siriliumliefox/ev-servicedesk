@@ -1,5 +1,6 @@
-// Кабинет инженера (Глава 8, прототип; ADR 0012): канбан-доска слева, карточка тикета справа (ТЗ раздел 9).
-// Выбранный тикет — в адресе: `#/tickets/1042`. Тёмная тема по умолчанию (ТЗ раздел 6, ночные смены).
+// Кабинет инженера (Глава 8 — прототип, ADR 0012; глава 21 — реальный API, ADR 0025): канбан-доска слева,
+// карточка тикета справа (ТЗ раздел 9). Выбранный тикет — в адресе: `#/tickets/1042` (ссылку можно
+// переслать; после входа открывается она же). Тема по умолчанию тёмная (ТЗ раздел 6, ночные смены).
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Button,
@@ -11,27 +12,38 @@ import {
   useTheme,
   type EngineerRepository,
   type PrototypeRepository,
+  type ThemePreference,
 } from '@ev-servicedesk/web-shared'
 import { Board } from './board/Board.tsx'
 import { EngineerContext, type EngineerEnv } from './repo.ts'
 import { TicketPanel } from './ticket/TicketPanel.tsx'
+import { NoticeProvider } from './ui/Notices.tsx'
 
 const systemNow = () => new Date()
+
+const THEME_LABELS: Record<ThemePreference, string> = { system: 'Как в системе', light: 'Светлая', dark: 'Тёмная' }
 
 export default function App({
   repo,
   now = systemNow,
   demo,
+  onLogout,
 }: {
   repo: EngineerRepository
   now?: () => Date
   /** Панель «Демо» — только для прототипа. */
   demo?: PrototypeRepository
+  /** Выход — только на реальном API (в прототипе сессии нет). */
+  onLogout?: () => void
 }) {
-  const { theme, toggle } = useTheme('dark')
+  const { theme, preference, setPreference, toggle } = useTheme('dark')
   const [path, navigate] = useHashRoute()
+  // version — данные всего приложения (панель «Демо»); boardTick — доска после изменений тикета в карточке.
+  // Карточка о переносах на доске узнаёт сама — из событий тикета (watchTicket).
   const [version, setVersion] = useState(0)
+  const [boardTick, setBoardTick] = useState(0)
   const bump = useCallback(() => setVersion((v) => v + 1), [])
+  const refreshBoard = useCallback(() => setBoardTick((v) => v + 1), [])
   const me = useAsync(() => repo.getCurrentUser(), [repo, version])
   const [, setTick] = useState(0)
 
@@ -43,13 +55,15 @@ export default function App({
 
   const match = /^\/tickets\/(\d+)$/.exec(path)
   const selectedId = match ? Number(match[1]) : null
+  const closeTicket = useCallback(() => navigate('/'), [navigate])
 
   useEffect(() => {
     if (selectedId === null) return
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && navigate('/')
+    // Esc диалогов и просмотра фото до окна не доходит — они останавливают его сами.
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && closeTicket()
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [selectedId, navigate])
+  }, [selectedId, closeTicket])
 
   const env = useMemo<EngineerEnv | null>(
     () => (me.data ? { repo, now, meId: me.data.id } : null),
@@ -57,43 +71,69 @@ export default function App({
   )
 
   return (
-    <div className="flex h-screen min-w-0 flex-col bg-canvas text-fg">
-      <header className="flex items-center justify-between gap-4 border-b border-border bg-surface px-6 py-3">
-        <div className="flex items-center gap-3">
-          <span aria-hidden="true" className="size-3 rounded-full bg-primary" />
-          <h1 className="text-h2">EV-ServiceDesk · Кабинет инженера</h1>
-        </div>
-        <div className="flex items-center gap-3">
-          {me.data && <span className="text-body-sm text-fg-muted">Инженер #{me.data.id}</span>}
-          {demo && <DemoPanel repo={demo} theme={theme} onToggleTheme={toggle} onChange={bump} />}
-          <Button variant="secondary" size="sm" onClick={toggle} aria-pressed={theme === 'dark'}>
-            {theme === 'dark' ? 'Светлая тема' : 'Тёмная тема'}
-          </Button>
-        </div>
-      </header>
-
-      {me.error ? (
-        <div className="p-6">
-          <ErrorState error={me.error} onRetry={me.reload} />
-        </div>
-      ) : !env ? (
-        <LoadingState />
-      ) : (
-        <EngineerContext.Provider value={env}>
-          <div className="flex min-h-0 flex-1">
-            <Board version={version} selectedId={selectedId} onSelect={(id) => navigate(`/tickets/${id}`)} />
-            {selectedId !== null && (
-              <TicketPanel
-                key={selectedId}
-                ticketId={selectedId}
-                version={version}
-                onChanged={bump}
-                onClose={() => navigate('/')}
-              />
+    <NoticeProvider>
+      <div className="flex h-screen min-w-0 flex-col bg-canvas text-fg">
+        <header className="flex items-center justify-between gap-4 border-b border-border bg-surface px-6 py-3">
+          <div className="flex items-center gap-3">
+            <span aria-hidden="true" className="size-3 rounded-full bg-primary" />
+            <h1 className="text-h2">EV-ServiceDesk · Кабинет инженера</h1>
+          </div>
+          <div className="flex items-center gap-3">
+            {me.data && (
+              <span className="text-body-sm text-fg-muted">
+                Инженер {me.data.phone ?? `#${me.data.id}`}
+              </span>
+            )}
+            {demo && <DemoPanel repo={demo} theme={theme} onToggleTheme={toggle} onChange={bump} />}
+            <label className="flex items-center gap-2 text-body-sm text-fg-muted">
+              Тема
+              <select
+                value={preference}
+                onChange={(e) => setPreference(e.target.value as ThemePreference)}
+                className="h-(--size-control-web-sm) rounded-md border border-border-strong bg-surface px-2 text-body-sm text-fg"
+              >
+                {(Object.keys(THEME_LABELS) as ThemePreference[]).map((p) => (
+                  <option key={p} value={p}>
+                    {THEME_LABELS[p]}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {onLogout && (
+              <Button variant="secondary" size="sm" onClick={onLogout}>
+                Выйти
+              </Button>
             )}
           </div>
-        </EngineerContext.Provider>
-      )}
-    </div>
+        </header>
+
+        {me.error ? (
+          <div className="p-6">
+            <ErrorState error={me.error} onRetry={me.reload} />
+          </div>
+        ) : !env ? (
+          <LoadingState />
+        ) : (
+          <EngineerContext.Provider value={env}>
+            <div className="flex min-h-0 flex-1">
+              <Board
+                version={version + boardTick}
+                selectedId={selectedId}
+                onSelect={(id) => navigate(`/tickets/${id}`)}
+              />
+              {selectedId !== null && (
+                <TicketPanel
+                  key={selectedId}
+                  ticketId={selectedId}
+                  version={version}
+                  onChanged={refreshBoard}
+                  onClose={closeTicket}
+                />
+              )}
+            </div>
+          </EngineerContext.Provider>
+        )}
+      </div>
+    </NoticeProvider>
   )
 }

@@ -6,6 +6,7 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Path, Query, status
+from pydantic import AwareDatetime
 
 from app.api.deps import (
     ALL_ROLES,
@@ -53,6 +54,8 @@ def list_tickets(
     # Диапазон BIGINT: вне его — ошибка драйвера и 500, а не 422.
     assigned_engineer_id: Annotated[int | None, Query(ge=-BIGINT_MAX - 1, le=BIGINT_MAX)] = None,
     overdue: bool | None = None,
+    # Только со смещением (RFC 3339): время без зоны неоднозначно — 422 (ADR 0025 п. 9).
+    resolved_since: AwareDatetime | None = None,
 ) -> TicketList:
     stmt = service.list_tickets_stmt(
         user,
@@ -60,6 +63,7 @@ def list_tickets(
         category=category,
         assigned_engineer_id=assigned_engineer_id,
         overdue=overdue,
+        resolved_since=resolved_since,
     )
     items, meta = paginate(db, stmt, page)
     return TicketList(items=[TicketOut.model_validate(t) for t in items], meta=meta)

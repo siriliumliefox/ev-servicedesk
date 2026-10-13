@@ -6,7 +6,7 @@ tests/api/test_ticket_checklist.py. Каждый ответ сверяется �
 """
 
 from contextlib import AbstractContextManager
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -394,6 +394,41 @@ def test_list_filters_order_and_overdue(client, owner, engineer, admin, vehicle,
     assert r.status_code == 422
     r = client.get(f"{API}/tickets", params={"page_size": 1, "page": 2}, headers=staff)
     assert r.json()["meta"] == {"page": 2, "page_size": 1, "total_items": 4, "total_pages": 4}
+
+
+def test_list_resolved_since(client, owner, engineer, as_staff, vehicle, make_ticket, db):
+    """Колонка «Решено» (ADR 0025 п. 9): граница включительно, переоткрытый не попадает."""
+    eng_headers, eng = engineer
+    other = as_staff("+375293300051")[1]
+    now = datetime.now(UTC).replace(microsecond=0)
+    old = make_ticket(vehicle["id"], eng, TicketStatus.RESOLVED)
+    edge = make_ticket(vehicle["id"], eng, TicketStatus.RESOLVED)
+    fresh = make_ticket(vehicle["id"], eng, TicketStatus.RESOLVED)
+    foreign = make_ticket(vehicle["id"], other, TicketStatus.RESOLVED)
+    reopened = make_ticket(vehicle["id"], eng)  # был решён и переоткрыт: resolved_at сброшен
+    since = now - timedelta(days=7)
+    old.resolved_at = since - timedelta(seconds=1)
+    edge.resolved_at = since
+    fresh.resolved_at = now
+    foreign.resolved_at = now
+    db.commit()
+
+    def ids(headers: Headers, value: str) -> set[int]:
+        r = client.get(f"{API}/tickets", params={"resolved_since": value}, headers=headers)
+        assert r.status_code == 200, r.text
+        return {t["id"] for t in r.json()["items"]}
+
+    assert ids(eng_headers, since.isoformat()) == {edge.id, fresh.id}, "чужой и переоткрытый — нет"
+    assert reopened.id not in ids(eng_headers, (since - timedelta(days=30)).isoformat())
+    assert ids(eng_headers, (since - timedelta(days=30)).isoformat()) == {old.id, edge.id, fresh.id}
+    assert ids(eng_headers, (now + timedelta(days=1)).isoformat()) == set(), "будущее — пусто"
+    # Минск (+03:00): тот же момент в другой зоне.
+    minsk = since.astimezone(timezone(timedelta(hours=3))).isoformat()
+    assert ids(eng_headers, minsk) == {edge.id, fresh.id}
+    assert ids(owner, since.isoformat()) == {edge.id, fresh.id, foreign.id}, "клиент — свои авто"
+    for bad in ("2026-10-13T10:00:00", "вчера", "2026-13-01T00:00:00Z"):
+        r = client.get(f"{API}/tickets", params={"resolved_since": bad}, headers=eng_headers)
+        assert r.status_code == 422, bad
 
 
 # ---------- Claim, статус, назначение ----------

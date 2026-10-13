@@ -2540,6 +2540,8 @@ export interface operations {
                 assigned_engineer_id?: number;
                 /** @description Только тикеты с просроченным SLA */
                 overdue?: boolean;
+                /** @description Только тикеты, решённые не раньше этого момента (resolved_at >= resolved_since) — колонка «Решено» канбана. Переоткрытый тикет (resolved_at = null) не попадает. Время — со смещением (RFC 3339), без него или в неверном формате — 422; момент в будущем — пустая страница. Порядок выдачи прежний. Добавлено в 1.10.0 (глава 21, ADR 0025). */
+                resolved_since?: string;
                 page?: components["parameters"]["PageParam"];
                 page_size?: components["parameters"]["PageSizeParam"];
             };

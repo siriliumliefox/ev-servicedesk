@@ -29,7 +29,6 @@ import type {
   TicketDetail,
   TicketList,
   TicketMessage,
-  TicketMessageList,
   TicketResolutionStats,
   TicketStatus,
   UserPublic,
@@ -37,12 +36,15 @@ import type {
   VehicleModel,
 } from "../data/models.ts";
 import { TICKET_CATEGORIES } from "../data/models.ts";
+import { allowedTransitions } from "../data/ticketFlow.ts";
 import {
   ApiError,
   type AdminRepository,
   type EngineerRepository,
   type ListArticlesQuery,
   type ListTicketsQuery,
+  type PageQuery,
+  type TicketLiveHandlers,
 } from "../data/repository.ts";
 import {
   ADMIN_ID,
@@ -75,18 +77,6 @@ export interface PrototypeOptions {
   scenario?: PrototypeScenario;
 }
 
-/** Переходы статуса, которые прототип разрешает инженеру. new → in_progress — только через claim. */
-const TRANSITIONS: Record<TicketStatus, readonly TicketStatus[]> = {
-  new: [],
-  in_progress: ["waiting_vendor", "resolved"],
-  waiting_vendor: ["in_progress", "resolved"],
-  resolved: ["in_progress"],
-};
-
-export function allowedTransitions(status: TicketStatus): readonly TicketStatus[] {
-  return TRANSITIONS[status];
-}
-
 /** `Ticket.summary` — первые 140 символов описания (OpenAPI 1.4.0, ADR 0017). */
 const SUMMARY_LENGTH = 140;
 
@@ -100,6 +90,16 @@ const page = <T>(items: T[]) => ({
   meta: { page: 1, page_size: Math.max(items.length, 20), total_items: items.length, total_pages: 1 },
 });
 
+/** Страница выборки, как `PaginationMeta` контракта (page с 1, page_size по умолчанию 20). */
+const slice = <T>(items: T[], query: PageQuery) => {
+  const size = query.page_size ?? 20;
+  const number = query.page ?? 1;
+  return {
+    items: items.slice((number - 1) * size, number * size),
+    meta: { page: number, page_size: size, total_items: items.length, total_pages: Math.ceil(items.length / size) },
+  };
+};
+
 const validation = (message: string, field?: string) => new ApiError("VALIDATION_ERROR", message, 422, field);
 
 export class PrototypeRepository implements EngineerRepository, AdminRepository {
@@ -110,6 +110,7 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
   private scenario: PrototypeScenario;
 
   private tickets: TicketRecord[] = [];
+  private readonly watchers = new Map<number, Set<TicketLiveHandlers>>();
   private articles: KnowledgeArticle[] = [];
   private treeNodes: DecisionTreeNode[] = [];
   private aggregateTypes: AggregateType[] = [];
@@ -207,6 +208,7 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
 
   listTickets(query: ListTicketsQuery = {}): Promise<TicketList> {
     return this.call(() => {
+      const since = query.resolved_since === undefined ? null : Date.parse(query.resolved_since);
       const items = this.tickets
         .map((t) => this.toTicket(t))
         .filter(
@@ -214,9 +216,12 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
             (query.status === undefined || t.status === query.status) &&
             (query.category === undefined || t.category === query.category) &&
             (query.assigned_engineer_id === undefined || t.assigned_engineer_id === query.assigned_engineer_id) &&
-            (query.overdue === undefined || t.is_overdue === query.overdue),
-        );
-      return page(items);
+            (query.overdue === undefined || t.is_overdue === query.overdue) &&
+            (since === null || (t.resolved_at != null && Date.parse(t.resolved_at) >= since)),
+        )
+        // Персонал — по сроку SLA (как backend, ADR 0017 п. 3).
+        .sort((a, b) => a.sla_due_at.localeCompare(b.sla_due_at) || a.id - b.id);
+      return slice(items, query);
     });
   }
 
@@ -228,10 +233,11 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
     return this.call(() => {
       const t = this.ticket(ticketId);
       if (t.assigned_engineer_id !== null && t.assigned_engineer_id !== ENGINEER_ID) {
-        throw new ApiError("CONFLICT", "Тикет уже взят в работу другим инженером", 409);
+        throw new ApiError("TICKET_ALREADY_CLAIMED", "Тикет уже взял в работу другой инженер", 409);
       }
       t.assigned_engineer_id = ENGINEER_ID;
       if (t.status === "new") t.status = "in_progress";
+      this.emitTicket(t);
       return this.toDetail(t);
     });
   }
@@ -242,17 +248,20 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
       if (this.role === "engineer" && t.assigned_engineer_id !== ENGINEER_ID) {
         throw new ApiError("FORBIDDEN", "Статус меняет инженер, назначенный на тикет", 403);
       }
-      if (t.status !== status && !TRANSITIONS[t.status].includes(status)) {
-        throw validation(`Переход ${t.status} → ${status} недопустим`, "status");
+      if (t.status !== status && !allowedTransitions(t.status).includes(status)) {
+        throw new ApiError("INVALID_STATUS_TRANSITION", "Такой переход статуса недоступен", 409);
       }
-      t.status = status;
-      t.resolved_at = status === "resolved" ? this.clock().toISOString() : null;
+      if (t.status !== status) {
+        t.status = status;
+        t.resolved_at = status === "resolved" ? this.clock().toISOString() : null;
+        this.emitTicket(t);
+      }
       return this.toDetail(t);
     });
   }
 
-  listTicketMessages(ticketId: number): Promise<TicketMessageList> {
-    return this.call(() => page(this.ticket(ticketId).messages));
+  listTicketMessages(ticketId: number, query: { after_id?: number } = {}): Promise<TicketMessage[]> {
+    return this.call(() => this.ticket(ticketId).messages.filter((m) => m.id > (query.after_id ?? 0)));
   }
 
   createTicketMessage(ticketId: number, body: string): Promise<TicketMessage> {
@@ -261,6 +270,7 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
       if (this.role === "engineer" && t.assigned_engineer_id !== ENGINEER_ID) {
         throw new ApiError("FORBIDDEN", "Писать в чат может инженер, назначенный на тикет", 403);
       }
+      if (t.status === "resolved") throw new ApiError("TICKET_RESOLVED", "Тикет решён", 409);
       if (!body.trim()) throw validation("Сообщение пустое", "body");
       const message: TicketMessage = {
         id: this.nextId++,
@@ -270,12 +280,26 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
         created_at: this.clock().toISOString(),
       };
       t.messages.push(message);
+      this.emit(ticketId, (h) => h.onMessage(clone(message)));
       return message;
     });
   }
 
-  listMaintenanceRecords(vehicleId: number): Promise<MaintenanceRecordList> {
-    return this.call(() => page(MAINTENANCE_RECORDS[vehicleId] ?? []));
+  listMaintenanceRecords(vehicleId: number, query: PageQuery = {}): Promise<MaintenanceRecordList> {
+    return this.call(() => slice(MAINTENANCE_RECORDS[vehicleId] ?? [], query));
+  }
+
+  /** События — от действий в этой сессии прототипа (сети нет): «живой» чат без WebSocket. */
+  watchTicket(ticketId: number, handlers: TicketLiveHandlers): () => void {
+    const set = this.watchers.get(ticketId) ?? new Set<TicketLiveHandlers>();
+    set.add(handlers);
+    this.watchers.set(ticketId, set);
+    queueMicrotask(() => {
+      if (!set.has(handlers)) return;
+      handlers.onState?.("live");
+      handlers.onReady();
+    });
+    return () => set.delete(handlers);
   }
 
   // ---------- Админ: справочник агрегатов, регламенты, пороги ----------
@@ -598,6 +622,15 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
   }
 
   // ---------- Внутреннее ----------
+
+  private emit(ticketId: number, send: (handlers: TicketLiveHandlers) => void): void {
+    for (const handlers of this.watchers.get(ticketId) ?? []) queueMicrotask(() => send(handlers));
+  }
+
+  private emitTicket(t: TicketRecord): void {
+    const ticket = this.toTicket(t);
+    this.emit(t.seed.id, (h) => h.onTicket(clone(ticket)));
+  }
 
   private computedAt(): string {
     return new Date(this.clock().getTime() - ANALYTICS_LAG_MS).toISOString();

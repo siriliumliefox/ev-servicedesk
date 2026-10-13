@@ -1,0 +1,88 @@
+name: web-e2e
+
+# E2E веб-кабинета инженера (Глава 21, ADR 0025 п. 14): Playwright (Chromium) против стека backend из
+# образа-кандидата (scripts/integration_stack.sh). Кабинет — production-сборка (`/v1`, CSP) в
+# `vite preview` с прокси на стек. Сценарии чек-листа: тикет в работу перетаскиванием → быстрый ответ
+# из базы знаний → «Решено» с клавиатуры, клиент получает события по WebSocket не позже 2 с; конкурентный
+# доступ — два инженера берут один тикет. Данные — backend/scripts/e2e_engineer.py seed.
+# Вызывается из ci.yml при изменениях web-engineer/, web-shared/ или backend/ — Chromium. Firefox и WebKit —
+# локально (web-engineer/scripts/e2e.sh) или ручным запуском ci.yml с web_browsers="chromium firefox webkit":
+# Firefox из Playwright не запускается на macOS 27 («Could not find profile folder»).
+
+on:
+  workflow_call:
+    inputs:
+      browsers:
+        description: "Браузеры через пробел: chromium firefox webkit"
+        default: "chromium"
+        type: string
+
+jobs:
+  playwright:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Poetry
+        run: pipx install poetry==2.5.1
+
+      - name: Configure Poetry (venv in project)
+        run: poetry config virtualenvs.in-project true
+
+      - name: Cache venv
+        uses: actions/cache@v4
+        with:
+          path: backend/.venv
+          key: poetry-${{ runner.os }}-${{ hashFiles('backend/poetry.lock') }}
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: poetry install --no-interaction
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - run: npm ci
+
+      - name: Браузеры Playwright
+        working-directory: web-engineer
+        env:
+          BROWSERS: ${{ inputs.browsers || 'chromium' }}
+        run: |
+          [[ "$BROWSERS" =~ ^(chromium|firefox|webkit)( (chromium|firefox|webkit))*$ ]] || {
+            echo "browsers: только chromium, firefox, webkit через пробел, получено: '$BROWSERS'"; exit 1; }
+          read -ra list <<<"$BROWSERS"
+          npx playwright install --with-deps "${list[@]}"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          load: true
+          tags: backend:integration
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Стек backend, данные кабинета и Playwright
+        env:
+          BROWSERS: ${{ inputs.browsers || 'chromium' }}
+          E2E_BACKEND_IMAGE: backend:integration
+        run: |
+          read -ra list <<<"$BROWSERS"
+          web-engineer/scripts/e2e.sh "${list[@]/#/--project=}"
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: |
+            web-engineer/playwright-report
+            web-engineer/test-results
+          retention-days: 7

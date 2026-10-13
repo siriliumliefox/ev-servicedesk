@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: EV-ServiceDesk API
-  version: "1.9.0"
+  version: "1.10.0"
   description: >
     API дипломного проекта «EV-ServiceDesk» (ООО «ЕТСавтоГомель»).
     Контракты сервисов: Auth, Vehicle, Aggregates & Maintenance, Tickets,
@@ -891,6 +891,14 @@ paths:
           in: query
           schema: { type: boolean }
           description: Только тикеты с просроченным SLA
+        - name: resolved_since
+          in: query
+          schema: { type: string, format: date-time }
+          description: >-
+            Только тикеты, решённые не раньше этого момента (resolved_at >= resolved_since) — колонка
+            «Решено» канбана. Переоткрытый тикет (resolved_at = null) не попадает. Время — со
+            смещением (RFC 3339), без него или в неверном формате — 422; момент в будущем —
+            пустая страница. Порядок выдачи прежний. Добавлено в 1.10.0 (глава 21, ADR 0025).
         - $ref: '#/components/parameters/PageParam'
         - $ref: '#/components/parameters/PageSizeParam'
       responses:
