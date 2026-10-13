@@ -35,9 +35,18 @@ class EmptyState extends StatelessWidget {
         ],
       ),
     );
-    // Внутри списка (неограниченная высота) — как есть; на весь экран — по центру с прокруткой.
+    // Внутри списка (неограниченная высота) — как есть; на весь экран — по центру с прокруткой, которая тянется
+    // и без переполнения: «потянуть для обновления» работает и на пустом экране (M2).
     return LayoutBuilder(
-      builder: (context, box) => box.hasBoundedHeight ? Center(child: SingleChildScrollView(child: content)) : content,
+      builder: (context, box) => box.hasBoundedHeight
+          ? SingleChildScrollView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(minHeight: box.maxHeight),
+                child: Center(child: content),
+              ),
+            )
+          : content,
     );
   }
 }
@@ -62,6 +71,7 @@ class ErrorState extends StatelessWidget {
 }
 
 /// Загрузка данных: индикатор → ошибка с «Повторить» → пустое состояние → контент.
+/// Ошибку и пустое состояние можно обновить, потянув вниз; контент — RefreshIndicator в [builder].
 class AsyncView<T> extends StatefulWidget {
   const AsyncView({
     super.key,
@@ -70,6 +80,7 @@ class AsyncView<T> extends StatefulWidget {
     this.isEmpty,
     this.empty,
     this.reloadKey,
+    this.reloadOnShow = false,
   });
 
   final Future<T> Function() load;
@@ -80,6 +91,10 @@ class AsyncView<T> extends StatefulWidget {
   /// При изменении значения данные загружаются заново.
   final Object? reloadKey;
 
+  /// Перечитывать, когда экран снова виден: выбрана его вкладка или закрыт экран, открытый поверх.
+  /// Загруженное остаётся на экране до ответа.
+  final bool reloadOnShow;
+
   @override
   State<AsyncView<T>> createState() => _AsyncViewState<T>();
 }
@@ -88,11 +103,21 @@ class _AsyncViewState<T> extends State<AsyncView<T>> {
   T? _data;
   Object? _error;
   bool _loading = true;
+  bool? _shown;
 
   @override
   void initState() {
     super.initState();
     _reload();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Скрытая вкладка IndexedStack — Visibility.of; экран под открытым поверх маршрутом — выключенный TickerMode.
+    final shown = Visibility.of(context) && TickerMode.valuesOf(context).enabled;
+    if (widget.reloadOnShow && _shown == false && shown) _reload();
+    _shown = shown;
   }
 
   @override
@@ -125,9 +150,11 @@ class _AsyncViewState<T> extends State<AsyncView<T>> {
   @override
   Widget build(BuildContext context) {
     if (_loading && _data == null) return const Center(child: CircularProgressIndicator());
-    if (_error != null) return ErrorState(error: _error!, onRetry: _reload);
+    if (_error != null) return RefreshIndicator(onRefresh: _reload, child: ErrorState(error: _error!, onRetry: _reload));
     final data = _data as T;
-    if (widget.isEmpty?.call(data) ?? false) return widget.empty ?? const SizedBox.shrink();
+    if (widget.isEmpty?.call(data) ?? false) {
+      return RefreshIndicator(onRefresh: _reload, child: widget.empty ?? const SizedBox.shrink());
+    }
     return widget.builder(context, data, _reload);
   }
 }
