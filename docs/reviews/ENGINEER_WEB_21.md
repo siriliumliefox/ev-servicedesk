@@ -50,7 +50,7 @@ Issue #87, PR #88, ADR 0025 (grill-with-docs Q1–Q23), глоссарий v1.13
 | 9 | `engineer_run.sh` дописывал код клиента в JSON встроенным Python | seed пишет `sms_code` сам |
 | 10 | `clockRef` в данных доски; непонятная арифметика `failures` при 4401 | часы — зависимость эффекта; 4401 — комментарий и `Math.max` |
 
-Проверки после ревью: Vitest 139 (web-shared 67, web-engineer 32, web-admin 40), lint, build; E2E на свежем стеке — Chromium и WebKit 4/4; CI — ниже.
+Проверки после ревью: Vitest 139 (web-shared 67, web-engineer 32, web-admin 40), lint, build; E2E на свежем стеке — Chromium и WebKit 4/4; CI: PR 38406369101 — success, ручной запуск 38406359020 (Chromium, Firefox, WebKit) — 6/6.
 
 ## Чек-лист проверки владельцем (два инженера)
 Запуск: `MOBILE=1 web-engineer/scripts/engineer_run.sh` (без `MOBILE=1` — только кабинет). Входы инженеров,
