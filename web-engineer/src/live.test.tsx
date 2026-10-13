@@ -2,7 +2,7 @@
 // Перетаскивание проверяет Playwright в браузере (e2e/): в jsdom у элементов нет размеров.
 import { act, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   ApiError,
   ENGINEER_ID,
@@ -162,7 +162,8 @@ describe('доска и оформление', () => {
   it('размер очереди — в заголовке вкладки', async () => {
     setup()
     await card(1056)
-    expect(document.title).toBe('(4) Очередь · EV-ServiceDesk · Кабинет инженера')
+    // Заголовок ставит эффект после загрузки колонок — на загруженном CI позже появления карточки.
+    await vi.waitFor(() => expect(document.title).toBe('(4) Очередь · EV-ServiceDesk · Кабинет инженера'))
   })
 
   it('тема: «Как в системе / Светлая / Тёмная», выбор запоминается', async () => {
