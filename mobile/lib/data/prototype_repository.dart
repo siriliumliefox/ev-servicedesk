@@ -212,7 +212,7 @@ class PrototypeRepository implements ClientRepository {
           summary: draft.description,
           createdAt: now,
           description: draft.description,
-          attachments: draft.attachments,
+          attachments: _shown(draft.attachments),
         );
         _tickets = [..._tickets, ticket];
         _messages[ticket.id] = [];
@@ -227,18 +227,22 @@ class PrototypeRepository implements ClientRepository {
       (_messages[ticketId] ?? const <TicketMessage>[]).where((m) => afterId == null || m.id > afterId)));
 
   @override
-  Future<TicketAttachment> uploadAttachment(LocalAttachment file, {void Function(double progress)? onProgress}) =>
+  Future<UploadedAttachment> uploadAttachment(LocalAttachment file, {void Function(double progress)? onProgress}) =>
       _call(() {
         onProgress?.call(1);
-        return TicketAttachment(fileName: file.fileName, fileType: file.fileType);
+        return UploadedAttachment(fileName: file.fileName, fileType: file.fileType, key: 'prototype/${file.fileName}');
       });
+
+  /// Загруженное в «S3» прототипа — вложение в ответе (ссылки на скачивание нет).
+  static List<TicketAttachment> _shown(List<UploadedAttachment> uploaded) =>
+      [for (final a in uploaded) TicketAttachment(fileName: a.fileName, fileType: a.fileType)];
 
   /// Сервера нет — переписка не меняется сама.
   @override
   TicketLive watchTicket(int ticketId, {required int afterId}) => OfflineTicketLive();
 
   @override
-  Future<TicketMessage> sendMessage(int ticketId, String body, {List<TicketAttachment> attachments = const []}) =>
+  Future<TicketMessage> sendMessage(int ticketId, String body, {List<UploadedAttachment> attachments = const []}) =>
       _call(() {
         final message = TicketMessage(
           id: _nextId++,
@@ -246,7 +250,7 @@ class PrototypeRepository implements ClientRepository {
           authorName: 'Вы',
           body: body,
           createdAt: now,
-          attachments: attachments,
+          attachments: _shown(attachments),
         );
         _messages[ticketId] = [...?_messages[ticketId], message];
         return message;

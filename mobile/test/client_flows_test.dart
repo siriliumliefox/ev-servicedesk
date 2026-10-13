@@ -32,7 +32,7 @@ class _Repo extends PrototypeRepository {
   TicketLive watchTicket(int ticketId, {required int afterId}) => live;
 
   @override
-  Future<TicketAttachment> uploadAttachment(LocalAttachment file, {void Function(double progress)? onProgress}) {
+  Future<UploadedAttachment> uploadAttachment(LocalAttachment file, {void Function(double progress)? onProgress}) {
     if (failUploads > 0) {
       failUploads--;
       return Future.error(const OfflineException());

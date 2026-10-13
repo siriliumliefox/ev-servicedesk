@@ -9,7 +9,6 @@ import '../data/attachments.dart';
 import '../data/models.dart';
 import '../data/prototype_repository.dart';
 import '../data/repository.dart';
-import '../ui/bottom_nav.dart';
 import 'push_service.dart';
 
 class AppState extends ChangeNotifier {
@@ -61,11 +60,15 @@ class AppState extends ChangeNotifier {
   /// Непрочитанные новости и акции — счётчик на вкладке «Новости».
   int get unreadNews => _unreadNews;
 
-  EvSection _section = EvSection.car;
-  EvSection get section => _section;
+  /// Номер тикета, чат которого на экране: push по нему не показывается баннером (ADR 0024 п. 4).
+  int? _openChatTicketId;
+  int? get openChatTicketId => _openChatTicketId;
 
-  /// Номер тикета, чат которого открыт: push по нему не показывается баннером (ADR 0024 п. 4).
-  int? openChatTicketId;
+  void chatOpened(int ticketId) => _openChatTicketId = ticketId;
+
+  void chatClosed(int ticketId) {
+    if (_openChatTicketId == ticketId) _openChatTicketId = null;
+  }
 
   ThemeMode _themeMode = ThemeMode.system;
   ThemeMode get themeMode => _themeMode;
@@ -138,8 +141,7 @@ class AppState extends ChangeNotifier {
     _vehiclesError = null;
     _unread = 0;
     _unreadNews = 0;
-    _section = EvSection.car;
-    openChatTicketId = null;
+    _openChatTicketId = null;
     _bump();
   }
 
@@ -167,11 +169,6 @@ class AppState extends ChangeNotifier {
     } on Exception {
       // Счётчик непрочитанных не критичен: при ошибке остаётся прежним.
     }
-  }
-
-  void selectSection(EvSection section) {
-    _section = section;
-    notifyListeners();
   }
 
   void selectVehicle(int vehicleId) {

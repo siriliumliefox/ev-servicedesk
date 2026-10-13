@@ -105,7 +105,7 @@ class _TicketCreateScreenState extends State<TicketCreateScreen> {
       return;
     }
     if (_descriptionError != null) return;
-    final blocker = uploadsBlocker(_uploads);
+    final blocker = _uploads.blocker;
     if (blocker != null) {
       showErrorSnack(context, blocker);
       return;

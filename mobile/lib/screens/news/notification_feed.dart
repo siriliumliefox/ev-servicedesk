@@ -13,18 +13,14 @@ import '../support/ticket_create_screen.dart';
 
 /// Центр уведомлений: все типы — прошивки, ТО, новости, акции. Открывается колокольчиком и нажатием на push.
 class NotificationCenterScreen extends StatelessWidget {
-  const NotificationCenterScreen({super.key, this.openId});
-
-  /// Уведомление из push — открыть сразу.
-  final int? openId;
+  const NotificationCenterScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Уведомления'), actions: const [DemoButton()]),
-      body: NotificationFeed(
+      body: const NotificationFeed(
         types: NotificationType.values,
-        openId: openId,
         emptyTitle: 'Уведомлений пока нет',
         emptyMessage: 'Здесь появятся уведомления о прошивках, ТО, новости и акции для вашего авто',
       ),
@@ -38,13 +34,11 @@ class NotificationFeed extends StatefulWidget {
     required this.types,
     required this.emptyTitle,
     required this.emptyMessage,
-    this.openId,
   });
 
   final List<NotificationType> types;
   final String emptyTitle;
   final String emptyMessage;
-  final int? openId;
 
   @override
   State<NotificationFeed> createState() => _NotificationFeedState();
@@ -52,7 +46,6 @@ class NotificationFeed extends StatefulWidget {
 
 class _NotificationFeedState extends State<NotificationFeed> {
   NotificationType? _filter;
-  bool _autoOpened = false;
 
   static IconData _icon(NotificationType t) => switch (t) {
         NotificationType.firmware => Icons.system_update_outlined,
@@ -63,10 +56,7 @@ class _NotificationFeedState extends State<NotificationFeed> {
 
   Future<void> _open(NotificationItem n, Future<void> Function() reload) async {
     final app = AppScope.read(context);
-    showModalBottomSheet<void>(
-      context: context,
-      builder: (sheet) => _NotificationSheet(item: n),
-    );
+    showNotificationSheet(context, n);
     if (n.isRead) return;
     try {
       await app.repository.markNotificationRead(n.id);
@@ -75,14 +65,6 @@ class _NotificationFeedState extends State<NotificationFeed> {
     } on Exception {
       // Отметка о прочтении повторится при следующем открытии.
     }
-  }
-
-  /// Уведомление из push — открыть после загрузки ленты (один раз).
-  void _maybeAutoOpen(List<NotificationItem> all, Future<void> Function() reload) {
-    if (_autoOpened || widget.openId == null) return;
-    _autoOpened = true;
-    final item = all.where((n) => n.id == widget.openId).firstOrNull;
-    if (item != null) WidgetsBinding.instance.addPostFrameCallback((_) => mounted ? _open(item, reload) : null);
   }
 
   @override
@@ -114,7 +96,6 @@ class _NotificationFeedState extends State<NotificationFeed> {
             load: () async =>
                 (await app.repository.notifications()).where((n) => widget.types.contains(n.type)).toList(),
             builder: (context, all, reload) {
-              _maybeAutoOpen(all, reload);
               final items = _filter == null ? all : all.where((n) => n.type == _filter).toList();
               if (items.isEmpty) {
                 return EmptyState(
@@ -145,6 +126,10 @@ class _NotificationFeedState extends State<NotificationFeed> {
     );
   }
 }
+
+/// Уведомление целиком — из ленты и при нажатии на push (ADR 0024 п. 4).
+void showNotificationSheet(BuildContext context, NotificationItem item) =>
+    showModalBottomSheet<void>(context: context, builder: (_) => _NotificationSheet(item: item));
 
 class _NotificationSheet extends StatelessWidget {
   const _NotificationSheet({required this.item});

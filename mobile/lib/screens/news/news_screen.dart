@@ -15,7 +15,10 @@ class NewsScreen extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(title: const Text('Новости'), actions: const [NotificationBell(), DemoButton()]),
       body: NotificationFeed(
-        types: [for (final t in NotificationType.values) if (t.isNews) t],
+        types: [
+          for (final t in NotificationType.values)
+            if (t.isNews) t
+        ],
         emptyTitle: 'Пока нет новостей',
         emptyMessage: 'Здесь появятся новости и акции для вашего авто',
       ),

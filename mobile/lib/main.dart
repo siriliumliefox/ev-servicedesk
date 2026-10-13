@@ -1,8 +1,7 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 
 import 'app/app_state.dart';
+import 'app/push_router.dart';
 import 'app/push_service.dart';
 import 'data/api/api_client.dart';
 import 'data/api/token_store.dart';
@@ -13,10 +12,7 @@ import 'data/repository.dart';
 import 'push/firebase_push_channel.dart';
 import 'push/push_channel.dart';
 import 'screens/home_shell.dart';
-import 'ui/bottom_nav.dart';
-import 'screens/news/notification_feed.dart';
 import 'screens/onboarding/phone_screen.dart';
-import 'screens/support/ticket_chat_screen.dart';
 import 'theme/app_theme.dart';
 
 // Каркас — Глава 4; тема и компоненты — Глава 6; кликабельный прототип на фикстурах — Глава 7 (ADR 0011).
@@ -80,10 +76,7 @@ class _EvServiceDeskAppState extends State<EvServiceDeskApp> {
   final _messenger = GlobalKey<ScaffoldMessengerState>();
   late bool _signedIn;
   late final AppLifecycleListener _lifecycle;
-  final _pushSubscriptions = <StreamSubscription<PushEvent>>[];
-
-  /// Нажатие на push до входа (запуск закрытого приложения, проверка сессии) — откроется после входа.
-  PushEvent? _pendingPush;
+  PushRouter? _pushRouter;
 
   @override
   void initState() {
@@ -96,17 +89,12 @@ class _EvServiceDeskAppState extends State<EvServiceDeskApp> {
       if (_state.signedIn) _state.refresh();
     });
     if (_state.signedIn) {
-      _state.refresh();
-      widget.push?.register();
+      _state.signIn();
     } else {
       _state.restoreSession();
     }
-    final push = widget.push;
-    if (push != null) {
-      _pushSubscriptions
-        ..add(push.received.listen(_onForegroundPush))
-        ..add(push.opened.listen(_openPush));
-      push.initialOpened().then((e) => e == null ? null : _openPush(e));
+    if (widget.push case final push?) {
+      _pushRouter = PushRouter(app: _state, push: push, navigator: _navigator, messenger: _messenger);
     }
   }
 
@@ -115,59 +103,13 @@ class _EvServiceDeskAppState extends State<EvServiceDeskApp> {
     if (_state.signedIn != _signedIn) {
       _signedIn = _state.signedIn;
       _navigator.currentState?.popUntil((r) => r.isFirst);
-      final pending = _pendingPush;
-      _pendingPush = null;
-      if (_signedIn && pending != null) WidgetsBinding.instance.addPostFrameCallback((_) => _openPush(pending));
-    }
-  }
-
-  /// Push при открытом приложении — баннер внутри приложения; по открытому чату — не показывается (его обновит
-  /// сокет). Счётчик непрочитанных обновляется сразу.
-  void _onForegroundPush(PushEvent e) {
-    if (!_state.signedIn) return;
-    if (e.notificationId != null) _state.refreshUnread();
-    if (e.ticketId != null && e.ticketId == _state.openChatTicketId) return;
-    _messenger.currentState
-      ?..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(
-        key: const Key('push-banner'),
-        content: Text([e.title, e.body].where((t) => t.isNotEmpty).join('\n')),
-        action: SnackBarAction(label: 'Открыть', onPressed: () => _openPush(e)),
-      ));
-  }
-
-  /// Нажатие на push: тикет — чат обращения, публикация или напоминание — центр уведомлений с этим уведомлением.
-  Future<void> _openPush(PushEvent e) async {
-    if (!_state.signedIn || _state.restoring) {
-      _pendingPush = e;
-      return;
-    }
-    final ticketId = e.ticketId;
-    final notificationId = e.notificationId;
-    final navigator = _navigator.currentState;
-    if (navigator == null) return;
-    if (ticketId != null) {
-      if (ticketId == _state.openChatTicketId) return;
-      try {
-        final ticket = await _state.repository.ticket(ticketId);
-        navigator.push(MaterialPageRoute<void>(builder: (_) => TicketChatScreen(ticket: ticket)));
-      } on Exception {
-        // Нет сети — открыть «Поддержку»: обращение в списке.
-        _state.selectSection(EvSection.support);
-      }
-    } else if (notificationId != null) {
-      await widget.push?.markOpened(notificationId);
-      unawaited(_state.refreshUnread());
-      navigator.push(MaterialPageRoute<void>(builder: (_) => NotificationCenterScreen(openId: notificationId)));
     }
   }
 
   @override
   void dispose() {
     _lifecycle.dispose();
-    for (final s in _pushSubscriptions) {
-      s.cancel();
-    }
+    _pushRouter?.dispose();
     _state.removeListener(_onState);
     _state.dispose();
     super.dispose();

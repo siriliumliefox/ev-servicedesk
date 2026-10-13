@@ -19,10 +19,6 @@ class PushService {
   /// Токен, зарегистрированный для этого входа (нужен для отметки открытия).
   String? get token => _token;
 
-  Stream<PushEvent> get received => channel.received;
-  Stream<PushEvent> get opened => channel.opened;
-  Future<PushEvent?> initialOpened() => channel.initialOpened();
-
   /// После входа: разрешение, токен, регистрация. Сбой push не мешает работе приложения.
   Future<void> register() async {
     try {

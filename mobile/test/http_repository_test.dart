@@ -75,7 +75,7 @@ void main() {
     expect(put.headers.containsKey('Authorization'), isFalse, reason: 'токен API в S3 не уходит');
     expect(put.bodyBytes, hasLength(1000));
     expect(progress.last, 1.0);
-    expect(attachment.url, 'uploads/5/x.mov');
+    expect(attachment.key, 'uploads/5/x.mov');
     expect(attachment.fileType, AttachmentType.video);
   });
 
@@ -105,7 +105,7 @@ void main() {
           'created_at': '2026-10-13T10:00:00Z',
         });
     routes['POST /v1/tickets/7/messages'] = (_) => _json(201, _message(30));
-    const photo = TicketAttachment(fileName: 'a.jpg', fileType: AttachmentType.photo, url: 'uploads/5/a.jpg');
+    const photo = UploadedAttachment(fileName: 'a.jpg', fileType: AttachmentType.photo, key: 'uploads/5/a.jpg');
     await repo.createTicket(const TicketDraft(
       vehicleId: 1,
       category: TicketCategory.navigation,

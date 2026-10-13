@@ -285,9 +285,6 @@ class OfflineTicketLive implements TicketLive {
   @override
   ValueListenable<LiveState> get state => _state;
 
-  /// Событие «с сервера» — для демонстрации и тестов.
-  void add(TicketLiveEvent e) => _events.add(e);
-
   @override
   void pause() {}
 

@@ -116,14 +116,24 @@ enum TicketStatus {
 /// TicketAttachmentInput.file_type.
 enum AttachmentType { photo, video }
 
-/// Вложение тикета или сообщения (ADR 0024 п. 9). url — в запросе ключ загруженного объекта (PresignResponse.file_url),
-/// в ответе — ссылка на скачивание на 15 минут; в прототипе нет.
+/// Вложение тикета или сообщения в ответе API (ADR 0024 п. 9): url — ссылка на скачивание на 15 минут; в прототипе нет.
 class TicketAttachment {
   const TicketAttachment({required this.fileName, required this.fileType, this.url});
 
   final String fileName;
   final AttachmentType fileType;
   final String? url;
+}
+
+/// Файл, загруженный в S3 и готовый к привязке к тикету или сообщению (TicketAttachmentInput).
+class UploadedAttachment {
+  const UploadedAttachment({required this.fileName, required this.fileType, required this.key});
+
+  final String fileName;
+  final AttachmentType fileType;
+
+  /// Ключ объекта (PresignResponse.file_url).
+  final String key;
 }
 
 /// Файл, выбранный на устройстве, до загрузки.
@@ -182,7 +192,7 @@ class TicketDraft {
   final String description;
   final int? sourceArticleId;
   final int? sourceNodeId;
-  final List<TicketAttachment> attachments;
+  final List<UploadedAttachment> attachments;
 }
 
 /// TicketMessage.

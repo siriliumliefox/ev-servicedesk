@@ -10,10 +10,9 @@ import 'repository.dart';
 import 'ticket_live.dart';
 
 class HttpClientRepository implements ClientRepository {
-  HttpClientRepository(this.api, {this.connectLive = connectWebSocket});
+  HttpClientRepository(this.api);
 
   final ApiClient api;
-  final LiveConnector connectLive;
 
   /// Списки без постраничной навигации на экране — первая страница максимального размера (контракт: page_size ≤ 100).
   static const _listPageSize = 100;
@@ -163,14 +162,14 @@ class HttpClientRepository implements ClientRepository {
   }
 
   @override
-  Future<TicketMessage> sendMessage(int ticketId, String body, {List<TicketAttachment> attachments = const []}) async =>
+  Future<TicketMessage> sendMessage(int ticketId, String body, {List<UploadedAttachment> attachments = const []}) async =>
       parseTicketMessage(await api.post('/tickets/$ticketId/messages', body: {
         'body': body,
         if (attachments.isNotEmpty) 'attachments': _attachmentInputs(attachments),
       }) as Json);
 
   @override
-  Future<TicketAttachment> uploadAttachment(LocalAttachment file, {void Function(double progress)? onProgress}) async {
+  Future<UploadedAttachment> uploadAttachment(LocalAttachment file, {void Function(double progress)? onProgress}) async {
     final presign = await api.post('/uploads/presign', body: {
       'file_name': file.fileName,
       'file_type': file.fileType.name,
@@ -182,21 +181,21 @@ class HttpClientRepository implements ClientRepository {
       length: file.sizeBytes,
       onProgress: onProgress,
     );
-    return TicketAttachment(fileName: file.fileName, fileType: file.fileType, url: presign['file_url']! as String);
+    return UploadedAttachment(fileName: file.fileName, fileType: file.fileType, key: presign['file_url']! as String);
   }
 
   @override
   TicketLive watchTicket(int ticketId, {required int afterId}) => WsTicketLive(
         url: api.webSocketUrl('/tickets/$ticketId/ws'),
-        connect: connectLive,
+        connect: connectWebSocket,
         accessToken: api.accessToken,
         messagesAfter: (after) => messages(ticketId, afterId: after),
         ticket: () => ticket(ticketId),
         afterId: afterId,
       );
 
-  static List<Json> _attachmentInputs(List<TicketAttachment> attachments) => [
-        for (final a in attachments) {'file_url': a.url, 'file_type': a.fileType.name},
+  static List<Json> _attachmentInputs(List<UploadedAttachment> attachments) => [
+        for (final a in attachments) {'file_url': a.key, 'file_type': a.fileType.name},
       ];
 
   // ---------- Notifications ----------

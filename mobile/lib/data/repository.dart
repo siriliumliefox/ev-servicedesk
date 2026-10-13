@@ -109,10 +109,10 @@ abstract class ClientRepository {
   Future<List<TicketMessage>> messages(int ticketId, {int? afterId});
 
   /// POST /tickets/{id}/messages; вложения — загруженные uploadAttachment.
-  Future<TicketMessage> sendMessage(int ticketId, String body, {List<TicketAttachment> attachments});
+  Future<TicketMessage> sendMessage(int ticketId, String body, {List<UploadedAttachment> attachments});
 
   /// POST /uploads/presign и PUT файла в S3: вложение готово к привязке к тикету или сообщению.
-  Future<TicketAttachment> uploadAttachment(LocalAttachment file, {void Function(double progress)? onProgress});
+  Future<UploadedAttachment> uploadAttachment(LocalAttachment file, {void Function(double progress)? onProgress});
 
   /// Чат в реальном времени (WebSocket); afterId — последнее сообщение, уже загруженное экраном.
   TicketLive watchTicket(int ticketId, {required int afterId});

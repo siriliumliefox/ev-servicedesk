@@ -20,6 +20,7 @@ import 'support_screen.dart';
 class TicketChatScreen extends StatefulWidget {
   const TicketChatScreen({super.key, required this.ticket, this.notice});
 
+  /// Тикет из списка или из push: шапка видна, пока грузится карточка.
   final Ticket ticket;
 
   /// Пояснение над перепиской сразу после отправки: что будет дальше (заявка на запись — глава 9).
@@ -29,26 +30,161 @@ class TicketChatScreen extends StatefulWidget {
   State<TicketChatScreen> createState() => _TicketChatScreenState();
 }
 
+/// Один владелец всего чата: тикет (шапка и поле ввода следуют за его статусом), обращение, переписка, сокет,
+/// вложения.
 class _TicketChatScreenState extends State<TicketChatScreen> {
-  /// Статус меняется по ticket.updated — шапка и поле ввода следуют за ним.
-  late Ticket _ticket = widget.ticket;
   late final AppState _app = AppScope.read(context);
+  late Ticket _ticket = widget.ticket;
+
+  /// Обращение — первым сообщением клиента (в прототипе у старых обращений описания нет).
+  TicketMessage? _opening;
+
+  /// Сообщения по id: кадр сокета и догрузка могут прийти дважды.
+  final Map<int, TicketMessage> _messages = {};
+  bool _loaded = false;
+  Object? _loadError;
+
+  TicketLive? _live;
+  StreamSubscription<TicketLiveEvent>? _events;
+  late final AppLifecycleListener _lifecycle;
+
+  final _controller = TextEditingController();
+  final _scroll = ScrollController();
+  late final AttachmentUploads _uploads = AttachmentUploads(_app.repository)..addListener(_changed);
+  bool _sending = false;
+
+  /// «Переподключаемся…» — только если связи нет дольше мгновения: короткое подключение при открытии не мигает.
+  bool _showReconnecting = false;
+  Timer? _reconnectingTimer;
 
   @override
   void initState() {
     super.initState();
-    _app.openChatTicketId = widget.ticket.id;
+    _app.chatOpened(widget.ticket.id);
+    _lifecycle = AppLifecycleListener(onPause: () => _live?.pause(), onResume: () => _live?.resume());
+    _load();
   }
 
   @override
   void dispose() {
-    if (_app.openChatTicketId == widget.ticket.id) _app.openChatTicketId = null;
+    _app.chatClosed(widget.ticket.id);
+    _lifecycle.dispose();
+    _reconnectingTimer?.cancel();
+    _live?.state.removeListener(_onLiveState);
+    unawaited(_events?.cancel());
+    unawaited(_live?.close());
+    _uploads.dispose();
+    _controller.dispose();
+    _scroll.dispose();
     super.dispose();
+  }
+
+  /// Карточка тикета (описание, вложения, свежий статус) и переписка; затем — сокет с догрузкой после них.
+  Future<void> _load() async {
+    final repository = _app.repository;
+    try {
+      final detail = await repository.ticket(widget.ticket.id);
+      final messages = await repository.messages(widget.ticket.id);
+      if (!mounted) return;
+      setState(() {
+        _ticket = detail;
+        _opening = _openingOf(detail);
+        _messages.addEntries(messages.map((m) => MapEntry(m.id, m)));
+        _loaded = true;
+      });
+      _watch(afterId: messages.fold(0, (id, m) => m.id > id ? m.id : id));
+    } on Exception catch (e) {
+      if (mounted) setState(() => _loadError = e);
+    }
+  }
+
+  void _retry() {
+    setState(() => _loadError = null);
+    _load();
+  }
+
+  static TicketMessage? _openingOf(Ticket detail) {
+    final description = detail.description;
+    if (description == null) return null;
+    return TicketMessage(
+      id: 0,
+      fromClient: true,
+      authorName: 'Вы',
+      body: description,
+      createdAt: detail.createdAt,
+      attachments: detail.attachments,
+    );
+  }
+
+  void _watch({required int afterId}) {
+    final live = _live = _app.repository.watchTicket(widget.ticket.id, afterId: afterId);
+    _events = live.events.listen(_onEvent);
+    live.state.addListener(_onLiveState);
+    _onLiveState();
+  }
+
+  void _changed() => setState(() {});
+
+  void _onEvent(TicketLiveEvent e) {
+    if (!mounted) return;
+    switch (e) {
+      case LiveMessage(:final message):
+        final isNew = !_messages.containsKey(message.id);
+        setState(() => _messages[message.id] = message);
+        if (isNew) _scrollToEnd();
+      case LiveTicket(:final ticket):
+        setState(() => _ticket = ticket);
+    }
+  }
+
+  void _onLiveState() {
+    final live = _live?.state.value == LiveState.live;
+    _reconnectingTimer?.cancel();
+    if (live) {
+      if (_showReconnecting) setState(() => _showReconnecting = false);
+    } else {
+      _reconnectingTimer = Timer(const Duration(milliseconds: 1500), () {
+        if (mounted) setState(() => _showReconnecting = true);
+      });
+    }
+  }
+
+  void _scrollToEnd() => WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_scroll.hasClients) {
+          _scroll.animateTo(_scroll.position.maxScrollExtent, duration: EvDuration.normal, curve: Curves.easeOut);
+        }
+      });
+
+  Future<void> _send() async {
+    final body = _controller.text.trim();
+    if (body.isEmpty && _uploads.isEmpty) return;
+    final blocker = _uploads.blocker;
+    if (blocker != null) {
+      showErrorSnack(context, blocker);
+      return;
+    }
+    setState(() => _sending = true);
+    try {
+      final m = await _app.repository.sendMessage(
+        widget.ticket.id,
+        body.isEmpty ? 'Вложение' : body,
+        attachments: _uploads.uploaded,
+      );
+      setState(() {
+        _messages[m.id] = m;
+        _controller.clear();
+        _uploads.clear();
+      });
+      _scrollToEnd();
+    } on Exception catch (e) {
+      if (mounted) showErrorSnack(context, e);
+    } finally {
+      if (mounted) setState(() => _sending = false);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final app = AppScope.of(context);
     return Scaffold(
       appBar: AppBar(
         // Статус — под номером, а не в действиях справа: номер обращения виден целиком на узком экране;
@@ -72,182 +208,24 @@ class _TicketChatScreenState extends State<TicketChatScreen> {
           ],
         ),
       ),
-      body: AsyncView<(Ticket, List<TicketMessage>)>(
-        reloadKey: app.revision,
-        load: () async => (await app.repository.ticket(_ticket.id), await app.repository.messages(_ticket.id)),
-        builder: (context, data, _) => _Chat(
-          ticket: _ticket,
-          opening: data.$1,
-          initial: data.$2,
-          notice: widget.notice,
-          onTicket: (t) => setState(() => _ticket = t),
-        ),
-      ),
-    );
-  }
-}
-
-class _Chat extends StatefulWidget {
-  const _Chat({
-    required this.ticket,
-    required this.opening,
-    required this.initial,
-    required this.onTicket,
-    this.notice,
-  });
-
-  final Ticket ticket;
-
-  /// Карточка тикета (TicketDetail): описание и вложения обращения.
-  final Ticket opening;
-  final List<TicketMessage> initial;
-  final ValueChanged<Ticket> onTicket;
-  final String? notice;
-
-  @override
-  State<_Chat> createState() => _ChatState();
-}
-
-class _ChatState extends State<_Chat> {
-  /// Сообщения по id: кадр сокета и догрузка могут прийти дважды.
-  late final Map<int, TicketMessage> _messages = {for (final m in widget.initial) m.id: m};
-  final _controller = TextEditingController();
-  final _scroll = ScrollController();
-  late final AttachmentUploads _uploads = AttachmentUploads(AppScope.read(context).repository)..addListener(_changed);
-  late final TicketLive _live;
-  late final StreamSubscription<TicketLiveEvent> _events;
-  late final AppLifecycleListener _lifecycle;
-  bool _sending = false;
-
-  /// «Переподключаемся…» — только если связи нет дольше мгновения: короткое подключение при открытии не мигает.
-  bool _showReconnecting = false;
-  Timer? _reconnectingTimer;
-
-  @override
-  void initState() {
-    super.initState();
-    final lastId = widget.initial.fold(0, (id, m) => m.id > id ? m.id : id);
-    _live = AppScope.read(context).repository.watchTicket(widget.ticket.id, afterId: lastId);
-    _events = _live.events.listen(_onEvent);
-    _live.state.addListener(_onLiveState);
-    _onLiveState();
-    _lifecycle = AppLifecycleListener(onPause: _live.pause, onResume: _live.resume);
-    // Статус из карточки может быть новее, чем в списке, откуда открыт чат.
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && widget.opening.status != widget.ticket.status) widget.onTicket(widget.opening);
-    });
-  }
-
-  /// Обращение — первым сообщением клиента (в прототипе у старых обращений описания нет).
-  TicketMessage? get _openingMessage {
-    final description = widget.opening.description;
-    if (description == null) return null;
-    return TicketMessage(
-      id: 0,
-      fromClient: true,
-      authorName: 'Вы',
-      body: description,
-      createdAt: widget.opening.createdAt,
-      attachments: widget.opening.attachments,
+      body: switch ((_loadError, _loaded)) {
+        (final Object error, _) => ErrorState(error: error, onRetry: _retry),
+        (_, false) => const Center(child: CircularProgressIndicator()),
+        _ => _chat(context),
+      },
     );
   }
 
-  @override
-  void didUpdateWidget(covariant _Chat old) {
-    super.didUpdateWidget(old);
-    // Перечитанная переписка (возврат в приложение) дополняет то, что пришло по сокету.
-    if (old.initial != widget.initial) {
-      for (final m in widget.initial) {
-        _messages[m.id] = m;
-      }
-    }
-  }
-
-  @override
-  void dispose() {
-    _lifecycle.dispose();
-    _reconnectingTimer?.cancel();
-    _live.state.removeListener(_onLiveState);
-    unawaited(_events.cancel());
-    unawaited(_live.close());
-    _uploads.dispose();
-    _controller.dispose();
-    _scroll.dispose();
-    super.dispose();
-  }
-
-  void _changed() => setState(() {});
-
-  void _onEvent(TicketLiveEvent e) {
-    if (!mounted) return;
-    switch (e) {
-      case LiveMessage(:final message):
-        final isNew = !_messages.containsKey(message.id);
-        setState(() => _messages[message.id] = message);
-        if (isNew) _scrollToEnd();
-      case LiveTicket(:final ticket):
-        widget.onTicket(ticket);
-    }
-  }
-
-  void _onLiveState() {
-    final live = _live.state.value == LiveState.live;
-    _reconnectingTimer?.cancel();
-    if (live) {
-      if (_showReconnecting) setState(() => _showReconnecting = false);
-    } else {
-      _reconnectingTimer = Timer(const Duration(milliseconds: 1500), () {
-        if (mounted) setState(() => _showReconnecting = true);
-      });
-    }
-  }
-
-  void _scrollToEnd() => WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (_scroll.hasClients) {
-          _scroll.animateTo(_scroll.position.maxScrollExtent, duration: EvDuration.normal, curve: Curves.easeOut);
-        }
-      });
-
-  Future<void> _send() async {
-    final body = _controller.text.trim();
-    if (body.isEmpty && _uploads.isEmpty) return;
-    final blocker = uploadsBlocker(_uploads);
-    if (blocker != null) {
-      showErrorSnack(context, blocker);
-      return;
-    }
-    setState(() => _sending = true);
-    try {
-      final m = await AppScope.read(context).repository.sendMessage(
-            widget.ticket.id,
-            body.isEmpty ? 'Вложение' : body,
-            attachments: _uploads.uploaded,
-          );
-      setState(() {
-        _messages[m.id] = m;
-        _controller.clear();
-        _uploads.clear();
-      });
-      _scrollToEnd();
-    } on Exception catch (e) {
-      if (mounted) showErrorSnack(context, e);
-    } finally {
-      if (mounted) setState(() => _sending = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
+  Widget _chat(BuildContext context) {
     final c = context.evColors;
-    final resolved = widget.ticket.status == TicketStatus.resolved;
-    final opening = _openingMessage;
+    final resolved = _ticket.status == TicketStatus.resolved;
     final messages = [
-      if (opening != null) opening,
+      if (_opening case final opening?) opening,
       ...(_messages.values.toList()..sort((a, b) => a.id.compareTo(b.id))),
     ];
     return Column(
       children: [
-        if (_showReconnecting && _live.state.value != LiveState.live)
+        if (_showReconnecting && _live?.state.value != LiveState.live)
           Container(
             key: const Key('chat-reconnecting'),
             width: double.infinity,
@@ -256,7 +234,7 @@ class _ChatState extends State<_Chat> {
             child: Semantics(
               liveRegion: true,
               child: Text(
-                _live.state.value == LiveState.stopped
+                _live?.state.value == LiveState.stopped
                     ? 'Новые сообщения не обновляются — откройте чат заново'
                     : 'Нет связи с сервером — переподключаемся…',
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(color: c.fgMuted),

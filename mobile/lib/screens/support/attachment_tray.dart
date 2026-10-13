@@ -19,7 +19,7 @@ class PendingAttachment {
   final LocalAttachment file;
   UploadStatus status = UploadStatus.uploading;
   double progress = 0;
-  TicketAttachment? uploaded;
+  UploadedAttachment? uploaded;
   Object? error;
 }
 
@@ -34,11 +34,18 @@ class AttachmentUploads extends ChangeNotifier {
 
   List<PendingAttachment> get items => List.unmodifiable(_items);
   bool get isEmpty => _items.isEmpty;
-  bool get busy => _items.any((a) => a.status == UploadStatus.uploading);
-  bool get hasFailed => _items.any((a) => a.status == UploadStatus.failed);
+  /// Почему отправлять пока нельзя (для сообщения пользователю); null — все файлы загружены.
+  String? get blocker {
+    if (_items.any((a) => a.status == UploadStatus.uploading)) return 'Дождитесь загрузки файлов';
+    if (_items.any((a) => a.status == UploadStatus.failed)) return 'Повторите загрузку или уберите файл';
+    return null;
+  }
 
-  /// Загруженные — для запроса; пока что-то грузится или не загрузилось, отправлять нельзя.
-  List<TicketAttachment> get uploaded => [for (final a in _items) a.uploaded!];
+  /// Загруженные — для запроса; только когда [blocker] == null.
+  List<UploadedAttachment> get uploaded {
+    if (blocker != null) throw StateError('Вложения ещё не загружены: $blocker');
+    return [for (final a in _items) a.uploaded!];
+  }
 
   /// Причина отказа (формат, размер, больше 10) — до загрузки; null — файл принят в очередь.
   String? add(LocalAttachment file) {
@@ -213,11 +220,4 @@ class AttachmentTray extends StatelessWidget {
     final mb = a.file.sizeBytes / (1024 * 1024);
     return '$kind ${i + 1} · ${mb < 0.1 ? '<0,1' : mb.toStringAsFixed(1).replaceAll('.', ',')} МБ';
   }
-}
-
-/// Текст на кнопке/ошибка, пока вложения не готовы к отправке; null — готовы.
-String? uploadsBlocker(AttachmentUploads uploads) {
-  if (uploads.busy) return 'Дождитесь загрузки файлов';
-  if (uploads.hasFailed) return 'Повторите загрузку или уберите файл';
-  return null;
 }
