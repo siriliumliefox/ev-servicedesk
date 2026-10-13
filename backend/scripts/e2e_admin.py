@@ -96,6 +96,9 @@ def client_car(api: Api, admin: Headers, phone: str, code: str) -> dict[str, Any
     status = [s["status"] for s in statuses if s["aggregate_type_code"] == AGGREGATE]
     check(status == ["green"], f"статус салонного фильтра {status}, ожидался green")
     return {
+        # Номер и код тестового номера стека — вход клиента в мобильном приложении (admin_run.sh).
+        "phone": phone,
+        "sms_code": code,
         "access_token": client.headers["Authorization"].removeprefix("Bearer "),
         "vehicle_id": car["id"],
         "model_id": car["vehicle_model_id"],

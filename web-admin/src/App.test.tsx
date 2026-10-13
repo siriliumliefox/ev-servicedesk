@@ -286,6 +286,9 @@ describe('конструктор регламентов ТО', () => {
     await user.type(screen.getByLabelText('Код'), 'brake_fluid')
     await click(screen.getByRole('button', { name: 'Добавить агрегат' }))
     expect(await screen.findByRole('rowheader', { name: 'Тормозная жидкость' })).toBeInTheDocument()
+    // Пример — в подсказке, поле пустое (как A7/U-18).
+    expect(screen.getByLabelText('Название')).not.toHaveAttribute('placeholder')
+    expect(screen.getByLabelText('Код')).toHaveAccessibleDescription('Латиница, цифры и «_», например: brake_fluid')
   })
 })
 

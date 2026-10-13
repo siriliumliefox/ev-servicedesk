@@ -41,6 +41,7 @@ BODIES = {
     "updateDecisionTreeNode": {"question_text": "x", "is_root": True, "is_escalation": False},
     "createStaffUser": {"phone": "+375290000001", "role": "engineer", "password": "x" * 12},
     "updateUser": {"is_active": False},
+    "resetUserPassword": {"password": "x" * 12},
 }
 
 
@@ -130,6 +131,8 @@ def test_protected_routes_exist(app):
         "createStaffUser",
         "getUser",
         "updateUser",
+        # Сброс пароля сотрудника (Глава 22)
+        "resetUserPassword",
     }
 
 

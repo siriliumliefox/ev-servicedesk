@@ -468,8 +468,9 @@ function NewAggregateType({ onCreated }: { onCreated: () => void }) {
           Новый агрегат
         </h2>
         <p className="text-body-sm text-fg-muted">Набор агрегатов на схеме расширяется без разработчика (ТЗ, блок 1).</p>
-        <TextField label="Название" placeholder="Тормозная жидкость" value={name} onChange={(e) => setName(e.target.value)} />
-        <TextField label="Код" placeholder="brake_fluid" hint="Латиница, цифры и «_»" value={code} onChange={(e) => setCode(e.target.value)} />
+        {/* Как A7/U-18: пример — в подсказке, а не в placeholder (его принимали за введённое значение). */}
+        <TextField label="Название" hint="Например: Тормозная жидкость" value={name} onChange={(e) => setName(e.target.value)} />
+        <TextField label="Код" hint="Латиница, цифры и «_», например: brake_fluid" value={code} onChange={(e) => setCode(e.target.value)} />
         <InlineError error={error} />
         <Button type="submit" size="sm" variant="secondary">
           Добавить агрегат
