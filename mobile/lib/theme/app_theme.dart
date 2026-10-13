@@ -138,6 +138,13 @@ ThemeData evTheme(Brightness brightness) {
         ),
       ),
     ),
+    // Сообщения и баннер push внутри приложения (глава 20): тёмная подложка в обеих темах, действие — жёлтым.
+    // Без темы Material 3 красит действие в inversePrimary (не задан) — тёмное на тёмном, «Открыть» не видно.
+    snackBarTheme: SnackBarThemeData(
+      backgroundColor: brightness == Brightness.dark ? c.surfaceSubtle : c.fg,
+      contentTextStyle: EvTypeMobile.bodySm.copyWith(color: brightness == Brightness.dark ? c.fg : c.canvas),
+      actionTextColor: c.primary,
+    ),
     bottomSheetTheme: BottomSheetThemeData(
       backgroundColor: c.surface,
       showDragHandle: true,

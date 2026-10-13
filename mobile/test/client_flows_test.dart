@@ -1,6 +1,7 @@
 // Глава 20 (ADR 0024): вложения в форме и чате, чат в реальном времени, push в приложении, центр уведомлений,
 // текст статьи в Markdown. Экраны — на фикстурах прототипа; сервер подменён (сокет, push-канал, выбор файла).
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -99,6 +100,12 @@ class _Channel implements PushChannel {
   Stream<PushEvent> get opened => opened$.stream;
   @override
   Future<PushEvent?> initialOpened() async => initial;
+}
+
+/// Контраст WCAG двух цветов.
+double _contrast(Color a, Color b) {
+  final la = a.computeLuminance(), lb = b.computeLuminance();
+  return (math.max(la, lb) + 0.05) / (math.min(la, lb) + 0.05);
 }
 
 PushEvent _push(Map<String, String> data, {String title = '', String body = ''}) =>
@@ -301,6 +308,13 @@ void main() {
           .add(_push({'notification_id': '1', 'type': 'firmware'}, title: 'Новая прошивка', body: 'RU 2.5.0'));
       await tester.pumpAndSettle();
       expect(find.byKey(const Key('push-banner')), findsOneWidget);
+      // «Открыть» читается на подложке баннера (на симуляторе было тёмное на тёмном).
+      final action = tester.widget<Text>(find.descendant(of: find.byType(SnackBarAction), matching: find.byType(Text)));
+      final banner = tester.widget<Material>(
+          find.descendant(of: find.byKey(const Key('push-banner')), matching: find.byType(Material)).first);
+      final actionColor = DefaultTextStyle.of(tester.element(find.text('Открыть'))).style.color ?? action.style?.color;
+      expect(actionColor, isNotNull);
+      expect(_contrast(actionColor!, banner.color!), greaterThanOrEqualTo(4.5));
       await tester.tap(find.text('Открыть'));
       await tester.pumpAndSettle();
       expect(find.text('Уведомления'), findsOneWidget);
