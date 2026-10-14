@@ -4,7 +4,9 @@
 Таблица — docs/specs/engineer_web_flow.json. На работающем стеке (scripts/integration_stack.sh —
 окружение команды после «--»):
 
-  seed --out FILE  — два инженера (пароли случайные), клиент E2E_WEB_PHONE с авто, опубликованная
+  seed --out FILE  — два инженера (пароли случайные), клиент E2E_WEB_PHONE с авто (прошивка релиза
+                     E2E и базовая замена масла редуктора по регламенту — контекст авто в карточке
+                     тикета, глава 23, ADR 0027 п. 15: E2E-07), опубликованная
                      статья для быстрого ответа, тикеты клиента разных категорий для доски
                      (--board-tickets, по умолчанию все из таблицы) и наборы тикетов Playwright
                      (--e2e-sets: по набору из 3 тикетов на браузер). В FILE (0600) — входы
@@ -24,10 +26,12 @@ import json
 import os
 import secrets
 import sys
+from datetime import date
 from pathlib import Path
 from typing import Any
 
 from e2e_backend import (
+    AGGREGATE,
     ZEEKR_VIN_PREFIX,
     Api,
     Failed,
@@ -39,6 +43,7 @@ from e2e_backend import (
     register_client,
     staff_login,
     write_private,
+    zeekr_regulation,
 )
 
 TABLE = Path(__file__).resolve().parents[2] / "docs" / "specs" / "engineer_web_flow.json"
@@ -59,6 +64,35 @@ def publish_quick_reply(api: Api, admin: Headers, article: dict[str, str]) -> No
     created = api.json("POST", "/knowledge-articles", 201, headers=admin, json=body)
     body = {"is_published": True}
     api.json("PATCH", f"/knowledge-articles/{created['id']}", headers=admin, json=body)
+
+
+def vehicle_context(api: Api, admin: Headers, car: dict[str, Any]) -> dict[str, Any]:
+    """Прошивка авто — релиз E2E модели, базовая замена масла редуктора: у тикета будут прошивка
+    на момент создания (N-09) и статус агрегата по регламенту (E-04)."""
+    zeekr_regulation(api, admin)
+    version = "E2E-" + digits(6)
+    release = api.json(
+        "POST",
+        "/firmware-releases",
+        201,
+        headers=admin,
+        json={
+            "vehicle_model_id": car["vehicle_model_id"],
+            "version": version,
+            "released_at": str(date.today()),
+        },
+    )
+    path = f"/vehicles/{car['id']}/firmware"
+    api.json("PATCH", path, headers=admin, json={"firmware_release_id": release["id"]})
+    replace = f"/vehicles/{car['id']}/aggregate-statuses/{AGGREGATE}/replace"
+    body = {"replaced_at": str(date.today()), "mileage_at_replacement": 0}
+    status = api.json("POST", replace, headers=admin, json=body)
+    model = car["vehicle_model"]
+    return {
+        "model_label": f"{model['brand']} {model['model']}",
+        "firmware_version": version,
+        "aggregate_name": status["aggregate_type_name"],
+    }
 
 
 def e2e_set(api: Api, client: Headers, vehicle_id: int, texts: dict[str, str]) -> dict[str, int]:
@@ -94,6 +128,7 @@ def seed(
     client = register_client(api, phone, code)
     vin = ZEEKR_VIN_PREFIX + digits(10)
     car = api.json("POST", "/vehicles", 201, headers=client.headers, json={"vin": vin})
+    context = vehicle_context(api, admin, car)
     tickets = []
     for item in table["tickets"][:board_tickets]:
         body = {"vehicle_id": car["id"], **item}
@@ -110,6 +145,7 @@ def seed(
             "access_token": client.headers["Authorization"].removeprefix("Bearer "),
             "refresh_token": client.refresh_token,
             "vehicle_id": car["id"],
+            **context,
             # Код тестового номера стека — вход клиента в мобильном приложении (engineer_run.sh).
             "sms_code": code,
         },

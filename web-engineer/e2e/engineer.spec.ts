@@ -1,8 +1,19 @@
 // Проверки главы 21 (MASTER_CHECKLIST, ADR 0025 п. 14) на стеке из образа-кандидата:
 // 1) E2E: тикет в работу (перетаскиванием) → ответ из базы знаний → закрытие → у клиента в реальном времени;
-// 2) конкурентный доступ: два инженера берут один тикет — один получает его, второй — уведомление о конфликте.
+// 2) конкурентный доступ: два инженера берут один тикет — один получает его, второй — уведомление о конфликте;
+// 3) карточка авто из тикета (глава 23, ADR 0027 п. 15: E2E-07, требования E-04, N-09).
 import { expect, test } from '@playwright/test'
-import { ClientSide, card, column, dragWithKeyboard, dragWithMouse, loadSeed, signIn, ticketsFor } from './support.ts'
+import {
+  ClientSide,
+  card,
+  column,
+  dragWithKeyboard,
+  dragWithMouse,
+  loadSeed,
+  signIn,
+  staffApi,
+  ticketsFor,
+} from './support.ts'
 
 const seed = loadSeed()
 
@@ -110,4 +121,26 @@ test('конкурентный доступ: два инженера берут 
 
   const ticket = await client.api<{ assigned_engineer_id: number }>('GET', `/tickets/${second.id}`)
   expect(ticket.assigned_engineer_id).toBeGreaterThan(0)
+})
+
+test('карточка авто из тикета: модель, прошивка на момент тикета, статусы агрегатов и история ТО', async ({ page }) => {
+  const id = ticketsFor(seed).flow
+  const engineer = seed.engineers[0]
+  // После сценария E2E тикет решён этим инженером; при отдельном запуске он ещё в очереди — история ТО авто
+  // открыта только инженеру тикета (ADR 0014), поэтому тикет берётся по API.
+  const ticket = await staffApi<{ assigned_engineer_id: number | null }>(engineer, 'GET', `/tickets/${id}`)
+  if (ticket.assigned_engineer_id === null) await staffApi(engineer, 'POST', `/tickets/${id}/claim`)
+
+  await signIn(page, engineer)
+  await card(page, id).click()
+  const panel = page.getByRole('complementary', { name: `Карточка тикета #${id}` })
+  await expect(panel.getByRole('heading', { name: new RegExp(`^${seed.client.model_label}`) })).toBeVisible()
+  // Прошивка на момент тикета — снимок при создании (N-09), не только текущая.
+  await expect(panel.getByText('На момент тикета').locator('xpath=following-sibling::dd[1]')).toHaveText(
+    seed.client.firmware_version,
+  )
+  const aggregates = panel.getByRole('region', { name: 'Статусы агрегатов' })
+  await expect(aggregates.getByRole('listitem').filter({ hasText: seed.client.aggregate_name })).toContainText('Заменено')
+  const history = panel.getByRole('region', { name: 'История ТО' })
+  await expect(history.getByRole('listitem').filter({ hasText: seed.client.aggregate_name }).first()).toBeVisible()
 })

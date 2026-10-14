@@ -1,0 +1,317 @@
+# Матрица пользовательских сценариев EV-ServiceDesk (глава 23, ADR 0027 п. 1, 2, 15, 16).
+#
+# Сценарий: id E2E-NN, название, роли (client / engineer / admin), приоритет P0 / P1 / P2, требования бэклога
+# (docs/requirements/BACKLOG.md), тесты. Тест — уровень и ссылка «файл::имя»: имя — подстрока объявления теста в
+# файле (test('…'), testWidgets('…'), def test_…, шаг step("…") сценария backend).
+# Уровни E2E: backend (сценарий на стеке из образа), mobile-api (Dart-клиент против стека), mobile-ui (Flutter
+# integration_test), web (Playwright одного приложения), system (Playwright, межролевой: system-e2e/).
+# Прочие уровни: unit, widget, tokens — для Must, которые сквозным тестом не проверить (ADR 0027 п. 16).
+# P0 — Must, обязательно хотя бы один тест уровня E2E (ADR 0027 п. 2); у P1/P2 вместо тестов может быть
+# `check` — как проверяется (exploratory — исследовательское тестирование, manual — ручная проверка,
+# chapter-NN — в другой главе, not-implemented — не входит в MVP).
+# Страж: scripts/check_e2e_matrix.py (job e2e-matrix в ci.yml, на каждом PR).
+
+scenarios:
+  # ---------------------------------------------------------------- P0 — критичные сценарии
+  - id: E2E-01
+    title: Вход клиента по SMS с согласием на ПД, сессия без повторного кода, выход, лимит попыток
+    roles: [client]
+    priority: P0
+    requirements: [C-01, N-06, N-07]
+    tests:
+      - { level: mobile-ui, ref: "mobile/integration_test/app_flow_test.dart::регистрация → авто по VIN → карточка → перезапуск без SMS → выход" }
+      - { level: mobile-api, ref: "mobile/test_api_e2e/api_e2e_test.dart::регистрация → авто → карточка → сессия" }
+      - { level: backend, ref: "backend/scripts/e2e_backend.py::регистрация клиента по SMS-коду, согласие ПД, push-токен" }
+
+  - id: E2E-02
+    title: Авто по VIN с автозаполнением модели, карточка авто, пробег и история работ
+    roles: [client]
+    priority: P0
+    requirements: [C-02, C-03]
+    tests:
+      - { level: mobile-ui, ref: "mobile/integration_test/app_flow_test.dart::регистрация → авто по VIN → карточка → перезапуск без SMS → выход" }
+      - { level: mobile-api, ref: "mobile/test_api_e2e/api_e2e_test.dart::регистрация → авто → карточка → сессия" }
+      - { level: backend, ref: "backend/scripts/e2e_backend.py::клиент видит решение, переписку и запись ТО" }
+
+  - id: E2E-03
+    title: Схема «светофор» и карточка агрегата совпадают со статусами backend
+    roles: [client]
+    priority: P0
+    requirements: [C-04, C-05]
+    tests:
+      - { level: mobile-ui, ref: "mobile/integration_test/scheme_test.dart::5 тестовых авто: зоны и список схемы совпадают со статусами backend" }
+      - { level: mobile-api, ref: "mobile/test_api_e2e/api_e2e_test.dart::схема агрегатов: 5 тестовых авто — статусы клиента совпадают с таблицей" }
+
+  - id: E2E-04
+    title: Обучение → дерево решений → эскалация → тикет с фото → чат с инженером
+    roles: [client, engineer]
+    priority: P0
+    requirements: [C-06, C-07, C-08, C-09, X-03]
+    tests:
+      - { level: mobile-ui, ref: "mobile/integration_test/support_flow_test.dart::обучение → дерево решений → тикет с фото → ответ инженера в чате → новость" }
+      - { level: mobile-api, ref: "mobile/test_api_e2e/api_e2e_test.dart::глава 20: дерево решений → эскалация → тикет с фото → ответ инженера в чате по WebSocket" }
+
+  - id: E2E-05
+    title: Канбан → в работу → быстрый ответ из базы знаний → «Решено», клиент получает всё вживую
+    roles: [engineer, client]
+    priority: P0
+    requirements: [E-01, E-02, E-03]
+    tests:
+      - { level: web, ref: "web-engineer/e2e/engineer.spec.ts::E2E: в работу → быстрый ответ → «Решено»; клиент получает всё вживую" }
+      - { level: backend, ref: "backend/scripts/e2e_backend.py::тикет → очередь → взят → ответ → замена по тикету → решён" }
+
+  - id: E2E-06
+    title: Два инженера берут один тикет — один получает, второй видит конфликт
+    roles: [engineer]
+    priority: P0
+    requirements: [E-02]
+    tests:
+      - { level: web, ref: "web-engineer/e2e/engineer.spec.ts::конкурентный доступ: два инженера берут один тикет" }
+
+  - id: E2E-07
+    title: Карточка авто из тикета — модель, прошивка на момент тикета, статусы агрегатов, история ТО
+    roles: [engineer]
+    priority: P0
+    requirements: [E-04, N-09]
+    tests:
+      - { level: web, ref: "web-engineer/e2e/engineer.spec.ts::карточка авто из тикета: модель, прошивка на момент тикета, статусы агрегатов" }
+      - { level: backend, ref: "backend/scripts/e2e_backend.py::тикет → очередь → взят → ответ → замена по тикету → решён" }
+
+  - id: E2E-08
+    title: Замена агрегата инженером из карточки тикета → у клиента статус «Заменено» и запись в истории ТО
+    roles: [engineer, client]
+    priority: P0
+    requirements: [E-05]
+    tests:
+      - { level: system, ref: "system-e2e/e2e/system.spec.ts::замена агрегата из карточки тикета → у клиента «Заменено» и запись в истории ТО" }
+      - { level: mobile-ui, ref: "mobile/integration_test/scheme_test.dart::5 тестовых авто: зоны и список схемы совпадают со статусами backend" }
+
+  - id: E2E-09
+    title: Пересмотр регламента ТО администратором → статус клиента меняется без деплоя
+    roles: [admin, client]
+    priority: P0
+    requirements: [A-01]
+    tests:
+      - { level: web, ref: "web-admin/e2e/admin.spec.ts::регламент ТО → статус клиента меняется без деплоя" }
+
+  - id: E2E-10
+    title: Статья базы знаний и дерево «Устранения неполадок» → клиент видит опубликованное
+    roles: [admin, client]
+    priority: P0
+    requirements: [A-02]
+    tests:
+      - { level: web, ref: "web-admin/e2e/admin.spec.ts::статья: «Сохранить и опубликовать» — клиент видит её в базе знаний" }
+      - { level: web, ref: "web-admin/e2e/admin.spec.ts::статья «Устранение неполадок»: категория ошибки обязательна, черновик открывает дерево решений" }
+
+  - id: E2E-11
+    title: Прошивка на модель X → уведомление и push владельцу X, владельцу Y — нет; в центре уведомлений клиента
+    roles: [admin, client]
+    priority: P0
+    requirements: [A-03, C-10]
+    tests:
+      - { level: system, ref: "system-e2e/e2e/system.spec.ts::прошивка на модель X → уведомление и push владельцу X, владельцу Y — нет" }
+      - { level: mobile-ui, ref: "mobile/integration_test/notifications_test.dart::центр уведомлений: прошивка и напоминание о ТО → карточка авто" }
+
+  - id: E2E-12
+    title: Напоминание о ТО за N км/дней → в ленте и центре уведомлений клиента
+    roles: [client]
+    priority: P0
+    requirements: [C-11, N-10]
+    tests:
+      - { level: backend, ref: "backend/scripts/e2e_backend.py::напоминание о ТО в ленте, открытие push" }
+      - { level: mobile-ui, ref: "mobile/integration_test/notifications_test.dart::центр уведомлений: прошивка и напоминание о ТО → карточка авто" }
+
+  - id: E2E-13
+    title: Пользователи — новый инженер входит, переназначение тикета, сброс пароля, блокировка → 401
+    roles: [admin, engineer, client]
+    priority: P0
+    requirements: [A-04, X-01]
+    tests:
+      - { level: web, ref: "web-admin/e2e/admin.spec.ts::пользователи: новый инженер входит; переназначение тикета; сброс пароля и блокировка" }
+      - { level: backend, ref: "backend/scripts/e2e_backend.py::блокировка клиента: 401, сессии завершены, тикет сохранён" }
+
+  - id: E2E-14
+    title: Дашборд аналитики совпадает с ручным расчётом контрольного набора
+    roles: [admin]
+    priority: P0
+    requirements: [A-05]
+    tests:
+      - { level: web, ref: "web-admin/e2e/admin.spec.ts::дашборд совпадает с ручным расчётом контрольного набора (март 2026)" }
+      - { level: backend, ref: "backend/scripts/e2e_backend.py::+1: тикет, решение, обе конверсии, проблемная модель" }
+
+  - id: E2E-15
+    title: Вход по ролям — в кабинет инженера и админ-панель не пускает чужую роль и клиента
+    roles: [engineer, admin, client]
+    priority: P0
+    requirements: [X-01]
+    tests:
+      - { level: system, ref: "system-e2e/e2e/system.spec.ts::вход по ролям: кабинет инженера — только инженер, админ-панель — только администратор" }
+      - { level: web, ref: "web-admin/e2e/admin.spec.ts::вход: инженеру — отказ, администратору — админ-панель" }
+
+  - id: E2E-16
+    title: Главный межролевой — тикет клиента → ответ и замена инженером → у клиента ответ и «Заменено» → дашборд +1
+    roles: [client, engineer, admin]
+    priority: P0
+    requirements: [C-08, C-09, E-02, E-05, A-05]
+    tests:
+      - { level: system, ref: "system-e2e/e2e/system.spec.ts::главный сценарий: тикет клиента → ответ и замена инженером → у клиента ответ и «Заменено» → дашборд +1" }
+      - { level: backend, ref: "backend/scripts/e2e_backend.py::+1: тикет, решение, обе конверсии, проблемная модель" }
+
+  # ---------------------------------------------------------------- P1
+  - id: E2E-17
+    title: Видео во вложениях тикета
+    roles: [client, engineer]
+    priority: P1
+    requirements: [C-08]
+    tests:
+      - { level: unit, ref: "backend/tests/api/test_ticket_attachments.py::test_message_attachments" }
+      - { level: widget, ref: "mobile/test/client_flows_test.dart::проверка до загрузки: формат, 20 МБ фото, 200 МБ видео, не больше 10" }
+    check: exploratory
+
+  - id: E2E-18
+    title: Список обращений клиента и переоткрытие решённого тикета
+    roles: [client, engineer]
+    priority: P1
+    requirements: [C-09, E-02]
+    tests:
+      - { level: unit, ref: "backend/tests/api/test_ticket_checklist.py::test_full_ticket_lifecycle" }
+    check: exploratory
+
+  - id: E2E-19
+    title: Несколько авто на аккаунте — выбор авто в обучении и дереве неполадок
+    roles: [client]
+    priority: P1
+    requirements: [C-12]
+    tests:
+      - { level: mobile-ui, ref: "mobile/integration_test/scheme_test.dart::5 тестовых авто: зоны и список схемы совпадают со статусами backend" }
+      - { level: widget, ref: "mobile/test/prototype_test.dart::M5: из дерева неполадок при двух авто — авто не подставлено, выбор обязателен" }
+
+  - id: E2E-20
+    title: Центр уведомлений, новости и акции с таргетингом по модели
+    roles: [admin, client]
+    priority: P1
+    requirements: [C-13, C-14]
+    tests:
+      - { level: mobile-ui, ref: "mobile/integration_test/support_flow_test.dart::обучение → дерево решений → тикет с фото → ответ инженера в чате → новость" }
+      - { level: web, ref: "web-admin/e2e/admin.spec.ts::публикация: число получателей в подтверждении = получатели в ленте" }
+      - { level: unit, ref: "backend/tests/api/test_notifications.py::test_targeting_model_x_not_y" }
+
+  - id: E2E-21
+    title: Фильтры канбана по SLA и категории, просроченные тикеты
+    roles: [engineer]
+    priority: P1
+    requirements: [E-01]
+    tests:
+      - { level: widget, ref: "web-engineer/src/App.test.tsx::найти просроченные тикеты — 1 клик" }
+      - { level: unit, ref: "backend/tests/api/test_ticket_checklist.py::test_overdue_ticket_is_marked_in_list_and_detail" }
+    check: exploratory
+
+  - id: E2E-22
+    title: Проблемные модели и конверсия в ТО на дашборде
+    roles: [admin]
+    priority: P1
+    requirements: [A-06]
+    tests:
+      - { level: web, ref: "web-admin/e2e/admin.spec.ts::дашборд совпадает с ручным расчётом контрольного набора (март 2026)" }
+
+  - id: E2E-23
+    title: Расширение справочника агрегатов
+    roles: [admin]
+    priority: P1
+    requirements: [A-07]
+    tests:
+      - { level: unit, ref: "backend/tests/api/test_aggregates.py::test_aggregate_types_catalog" }
+    check: exploratory
+
+  - id: E2E-24
+    title: Минимизация ввода — выпадающие списки модели, симптома и категории
+    roles: [client]
+    priority: P1
+    requirements: [N-04]
+    tests:
+      - { level: widget, ref: "mobile/test/prototype_test.dart::форма тикета — 2 тапа из «Поддержки»" }
+
+  - id: E2E-25
+    title: Нераспознанный VIN — модель выбирается вручную (мок VIN-декодера)
+    roles: [client]
+    priority: P1
+    requirements: [X-05]
+    tests:
+      - { level: unit, ref: "backend/tests/api/test_vehicles.py::test_unrecognized_vin_requires_manual_model" }
+    check: exploratory
+
+  - id: E2E-26
+    title: Реальный SMS через A1 на телефон владельца
+    roles: [client]
+    priority: P1
+    requirements: [X-02]
+    tests:
+      - { level: unit, ref: "backend/tests/auth/test_a1_provider.py::test_retries_on_a1_rate_limit_error" }
+    check: manual
+
+  # ---------------------------------------------------------------- P2
+  - id: E2E-27
+    title: Тёмная тема кабинета инженера
+    roles: [engineer]
+    priority: P2
+    requirements: [E-06]
+    tests:
+      - { level: widget, ref: "web-engineer/src/App.test.tsx::четыре колонки по статусам, тёмная тема по умолчанию" }
+
+  - id: E2E-28
+    title: Telegram — привязка и бот
+    roles: [client]
+    priority: P2
+    requirements: [C-15, X-06]
+    tests: []
+    check: not-implemented
+
+  # ---------------------------------------------------------------- Must вне сквозных тестов (ADR 0027 п. 16)
+  - id: E2E-29
+    title: Пароли сотрудников — argon2, refresh-токены и коды — хэши
+    roles: [engineer, admin]
+    priority: P1
+    requirements: [X-04, N-08]
+    tests:
+      - { level: unit, ref: "backend/tests/auth/test_security.py::test_password_hash_argon2" }
+      - { level: unit, ref: "backend/tests/auth/test_security.py::test_refresh_token_random_and_hashed_sha256" }
+    check: chapter-24
+
+  - id: E2E-30
+    title: Mobile-first клиента (360–430 px), кабинет инженера — Full HD без горизонтальной прокрутки
+    roles: [client, engineer]
+    priority: P1
+    requirements: [N-01, N-05]
+    tests:
+      - { level: widget, ref: "mobile/test/layout_real_font_test.dart::глава 19: схема на ширинах 360–430 px и с крупным шрифтом" }
+      - { level: widget, ref: "mobile/test/prototype_test.dart::ширина 360 px и тап-зоны" }
+      - { level: tokens, ref: "scripts/design_tokens.test.mts::минимальная тап-зона ≥ 44 px (ТЗ раздел 6)" }
+
+  - id: E2E-31
+    title: Контраст текста ≥ 4.5:1 в обеих темах, статус дублируется иконкой и подписью
+    roles: [client, engineer, admin]
+    priority: P1
+    requirements: [N-02]
+    tests:
+      - { level: tokens, ref: "scripts/design_tokens.test.mts::эталон формулы: чёрный на белом = 21:1" }
+      - { level: widget, ref: "mobile/test/prototype_test.dart::M6: подписи на схеме — названия агрегатов, как в списке и карточке" }
+
+  - id: E2E-32
+    title: Правило 3-х кликов — тикет, статус агрегата, обучение, типовые действия инженера
+    roles: [client, engineer]
+    priority: P1
+    requirements: [N-03]
+    tests:
+      - { level: widget, ref: "mobile/test/prototype_test.dart::правило 3-х кликов от главного экрана (ТЗ раздел 6)" }
+      - { level: widget, ref: "web-engineer/src/App.test.tsx::отправить клиенту инструкцию из базы знаний — 3 клика" }
+      - { level: widget, ref: "web-engineer/src/ticket/maintenance.test.tsx::замена из карточки своего тикета — 3 клика" }
+
+  - id: E2E-33
+    title: Доступ к чужим объектам — чужой тикет и авто недоступны (IDOR — глава 25)
+    roles: [client, engineer]
+    priority: P1
+    requirements: [X-01]
+    tests:
+      - { level: unit, ref: "backend/tests/api/test_ticket_security.py::test_object_level_matrix" }
+      - { level: unit, ref: "backend/tests/api/test_aggregates.py::test_replace_access" }
+    check: chapter-25

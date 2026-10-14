@@ -12,7 +12,16 @@ export interface E2ESet {
 
 export interface Seed {
   engineers: { phone: string; password: string }[]
-  client: { phone: string; access_token: string; refresh_token: string; vehicle_id: number }
+  client: {
+    phone: string
+    access_token: string
+    refresh_token: string
+    vehicle_id: number
+    /** Контекст авто в карточке тикета (глава 23, E2E-07): модель, прошивка релиза E2E, агрегат с регламентом. */
+    model_label: string
+    firmware_version: string
+    aggregate_name: string
+  }
   quick_reply_title: string
   tickets: number[]
   e2e_sets: E2ESet[]
@@ -91,6 +100,20 @@ export class ClientSide {
   close() {
     this.socket?.close()
   }
+}
+
+/** Запрос сотрудника к API по паролю (вход — staffLogin), ответ — JSON. */
+export async function staffApi<T>(account: { phone: string; password: string }, method: string, path: string): Promise<T> {
+  const login = await fetch(`${API}/auth/staff/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(account),
+  })
+  expect(login.ok, `вход сотрудника → ${login.status}`).toBe(true)
+  const { access_token } = (await login.json()) as { access_token: string }
+  const response = await fetch(`${API}${path}`, { method, headers: { Authorization: `Bearer ${access_token}` } })
+  expect(response.ok, `${method} ${path} → ${response.status} ${await response.clone().text()}`).toBe(true)
+  return (await response.json()) as T
 }
 
 /** Нарушения CSP за тест — проверяются после каждого теста (afterEach). */
