@@ -11,15 +11,14 @@ import {
   dragWithMouse,
   loadSeed,
   signIn,
-  ticketsFor,
 } from './support.ts'
-import { api, staffToken } from '@ev-servicedesk/web-shared/e2e'
+import { api, forBrowser, staffToken } from '@ev-servicedesk/web-shared/e2e'
 
 const seed = loadSeed()
 
 test('E2E: в работу → быстрый ответ → «Решено»; клиент получает всё вживую', async ({ page }) => {
   const client = new ClientSide(seed)
-  const id = ticketsFor(seed).flow
+  const id = forBrowser(seed.e2e_sets, 'тикеты').flow
   await client.watch(id)
 
   await signIn(page, seed.engineers[0])
@@ -68,7 +67,7 @@ test('E2E: в работу → быстрый ответ → «Решено»; �
 
 test('конкурентный доступ: два инженера берут один тикет', async ({ browser }) => {
   const client = new ClientSide(seed)
-  const tickets = ticketsFor(seed)
+  const tickets = forBrowser(seed.e2e_sets, 'тикеты')
   const first = { id: tickets.race_button }
   const second = { id: tickets.race_drag }
 
@@ -124,7 +123,7 @@ test('конкурентный доступ: два инженера берут 
 })
 
 test('карточка авто из тикета: модель, прошивка на момент тикета, статусы агрегатов и история ТО', async ({ page }) => {
-  const id = ticketsFor(seed).flow
+  const id = forBrowser(seed.e2e_sets, 'тикеты').flow
   const engineer = seed.engineers[0]
   // После сценария E2E тикет решён этим инженером; при отдельном запуске он ещё в очереди — история ТО авто
   // открыта только инженеру тикета (ADR 0014), поэтому тикет берётся по API.

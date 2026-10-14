@@ -15,6 +15,7 @@ import 'package:ev_servicedesk/data/api/token_store.dart';
 import 'package:ev_servicedesk/data/attachments.dart';
 import 'package:ev_servicedesk/data/models.dart';
 import 'package:ev_servicedesk/main.dart';
+import 'package:ev_servicedesk/screens/support/ticket_create_screen.dart';
 
 import 'support.dart';
 
@@ -84,10 +85,13 @@ void main() {
     // Форма: категория и ход диагностики подставлены; фото загружается сразу после выбора.
     await waitFor(tester, find.byKey(const Key('category-navigation')));
     expect(tester.widget<ChoiceChip>(find.byKey(const Key('category-navigation'))).selected, isTrue);
+    final form = find.byType(TicketCreateScreen);
+    await revealIn(tester, form, find.byKey(const Key('attach')));
     await tapLikeUser(tester, find.byKey(const Key('attach')));
     await waitFor(tester, find.byKey(const Key('attach-photo-gallery')));
     await tester.tap(find.byKey(const Key('attach-photo-gallery')));
     await waitFor(tester, find.bySemanticsLabel(RegExp('Фото 1.*загружено')));
+    await revealIn(tester, form, find.byKey(const Key('submit-ticket')));
     await tapLikeUser(tester, find.byKey(const Key('submit-ticket')));
 
     // Чат: своё сообщение с фото, затем ответ инженера — без обновления экрана (WebSocket).

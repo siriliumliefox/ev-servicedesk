@@ -2,10 +2,10 @@
 // лента клиента, вход в приложения сотрудников и разовые задачи в контейнере API; общее — web-shared/e2e.ts.
 import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
-import { expect, test, type Page } from '@playwright/test'
+import { expect, type Page } from '@playwright/test'
 import { aggregateStatus, api, guardCsp, submitLogin, type Account } from '@ev-servicedesk/web-shared/e2e'
 
-export { api, staffToken, submitLogin, todayInMinsk } from '@ev-servicedesk/web-shared/e2e'
+export { api, forBrowser, staffToken, submitLogin, todayInMinsk } from '@ev-servicedesk/web-shared/e2e'
 
 export interface Car {
   id: number
@@ -32,16 +32,6 @@ export function loadSeed(): Seed {
   const path = process.env.E2E_SYSTEM_SEED
   if (!path) throw new Error('Нужен E2E_SYSTEM_SEED — файл backend/scripts/e2e_system.py seed')
   return JSON.parse(readFileSync(path, 'utf8')) as Seed
-}
-
-const PROJECTS = ['chromium', 'firefox', 'webkit']
-
-/** Авто клиента X текущего браузера: chromium — 0, firefox — 1, webkit — 2 (seed --sets 3). */
-export function carFor(seed: Seed): Car {
-  const index = PROJECTS.indexOf(test.info().project.name)
-  const car = seed.client_x.cars[index]
-  if (!car) throw new Error(`Нет авто для ${test.info().project.name}: seed --sets ${index + 1}`)
-  return car
 }
 
 export interface FeedItem {

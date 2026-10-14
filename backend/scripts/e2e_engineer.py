@@ -9,13 +9,13 @@
                      тикета, глава 23, ADR 0027 п. 15: E2E-07), опубликованная
                      статья для быстрого ответа, тикеты клиента разных категорий для доски
                      (--board-tickets, по умолчанию все из таблицы) и наборы тикетов Playwright
-                     (--e2e-sets: по набору из 3 тикетов на браузер). В FILE (0600) — входы
+                     (--sets: по набору из 3 тикетов на браузер). В FILE (0600) — входы
                      инженеров, токены и SMS-код клиента, id авто и тикетов, заголовок статьи;
                      на экран пароли, токены и код не выводятся. Клиент создаёт не больше
                      10 тикетов в час (ticket_create_per_user_hour) — тикеты заводятся здесь,
                      а не в тестах.
 
-  cd backend && poetry run python scripts/e2e_engineer.py seed --out /tmp/seed.json --e2e-sets 1
+  cd backend && poetry run python scripts/e2e_engineer.py seed --out /tmp/seed.json --sets 1
 
 Окружение: API_BASE_URL, E2E_JOB_RUNNER (CLI администратора в контейнере стека), E2E_WEB_PHONE и
 E2E_CODE (тестовый номер стека, SMS не отправляется). Каждый ответ сверяется с docs/openapi.yaml.
@@ -161,7 +161,7 @@ def main(argv: list[str] | None = None) -> int:
     seed_args = sub.add_parser("seed")
     seed_args.add_argument("--out", type=Path, required=True)
     seed_args.add_argument("--board-tickets", type=int, default=None)
-    seed_args.add_argument("--e2e-sets", type=int, default=0)
+    seed_args.add_argument("--sets", type=int, default=0)
     args = parser.parse_args(argv)
 
     env = os.environ
@@ -175,7 +175,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         admin = bootstrap_admin(api, Jobs(env["E2E_JOB_RUNNER"]))
         board = len(table["tickets"]) if args.board_tickets is None else args.board_tickets
-        data = seed(api, admin, table, env["E2E_WEB_PHONE"], env["E2E_CODE"], board, args.e2e_sets)
+        data = seed(api, admin, table, env["E2E_WEB_PHONE"], env["E2E_CODE"], board, args.sets)
     except Failed as exc:
         print(f"FAIL  {exc}")
         return 1

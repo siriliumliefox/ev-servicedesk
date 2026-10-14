@@ -25,16 +25,20 @@ docker build -q -t backend:smoke "$ROOT/backend" >/dev/null
     poetry run python scripts/e2e_support.py seed)
   export VITE_API_BASE_URL=/v1 EV_API_PROXY="$API_BASE_URL"
   export VITE_MEDIA_ORIGIN="http://127.0.0.1:${INTEGRATION_S3_PORT:-19000}"
+  # Сборки — во временном каталоге стенда. serve работает в фоновой подоболочке и заменяет её vite через exec:
+  # $! — сам vite, и при выходе стенда он останавливается, а не остаётся держать порт.
+  DIST="$(mktemp -d)"
+  VITE="$ROOT/node_modules/.bin/vite"
   serve() {  # приложение, порт: production-сборка и vite preview
-    local dist="$ROOT/system-e2e/.apps/explore-$1"
-    (cd "$ROOT/$1" && npx vite build --outDir "$dist" --emptyOutDir >/dev/null &&
-      npx vite preview --outDir "$dist" --host 127.0.0.1 --port "$2" --strictPort)
+    cd "$ROOT/$1" && "$VITE" build --outDir "$DIST/$1" >/dev/null &&
+      exec "$VITE" preview --outDir "$DIST/$1" --host 127.0.0.1 --port "$2" --strictPort
   }
   serve web-engineer "$ENGINEER_PORT" & engineer=$!
-  trap "kill $engineer 2>/dev/null || true" EXIT
+  serve web-admin "$ADMIN_PORT" & admin=$!
+  trap "kill $engineer $admin 2>/dev/null || true; rm -rf $DIST" EXIT
   echo
   echo "Кабинет инженера: http://127.0.0.1:$ENGINEER_PORT   Админ-панель: http://127.0.0.1:$ADMIN_PORT"
   echo "Входы сотрудников, номера и код клиентов — в $OUT. Остановить — Ctrl+C."
   echo
-  serve web-admin "$ADMIN_PORT"
+  wait
 ' _ "$ROOT" "$OUT" "${ENGINEER_PORT:-5177}" "${ADMIN_PORT:-5178}"

@@ -20,7 +20,7 @@ fi
   set -e
   ROOT="$1"; shift
   SEED="$(mktemp)"
-  (cd "$ROOT/backend" && poetry run python scripts/e2e_engineer.py seed --out "$SEED" --board-tickets 0 --e2e-sets 3)
+  (cd "$ROOT/backend" && poetry run python scripts/e2e_engineer.py seed --out "$SEED" --board-tickets 0 --sets 3)
   cd "$ROOT/web-engineer"
   E2E_ENGINEER_SEED="$SEED" npx playwright test "$@"
 ' _ "$ROOT" "$@"

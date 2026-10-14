@@ -8,9 +8,9 @@ import {
   ADMIN_HEADING,
   ENGINEER_HEADING,
   api,
-  carFor,
   clientStatus,
   feed,
+  forBrowser,
   loadSeed,
   runJob,
   signIn,
@@ -71,7 +71,7 @@ test('вход по ролям: кабинет инженера — только
 })
 
 test('замена агрегата из карточки тикета → у клиента «Заменено» и запись в истории ТО', async ({ page }) => {
-  const car = carFor(seed)
+  const car = forBrowser(x.cars, 'авто клиента X')
   const code = car.aggregates.replace
   const name = car.aggregate_names.replace
   expect(await clientStatus(x, car.id, code)).toBe('red')
@@ -125,7 +125,7 @@ test('прошивка на модель X → уведомление и push в
 test('главный сценарий: тикет клиента → ответ и замена инженером → у клиента ответ и «Заменено» → дашборд +1', async ({
   browser,
 }) => {
-  const car = carFor(seed)
+  const car = forBrowser(x.cars, 'авто клиента X')
   const code = car.aggregates.golden
   const name = car.aggregate_names.golden
   const today = todayInMinsk()
