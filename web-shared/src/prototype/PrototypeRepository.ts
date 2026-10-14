@@ -3,6 +3,8 @@
 // backend (переходы статусов тикета, claim 409, валидация дерева решений, пользователи), здесь —
 // упрощённо, с теми же кодами ошибок; финальные правила — backend (главы 12–17, 22).
 import type {
+  AggregateReplaceRequest,
+  AggregateStatus,
   AggregateStatusThresholds,
   AggregateStatusThresholdsUpdateRequest,
   AggregateType,
@@ -20,6 +22,8 @@ import type {
   KnowledgeArticleRevisionSummary,
   KnowledgeArticleUpdateRequest,
   MaintenanceConversionStats,
+  MaintenanceRecord,
+  MaintenanceRecordCreateRequest,
   MaintenanceRecordList,
   MaintenanceRegulation,
   MaintenanceRegulationCreateRequest,
@@ -43,8 +47,10 @@ import type {
   VehicleModel,
 } from "../data/models.ts";
 import { TICKET_CATEGORIES } from "../data/models.ts";
+import { toIsoDate } from "../data/format.ts";
 import { allowedTransitions } from "../data/ticketFlow.ts";
 import { checkNode, validateTree } from "./decisionTree.ts";
+import { Garage } from "./garage.ts";
 import {
   ApiError,
   type AdminRepository,
@@ -59,13 +65,11 @@ import {
 } from "../data/repository.ts";
 import {
   ADMIN_ID,
-  AGGREGATE_STATUSES,
   AGGREGATE_TYPES,
   ARTICLES,
   DECISION_TREE_NODES,
   ENGINEER_ID,
   FIRMWARE_RELEASES,
-  MAINTENANCE_RECORDS,
   USERS,
   VEHICLE_MODELS,
   VEHICLES,
@@ -121,6 +125,10 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
   private treeNodes: DecisionTreeNode[] = [];
   private aggregateTypes: AggregateType[] = [];
   private regulations: MaintenanceRegulation[] = [];
+  private readonly garage = new Garage(
+    () => this.nextId++,
+    () => USERS[this.role === "admin" ? ADMIN_ID : ENGINEER_ID],
+  );
   private thresholds: AggregateStatusThresholds = {
     yellow_from_percent: 70,
     red_above_percent: 100,
@@ -174,6 +182,7 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
     this.treeNodes = empty ? [] : clone(DECISION_TREE_NODES);
     this.aggregateTypes = clone(AGGREGATE_TYPES);
     this.regulations = empty ? [] : seedRegulations();
+    this.garage.reset();
     this.thresholds = {
       yellow_from_percent: 70,
       red_above_percent: 100,
@@ -318,7 +327,15 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
   }
 
   listMaintenanceRecords(vehicleId: number, query: PageQuery = {}): Promise<MaintenanceRecordList> {
-    return this.call(() => slice(MAINTENANCE_RECORDS[vehicleId] ?? [], query));
+    return this.call(() => this.garage.history(vehicleId, query));
+  }
+
+  replaceAggregateStatus(vehicleId: number, aggregateTypeCode: string, body: AggregateReplaceRequest): Promise<AggregateStatus> {
+    return this.call(() => this.garage.replace(this.changeable(vehicleId), aggregateTypeCode, body, toIsoDate(this.clock())));
+  }
+
+  createMaintenanceRecord(vehicleId: number, body: MaintenanceRecordCreateRequest): Promise<MaintenanceRecord> {
+    return this.call(() => this.garage.recordWork(this.changeable(vehicleId), body, toIsoDate(this.clock())));
   }
 
   /** События — от действий в этой сессии прототипа (сети нет): «живой» чат без WebSocket. */
@@ -894,12 +911,24 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
       // Эскалация из дерева решений (ADR 0018 п. 11) — тикеты фикстур созданы не из базы знаний.
       source_article: null,
       attachments: [],
-      vehicle_context: { vehicle, aggregate_statuses: AGGREGATE_STATUSES[vehicle.id] ?? [] },
+      vehicle_context: { vehicle, aggregate_statuses: this.garage.aggregateStatuses(vehicle.id) },
     };
   }
 
+  /** Авто меняет инженер по своему нерешённому тикету, администратор — по любому нерешённому (ADR 0014). */
+  private changeable(vehicleId: number): number {
+    const allowed = this.tickets.some(
+      (t) =>
+        t.seed.vehicle_id === vehicleId &&
+        t.status !== "resolved" &&
+        (this.role === "admin" || t.assigned_engineer_id === ENGINEER_ID),
+    );
+    if (!allowed) throw new ApiError("FORBIDDEN", "Авто меняет инженер, назначенный на нерешённый тикет", 403);
+    return vehicleId;
+  }
+
   private vehicle(t: TicketRecord): Vehicle {
-    return VEHICLES.find((x) => x.vehicle.id === t.seed.vehicle_id)!.vehicle;
+    return this.garage.vehicle(t.seed.vehicle_id);
   }
 
   private article(articleId: number): KnowledgeArticle {

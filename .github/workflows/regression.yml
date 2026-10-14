@@ -1,0 +1,146 @@
+name: regression
+
+# Полный regression-набор «на staging» (глава 23, ADR 0027 п. 5, 6): до главы 26 staging — опубликованный образ
+# backend:staging-<sha> (по digest) и артефакты web-*-staging-<sha> прогона cd-staging. Наборы — отдельные job,
+# у каждого свой стек из того же образа:
+# - backend: сквозной сценарий e2e_backend.py и аудит целостности (scripts/integration_stack.sh);
+# - web: Playwright web-engineer, web-admin и system-e2e (межролевые) — Chromium, Firefox, WebKit, без повторов;
+# - mobile-api: Dart-клиент против стека (test_api_e2e);
+# - mobile-ui: integration_test на Android-эмуляторе.
+# Запуск: из cd-staging после публикации (artifacts_run_id — тот же прогон) или вручную с git_sha (прогон
+# cd-staging с артефактами ищется по коммиту). RC1 — три зелёных прогона подряд на одном sha (ADR 0027 п. 6).
+
+on:
+  workflow_dispatch:
+    inputs:
+      git_sha:
+        description: "Полный SHA коммита develop, для которого опубликован backend:staging-<sha>"
+        required: true
+  workflow_call:
+    inputs:
+      git_sha:
+        required: true
+        type: string
+      artifacts_run_id:
+        description: "Прогон cd-staging с артефактами web-*-staging-<sha>"
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+  packages: read
+  actions: read
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.image.outputs.image }}
+      run_id: ${{ steps.run.outputs.run_id }}
+    env:
+      SHA: ${{ inputs.git_sha }}
+    steps:
+      - name: Формат SHA
+        run: |
+          [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "git_sha — полный SHA (40 hex), получено: '$SHA'"; exit 1; }
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Образ backend:staging-<sha> по digest
+        id: image
+        run: |
+          repo="ghcr.io/${GITHUB_REPOSITORY,,}/backend"
+          # digest = sha256 исходных байтов манифеста (индекса) в реестре — как при откате в cd-staging
+          digest=$(set -o pipefail; docker buildx imagetools inspect --raw "$repo:staging-$SHA" | sha256sum | sed 's/ .*//') || {
+            echo "FAIL  образа $repo:staging-$SHA нет — сначала cd-staging для этого коммита"; exit 1; }
+          echo "PASS  $repo:staging-$SHA → sha256:$digest"
+          echo "image=$repo@sha256:$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Прогон cd-staging с артефактами web
+        id: run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.artifacts_run_id }}
+        run: |
+          if [ -z "$RUN_ID" ]; then
+            RUN_ID=$(gh run list -R "$GITHUB_REPOSITORY" --workflow cd-staging.yml --commit "$SHA" --status success \
+              --json databaseId --jq '.[0].databaseId // empty')
+          fi
+          [ -n "$RUN_ID" ] || { echo "FAIL  нет успешного прогона cd-staging для $SHA"; exit 1; }
+          echo "PASS  артефакты web — прогон $RUN_ID"
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+
+  backend:
+    needs: resolve
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.git_sha }}
+
+      - uses: ./.github/actions/backend-poetry
+
+      - uses: ./.github/actions/backend-image
+        with:
+          image: ${{ needs.resolve.outputs.image }}
+
+      - name: Сценарий backend и аудит целостности на опубликованном образе
+        run: scripts/integration_stack.sh backend:integration
+
+  web:
+    needs: resolve
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [web-engineer, web-admin, system-e2e]
+    uses: ./.github/workflows/web-e2e.yml
+    with:
+      app: ${{ matrix.app }}
+      browsers: chromium firefox webkit
+      image: ${{ needs.resolve.outputs.image }}
+      ref: ${{ inputs.git_sha }}
+      artifacts_run_id: ${{ needs.resolve.outputs.run_id }}
+
+  mobile-api:
+    needs: resolve
+    uses: ./.github/workflows/mobile-e2e.yml
+    with:
+      image: ${{ needs.resolve.outputs.image }}
+      ref: ${{ inputs.git_sha }}
+
+  mobile-ui:
+    needs: resolve
+    uses: ./.github/workflows/mobile-ui-e2e.yml
+    with:
+      image: ${{ needs.resolve.outputs.image }}
+      ref: ${{ inputs.git_sha }}
+
+  summary:
+    needs: [resolve, backend, web, mobile-api, mobile-ui]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Итог regression
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+          SHA: ${{ inputs.git_sha }}
+          IMAGE: ${{ needs.resolve.outputs.image }}
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+
+          needs = json.loads(os.environ["NEEDS"])
+          print(f"Коммит {os.environ['SHA']}, образ {os.environ['IMAGE'] or '—'}")
+          failed = False
+          for name, job in sorted(needs.items()):
+              ok = job["result"] == "success"
+              print(f"{'PASS' if ok else 'FAIL'}  {name}: {job['result']}")
+              failed |= not ok
+          sys.exit(1 if failed else 0)
+          PY

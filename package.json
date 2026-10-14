@@ -4,7 +4,8 @@
   "workspaces": [
     "web-engineer",
     "web-admin",
-    "web-shared"
+    "web-shared",
+    "system-e2e"
   ],
   "scripts": {
     "lint:api": "spectral lint docs/openapi.yaml --fail-severity=warn",

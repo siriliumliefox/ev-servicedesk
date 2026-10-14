@@ -89,7 +89,7 @@ test('пользователи: новый инженер входит; пере
   await page.getByRole('button', { name: 'Сгенерировать' }).click()
   await page.getByRole('button', { name: 'Создать сотрудника' }).click()
   const created = (await page.getByLabel('Пароль', { exact: true }).and(page.locator('code')).textContent())!
-  expect(await staffLoginStatus(phone, created)).toBe(200)
+  expect(await staffLoginStatus({ phone, password: created })).toBe(200)
 
   // Карточка первого инженера: его тикет — второму инженеру.
   await page.getByLabel('Поиск по телефону').fill(first.phone)
@@ -107,14 +107,14 @@ test('пользователи: новый инженер входит; пере
   await page.getByRole('button', { name: 'Сбросить пароль' }).click()
   await page.getByRole('dialog').getByRole('button', { name: 'Сбросить пароль' }).click()
   const reset = (await page.getByLabel('Пароль', { exact: true }).and(page.locator('code')).textContent())!
-  expect(await staffLoginStatus(first.phone, first.password)).toBe(401)
-  expect(await staffLoginStatus(first.phone, reset)).toBe(200)
+  expect(await staffLoginStatus(first)).toBe(401)
+  expect(await staffLoginStatus({ phone: first.phone, password: reset })).toBe(200)
 
   // Блокировка: вход запрещён.
   await page.getByRole('button', { name: 'Заблокировать' }).click()
   await page.getByRole('dialog').getByRole('button', { name: 'Заблокировать' }).click()
   await expect(page.getByText('Заблокирован', { exact: true })).toBeVisible()
-  expect(await staffLoginStatus(first.phone, reset)).toBe(401)
+  expect(await staffLoginStatus({ phone: first.phone, password: reset })).toBe(401)
 })
 
 test('публикация: число получателей в подтверждении = получатели в ленте', async ({ page }) => {

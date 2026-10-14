@@ -23,6 +23,8 @@ const ENGINEER_OPERATIONS = [
   "listTicketMessages",
   "createTicketMessage",
   "listMaintenanceRecords",
+  "replaceAggregateStatus",
+  "createMaintenanceRecord",
 ];
 
 /** Операции админ-панели (`HttpAdminRepository`, глава 22, ADR 0026 п. 2). */
@@ -79,10 +81,11 @@ describe("тексты ошибок", () => {
     expect(OPERATIONS.filter((id) => !ids.includes(id))).toEqual([]);
   });
 
+  // Имена файлов спецификаций (`docs/specs/AGGREGATE_STATUS_ALGORITHM.md`) — не коды ошибок.
   it("у каждого кода из описаний операций кабинета и админ-панели есть текст", () => {
     const codes = new Set<string>();
     for (const op of operations.filter((o) => OPERATIONS.includes(o.operationId ?? ""))) {
-      for (const code of (op.description ?? "").match(/\b[A-Z]+(?:_[A-Z]+)+\b/g) ?? []) {
+      for (const code of (op.description ?? "").match(/\b[A-Z]+(?:_[A-Z]+)+\b(?!\.md)/g) ?? []) {
         if (!TREE_PROBLEMS.includes(code)) codes.add(code);
       }
     }

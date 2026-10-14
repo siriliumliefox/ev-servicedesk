@@ -82,7 +82,7 @@ void main() {
     await tapLikeUser(tester, find.byKey(const Key('escalate')));
 
     // Форма: категория и ход диагностики подставлены; фото загружается сразу после выбора.
-    await waitFor(tester, find.byKey(const Key('submit-ticket')));
+    await waitFor(tester, find.byKey(const Key('category-navigation')));
     expect(tester.widget<ChoiceChip>(find.byKey(const Key('category-navigation'))).selected, isTrue);
     await tapLikeUser(tester, find.byKey(const Key('attach')));
     await waitFor(tester, find.byKey(const Key('attach-photo-gallery')));

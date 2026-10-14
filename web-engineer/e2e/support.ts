@@ -2,6 +2,7 @@
 // WebSocket — «синхронизация у клиента в реальном времени» проверяется по событиям, которые получил клиент.
 import { readFileSync } from 'node:fs'
 import { expect, test, type Locator, type Page } from '@playwright/test'
+import { api, guardCsp, submitLogin, type Account } from '@ev-servicedesk/web-shared/e2e'
 
 /** Тикеты одного браузера (клиент создаёт не больше 10 тикетов в час — их заводит seed, а не тест). */
 export interface E2ESet {
@@ -11,8 +12,17 @@ export interface E2ESet {
 }
 
 export interface Seed {
-  engineers: { phone: string; password: string }[]
-  client: { phone: string; access_token: string; refresh_token: string; vehicle_id: number }
+  engineers: Account[]
+  client: {
+    phone: string
+    access_token: string
+    refresh_token: string
+    vehicle_id: number
+    /** Контекст авто в карточке тикета (глава 23, E2E-07): модель, прошивка релиза E2E, агрегат с регламентом. */
+    model_label: string
+    firmware_version: string
+    aggregate_name: string
+  }
   quick_reply_title: string
   tickets: number[]
   e2e_sets: E2ESet[]
@@ -34,7 +44,8 @@ export function loadSeed(): Seed {
   return JSON.parse(readFileSync(path, 'utf8')) as Seed
 }
 
-const API = `${process.env.API_BASE_URL ?? 'http://127.0.0.1:18080'}/v1`
+/** WebSocket стека — тот же адрес, что у REST (`web-shared/e2e.ts`). */
+const WS = `${(process.env.API_BASE_URL ?? 'http://127.0.0.1:18080').replace(/^http/, 'ws')}/v1`
 
 export interface ClientEvent {
   type: string
@@ -52,19 +63,13 @@ export class ClientSide {
     this.token = seed.client.access_token
   }
 
-  async api<T>(method: string, path: string, body?: unknown): Promise<T> {
-    const response = await fetch(`${API}${path}`, {
-      method,
-      headers: { Authorization: `Bearer ${this.token}`, 'Content-Type': 'application/json' },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    })
-    expect(response.ok, `${method} ${path} → ${response.status} ${await response.clone().text()}`).toBe(true)
-    return (await response.json()) as T
+  api<T>(method: string, path: string, body?: unknown, expected = 200): Promise<T> {
+    return api<T>(method, path, this.token, body, expected)
   }
 
   /** Подписка на тикет; resolve — после `ready`. */
   watch(ticketId: number): Promise<void> {
-    const ws = new WebSocket(`${API.replace(/^http/, 'ws')}/tickets/${ticketId}/ws`)
+    const ws = new WebSocket(`${WS}/tickets/${ticketId}/ws`)
     this.socket = ws
     return new Promise((resolve, reject) => {
       ws.onopen = () => ws.send(JSON.stringify({ type: 'auth', access_token: this.token }))
@@ -93,34 +98,10 @@ export class ClientSide {
   }
 }
 
-/** Нарушения CSP за тест — проверяются после каждого теста (afterEach). */
-const violations: string[] = []
-
-test.afterEach(() => {
-  const found = violations.splice(0)
-  expect(found, 'нарушения CSP').toEqual([])
-})
-
 /** Вход инженера через экран входа; нарушения CSP собираются и валят тест в конце. */
-export async function signIn(page: Page, account: { phone: string; password: string }) {
-  // Нарушение CSP — с директивой и источником (securitypolicyviolation). Без источника — инъекция самого
-  // Playwright: в WebKit скриншот трассировки прячет курсор встроенным <style> (проверено на page.screenshot);
-  // стиль или скрипт кабинета указал бы на файл сборки.
-  await page.addInitScript(() => {
-    document.addEventListener('securitypolicyviolation', (e) => {
-      if (!e.sourceFile) return
-      console.error(
-        `CSP-VIOLATION ${e.violatedDirective} blocked=${e.blockedURI} source=${e.sourceFile}:${e.lineNumber} sample=${e.sample}`,
-      )
-    })
-  })
-  page.on('console', (message) => {
-    if (message.text().startsWith('CSP-VIOLATION')) violations.push(message.text())
-  })
-  await page.goto('/')
-  await page.getByLabel('Телефон').fill(account.phone)
-  await page.getByLabel('Пароль').fill(account.password)
-  await page.getByRole('button', { name: 'Войти' }).click()
+export async function signIn(page: Page, account: Account) {
+  await guardCsp(page)
+  await submitLogin(page, '/', account)
   await expect(page.getByRole('heading', { name: 'EV-ServiceDesk · Кабинет инженера' })).toBeVisible()
 }
 

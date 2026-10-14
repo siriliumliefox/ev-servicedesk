@@ -3,6 +3,8 @@
 // `HttpEngineerRepository` (глава 21, ADR 0025 п. 6) и `HttpAdminRepository` (глава 22, ADR 0026 п. 2),
 // экраны от реализации не зависят.
 import type {
+  AggregateReplaceRequest,
+  AggregateStatus,
   AggregateStatusThresholds,
   AggregateStatusThresholdsUpdateRequest,
   AggregateType,
@@ -21,6 +23,8 @@ import type {
   KnowledgeArticleRevisionSummary,
   KnowledgeArticleUpdateRequest,
   MaintenanceConversionStats,
+  MaintenanceRecord,
+  MaintenanceRecordCreateRequest,
   MaintenanceRecordList,
   MaintenanceRegulation,
   MaintenanceRegulationCreateRequest,
@@ -124,6 +128,10 @@ export interface EngineerRepository extends CommonRepository {
   listTicketMessages(ticketId: number, query?: { after_id?: number }): Promise<TicketMessage[]>;
   createTicketMessage(ticketId: number, body: string): Promise<TicketMessage>;
   listMaintenanceRecords(vehicleId: number, query?: PageQuery): Promise<MaintenanceRecordList>;
+  /** Замена агрегата (E-05): сброс счётчика «светофора» и запись в истории ТО одним вызовом. */
+  replaceAggregateStatus(vehicleId: number, aggregateTypeCode: string, body: AggregateReplaceRequest): Promise<AggregateStatus>;
+  /** Работа без замены (осмотр, долив) или общая работа без агрегата — счётчик не сбрасывает. */
+  createMaintenanceRecord(vehicleId: number, body: MaintenanceRecordCreateRequest): Promise<MaintenanceRecord>;
   /** Подписка на события тикета; возвращает отписку. */
   watchTicket(ticketId: number, handlers: TicketLiveHandlers): () => void;
 }

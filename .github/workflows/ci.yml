@@ -77,6 +77,7 @@ jobs:
               - "mobile/lib/theme/tokens.g.dart"
               - "scripts/design_tokens.mts"
               - "scripts/design_tokens.test.mts"
+              - "system-e2e/**"                        # lint и типы межролевых E2E (глава 23)
               - "package.json"
               - "package-lock.json"
               - ".github/workflows/web-ci.yml"
@@ -85,6 +86,7 @@ jobs:
               - "web-engineer/**"
               - "web-admin/**"
               - "web-shared/**"
+              - "system-e2e/**"
               - "scripts/integration_stack.sh"
               - "package.json"
               - "package-lock.json"
@@ -93,6 +95,7 @@ jobs:
               - "mobile/**"
               - ".github/workflows/mobile-ci.yml"
               - ".github/workflows/mobile-e2e.yml"
+              - ".github/workflows/mobile-ui-e2e.yml"
               - ".github/workflows/ci.yml"
             docs:
               - "docs/**"                              # в т. ч. openapi.yaml и asyncapi.yaml
@@ -127,13 +130,20 @@ jobs:
     if: needs.changes.outputs.mobile_e2e == 'true'
     uses: ./.github/workflows/mobile-e2e.yml
 
+  # UI E2E клиента на Android-эмуляторе (глава 23, ADR 0027 п. 4, Q19): только при изменениях mobile/ —
+  # изменения backend закрывает mobile-e2e на уровне API.
+  mobile-ui-e2e:
+    needs: changes
+    if: needs.changes.outputs.mobile == 'true'
+    uses: ./.github/workflows/mobile-ui-e2e.yml
+
   web-e2e:
     needs: changes
     if: needs.changes.outputs.web_e2e == 'true'
     strategy:
       fail-fast: false
       matrix:
-        app: [web-engineer, web-admin]
+        app: [web-engineer, web-admin, system-e2e]
     uses: ./.github/workflows/web-e2e.yml
     with:
       app: ${{ matrix.app }}
@@ -153,6 +163,25 @@ jobs:
       - name: Text files are Unicode NFC
         run: python3 scripts/check_unicode_nfc.py
 
+  # Матрица сценариев E2E (глава 23, ADR 0027 п. 1) — на каждом PR: переименование или удаление теста,
+  # на который ссылается сценарий, и новое Must-требование без сценария ломают проверку.
+  e2e-matrix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: PyYAML
+        run: pip install "pyyaml==6.0.3"
+
+      - name: Страж матрицы и его тесты
+        run: |
+          python3 -m unittest scripts/test_check_e2e_matrix.py
+          python3 scripts/check_e2e_matrix.py
+
   # Поиск секретов — на каждом PR, независимо от изменённых путей.
   secret-scan:
     runs-on: ubuntu-latest
@@ -167,10 +196,10 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # Единственная обязательная проверка. Зелёная, только если `changes`,
-  # `unicode-nfc` и `secret-scan` успешны, а каждая проверка сервиса — успешна или не нужна
+  # `unicode-nfc`, `e2e-matrix` и `secret-scan` успешны, а каждая проверка сервиса — успешна или не нужна
   # (skipped). Падение, отмена или пропуск из-за упавшей зависимости — красный.
   ci-gate:
-    needs: [changes, backend, web, mobile, mobile-e2e, web-e2e, docs, unicode-nfc, secret-scan]
+    needs: [changes, backend, web, mobile, mobile-e2e, mobile-ui-e2e, web-e2e, docs, unicode-nfc, e2e-matrix, secret-scan]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -182,7 +211,7 @@ jobs:
           import json, os, sys
 
           needs = json.loads(os.environ["NEEDS"])
-          must_run = {"changes", "unicode-nfc", "secret-scan"}
+          must_run = {"changes", "unicode-nfc", "e2e-matrix", "secret-scan"}
           failed = False
           for name, job in sorted(needs.items()):
               result = job["result"]

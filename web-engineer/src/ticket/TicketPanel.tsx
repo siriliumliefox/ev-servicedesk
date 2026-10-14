@@ -266,7 +266,7 @@ export function TicketPanel({
             </section>
 
             <div className="min-h-0 overflow-y-auto px-4 py-4">
-              <VehiclePanel ticket={t} />
+              <VehiclePanel ticket={t} editable={isMine && t.status !== 'resolved'} onChanged={live.reload} />
             </div>
           </div>
         </>

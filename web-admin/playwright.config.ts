@@ -30,7 +30,10 @@ export default defineConfig({
     { name: 'webkit', use: { ...devices['Desktop Safari'], viewport: { width: 1920, height: 1080 } } },
   ],
   webServer: {
-    command: `npx vite build && npx vite preview --host 127.0.0.1 --port ${PORT} --strictPort`,
+    // Regression (глава 23, ADR 0027 п. 5): E2E_ADMIN_DIST — готовая сборка cd-staging (абсолютный путь).
+    command: process.env.E2E_ADMIN_DIST
+      ? `npx vite preview --outDir ${process.env.E2E_ADMIN_DIST} --host 127.0.0.1 --port ${PORT} --strictPort`
+      : `npx vite build && npx vite preview --host 127.0.0.1 --port ${PORT} --strictPort`,
     url: `http://127.0.0.1:${PORT}`,
     reuseExistingServer: false,
     timeout: 120_000,

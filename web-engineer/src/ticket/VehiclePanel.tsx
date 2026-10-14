@@ -1,6 +1,7 @@
-// Контекст авто клиента из тикета (ТЗ 4.3) — только чтение (ADR 0025 п. 12): модель, VIN, пробег,
-// прошивка на момент тикета и текущая, статусы агрегатов, история ТО постранично.
-// Авто и статусы приходят в TicketDetail.vehicle_context, история — listMaintenanceRecords.
+// Контекст авто клиента из тикета (ТЗ 4.3, ADR 0025 п. 12): модель, VIN, пробег, прошивка на момент тикета
+// и текущая, статусы агрегатов, история ТО постранично. Авто и статусы приходят в TicketDetail.vehicle_context,
+// история — listMaintenanceRecords. Инженер тикета фиксирует замену и работы по агрегату (E-05, глава 23,
+// ADR 0027 п. 14) — после сохранения карточка тикета и история перечитываются.
 import { useEffect, useState } from 'react'
 import {
   Button,
@@ -14,6 +15,8 @@ import {
   type TicketDetail,
 } from '@ev-servicedesk/web-shared'
 import { useEngineer } from '../repo.ts'
+import { useNotify } from '../ui/notify.ts'
+import { MaintenanceForm, type AggregateRef } from './MaintenanceForm.tsx'
 
 const HISTORY_PAGE = 20
 
@@ -48,18 +51,52 @@ function useHistory(vehicleId: number | undefined) {
     error,
     more: page < pages ? () => setPage((p) => p + 1) : null,
     retry: () => setAttempt((n) => n + 1),
+    /** С первой страницы — после новой записи. */
+    reload: () => {
+      setPage(1)
+      setAttempt((n) => n + 1)
+    },
   }
 }
 
-export function VehiclePanel({ ticket }: { ticket: TicketDetail }) {
+export function VehiclePanel({
+  ticket,
+  editable,
+  onChanged,
+}: {
+  ticket: TicketDetail
+  /** Свой нерешённый тикет — можно фиксировать замены и работы (иначе backend ответит 403). */
+  editable: boolean
+  /** Данные авто изменились — перечитать карточку тикета (статусы, пробег). */
+  onChanged: () => void
+}) {
   const context = ticket.vehicle_context
   const vehicle = context?.vehicle
   const records = useHistory(vehicle?.id)
+  const notify = useNotify()
+  // Открытая форма: агрегата или «Другая работа» (aggregate: null); одна на карточку.
+  const [form, setForm] = useState<{ aggregate: AggregateRef | null } | null>(null)
 
   if (!vehicle) return <p className="text-body-sm text-fg-muted">Авто не привязано к обращению.</p>
 
   const names = new Map((context.aggregate_statuses ?? []).map((s) => [s.aggregate_type_code, s.aggregate_type_name]))
   const model = vehicle.vehicle_model
+  const isOpen = (aggregate: AggregateRef | null) =>
+    editable && form !== null && form.aggregate?.code === aggregate?.code
+
+  const formFor = (aggregate: AggregateRef | null) => (
+    <MaintenanceForm
+      vehicle={vehicle}
+      aggregate={aggregate}
+      onCancel={() => setForm(null)}
+      onSaved={(message) => {
+        setForm(null)
+        notify(message)
+        records.reload()
+        onChanged()
+      }}
+    />
+  )
 
   return (
     <div className="grid content-start gap-5">
@@ -92,15 +129,36 @@ export function VehiclePanel({ ticket }: { ticket: TicketDetail }) {
                 <StatusBadge status={s.status} />
               </span>
               <span className="text-caption text-fg-muted">{statusDetails(s)}</span>
+              {isOpen(aggregateOf(s))
+                ? formFor(aggregateOf(s))
+                : editable && (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      className="justify-self-start"
+                      aria-label={`Замена или работа: ${s.aggregate_type_name}`}
+                      onClick={() => setForm({ aggregate: aggregateOf(s) })}
+                    >
+                      Замена / работа
+                    </Button>
+                  )}
             </li>
           ))}
         </ul>
       </section>
 
       <section aria-labelledby="history-title" className="grid gap-2">
-        <h3 id="history-title" className="text-label">
-          История ТО
-        </h3>
+        <div className="flex items-center justify-between gap-2">
+          <h3 id="history-title" className="text-label">
+            История ТО
+          </h3>
+          {editable && !isOpen(null) && (
+            <Button variant="ghost" size="sm" onClick={() => setForm({ aggregate: null })}>
+              Другая работа
+            </Button>
+          )}
+        </div>
+        {isOpen(null) && formFor(null)}
         {records.error ? (
           <ErrorState error={records.error} onRetry={records.retry} />
         ) : !records.items ? (
@@ -131,6 +189,8 @@ export function VehiclePanel({ ticket }: { ticket: TicketDetail }) {
     </div>
   )
 }
+
+const aggregateOf = (s: AggregateStatus): AggregateRef => ({ code: s.aggregate_type_code, name: s.aggregate_type_name })
 
 function statusDetails(s: AggregateStatus): string {
   if (s.status === 'unknown') return 'Нет истории замены'
