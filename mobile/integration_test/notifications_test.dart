@@ -10,6 +10,7 @@ import 'package:integration_test/integration_test.dart';
 
 import 'package:ev_servicedesk/data/api/token_store.dart';
 import 'package:ev_servicedesk/main.dart';
+import 'package:ev_servicedesk/screens/support/ticket_create_screen.dart';
 
 import 'support.dart';
 
@@ -32,9 +33,7 @@ void main() {
 
     // Вход клиентом, которого завёл e2e_support.py notify: авто уже есть — сразу главный экран.
     await waitFor(tester, find.text('Получить код'));
-    await tester.enterText(find.byKey(const Key('phone')), _phone.substring(4));
-    await tapLikeUser(tester, find.text('Получить код'));
-    await waitFor(tester, find.byKey(const Key('code')));
+    await requestCode(tester, _phone); // seed только что запрашивал код этого номера
     await tester.enterText(find.byKey(const Key('code')), _code);
     await tapLikeUser(tester, find.descendant(of: find.byKey(const Key('consent')), matching: find.byType(Checkbox)));
     await tapLikeUser(tester, find.text('Войти'));
@@ -55,6 +54,6 @@ void main() {
     await tapLikeUser(tester, find.textContaining(_reminderAggregate).first);
     await waitFor(tester, find.byKey(const Key('book-maintenance')));
     await tapLikeUser(tester, find.byKey(const Key('book-maintenance')));
-    await waitFor(tester, find.byKey(const Key('submit-ticket')));
+    await waitFor(tester, find.byType(TicketCreateScreen));
   });
 }
