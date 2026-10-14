@@ -110,7 +110,7 @@ scenarios:
     requirements: [A-03, C-10]
     tests:
       - { level: system, ref: "system-e2e/e2e/system.spec.ts::прошивка на модель X → уведомление и push владельцу X, владельцу Y — нет" }
-      - { level: mobile-ui, ref: "mobile/integration_test/notifications_test.dart::центр уведомлений: прошивка и напоминание о ТО → карточка авто" }
+      - { level: mobile-ui, ref: "mobile/integration_test/notifications_test.dart::центр уведомлений: прошивка и напоминание о ТО → запись на ТО" }
 
   - id: E2E-12
     title: Напоминание о ТО за N км/дней → в ленте и центре уведомлений клиента
@@ -119,7 +119,7 @@ scenarios:
     requirements: [C-11, N-10]
     tests:
       - { level: backend, ref: "backend/scripts/e2e_backend.py::напоминание о ТО в ленте, открытие push" }
-      - { level: mobile-ui, ref: "mobile/integration_test/notifications_test.dart::центр уведомлений: прошивка и напоминание о ТО → карточка авто" }
+      - { level: mobile-ui, ref: "mobile/integration_test/notifications_test.dart::центр уведомлений: прошивка и напоминание о ТО → запись на ТО" }
 
   - id: E2E-13
     title: Пользователи — новый инженер входит, переназначение тикета, сброс пароля, блокировка → 401

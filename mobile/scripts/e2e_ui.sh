@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # UI E2E мобильного приложения (глава 18, ADR 0022 п. 2): integration_test в iOS Simulator против стека backend
-# из образа-кандидата (scripts/integration_stack.sh). В CI не запускается: на macOS-раннерах GitHub нет Docker.
+# из образа-кандидата (scripts/integration_stack.sh); шаги внутри стека — mobile/scripts/e2e_ui_tests.sh. На
+# macOS-раннерах GitHub нет Docker — в CI те же тесты идут на Android-эмуляторе (глава 23, ADR 0027 п. 4).
 # Схема агрегатов (глава 19, ADR 0023 п. 7): перед тестами seed 5 тестовых авто, scheme_test сверяет экран с API.
 # Клиентский сценарий (глава 20, ADR 0024 п. 1): статьи с деревом решений (e2e_support.py seed); инженер на Mac
 # (e2e_support.py answer) ждёт тикет из дерева, отвечает в чат и публикует новость — support_flow_test.
+# Центр уведомлений (глава 23, ADR 0027 п. 15): e2e_support.py notify — клиент с напоминанием о ТО и прошивкой,
+# notifications_test входит им и проверяет ленту.
 # Запуск: mobile/scripts/e2e_ui.sh [симулятор]   (по умолчанию — первый запущенный)
 # Нужны: Docker, Xcode с запущенным симулятором, poetry-окружение backend.
 
@@ -17,15 +20,4 @@ if [ -z "$DEVICE" ]; then
 fi
 
 docker build -q -t backend:smoke "$ROOT/backend" >/dev/null
-# Переменные стека (API_BASE_URL, E2E_PHONE, E2E_SCHEME_PHONE, E2E_SUPPORT_PHONE, E2E_CODE) раскрывает
-# внутренний bash — одинарные кавычки намеренно.
-# shellcheck disable=SC2016
-"$ROOT/scripts/integration_stack.sh" backend:smoke -- bash -c \
-  'set -e
-   (cd "$1/backend" && poetry run python scripts/seed_scheme_vehicles.py &&
-    poetry run python scripts/e2e_support.py seed)
-   (cd "$1/backend" && poetry run python scripts/e2e_support.py answer) & answer=$!
-   cd "$1/mobile" && flutter test integration_test -d "$2" --dart-define=API_BASE_URL="$API_BASE_URL" \
-     --dart-define=E2E_PHONE="$E2E_PHONE" --dart-define=E2E_SCHEME_PHONE="$E2E_SCHEME_PHONE" \
-     --dart-define=E2E_SUPPORT_PHONE="$E2E_SUPPORT_PHONE" --dart-define=E2E_CODE="$E2E_CODE"
-   wait "$answer"' _ "$ROOT" "$DEVICE"
+"$ROOT/scripts/integration_stack.sh" backend:smoke -- "$ROOT/mobile/scripts/e2e_ui_tests.sh" "$DEVICE"

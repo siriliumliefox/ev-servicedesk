@@ -1,0 +1,109 @@
+name: mobile-ui-e2e
+
+# UI E2E мобильного клиента в CI (глава 23, ADR 0027 п. 4): integration_test на Android-эмуляторе ubuntu-раннера
+# (KVM) против стека backend на том же раннере — эмулятор ходит к стеку по 10.0.2.2, presigned URL MinIO
+# подписываются для 10.0.2.2:19000. Тесты те же, что в iOS Simulator (mobile/scripts/e2e_ui.sh): регистрация →
+# авто → карточка, схема агрегатов (5 тестовых авто), обучение → дерево → тикет с фото → чат, центр уведомлений.
+# Шаги внутри стека — mobile/scripts/e2e_ui_tests.sh. Образ backend — собранный здесь (`ci.yml`, изменения
+# mobile/) или опубликованный по digest (`regression.yml`, input `image`).
+
+on:
+  workflow_call:
+    inputs:
+      image:
+        description: "Образ backend (ghcr.io/…@sha256:…); пусто — собрать из исходников"
+        default: ""
+        type: string
+      ref:
+        description: "Коммит для checkout; пусто — коммит события"
+        default: ""
+        type: string
+
+# Права — от вызывающего workflow: для опубликованного образа ему нужен `packages: read` (regression.yml).
+
+jobs:
+  android-ui-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: KVM для эмулятора
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Poetry
+        run: pipx install poetry==2.5.1
+
+      - name: Configure Poetry (venv in project)
+        run: poetry config virtualenvs.in-project true
+
+      - name: Cache venv
+        uses: actions/cache@v4
+        with:
+          path: backend/.venv
+          key: poetry-${{ runner.os }}-${{ hashFiles('backend/poetry.lock') }}
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: poetry install --no-interaction
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: "stable"
+
+      - name: Flutter dependencies
+        working-directory: mobile
+        run: flutter pub get
+
+      - uses: docker/setup-buildx-action@v3
+        if: inputs.image == ''
+
+      - uses: docker/build-push-action@v6
+        if: inputs.image == ''
+        with:
+          context: ./backend
+          load: true
+          tags: backend:integration
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Опубликованный образ backend
+        if: inputs.image != ''
+        env:
+          IMAGE: ${{ inputs.image }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "$GH_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker pull "$IMAGE"
+          docker tag "$IMAGE" backend:integration
+
+      # Сборка APK до эмулятора — сам прогон короче и не упирается в таймаут загрузки эмулятора.
+      - name: Сборка debug APK
+        working-directory: mobile
+        run: flutter build apk --debug
+
+      - name: Эмулятор, стек backend и integration_test
+        uses: reactivecircus/android-emulator-runner@v2
+        env:
+          INTEGRATION_S3_PUBLIC: http://10.0.2.2:19000
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: scripts/integration_stack.sh backend:integration -- mobile/scripts/e2e_ui_tests.sh emulator-5554 10.0.2.2

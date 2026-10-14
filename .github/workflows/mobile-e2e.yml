@@ -6,16 +6,27 @@ name: mobile-e2e
 # клиентский сценарий (Глава 20, ADR 0024 п. 1) — статьи с деревом решений, тикет с фото в MinIO стека,
 # ответ инженера по WebSocket, новости (docs/specs/support_flow.json, backend/scripts/e2e_support.py).
 # Вызывается из ci.yml при изменениях mobile/ или backend/: изменение backend может сломать клиент.
-# UI E2E (integration_test в iOS Simulator) — локально, mobile/scripts/e2e_ui.sh: на macOS-раннерах нет Docker.
+# UI E2E (integration_test) — mobile-ui-e2e.yml на Android-эмуляторе (глава 23) и локально в iOS Simulator.
 
 on:
   workflow_call:
+    inputs:
+      image:
+        description: "Образ backend (ghcr.io/…@sha256:…, regression.yml); пусто — собрать из исходников"
+        default: ""
+        type: string
+      ref:
+        description: "Коммит для checkout; пусто — коммит события"
+        default: ""
+        type: string
 
 jobs:
   api-e2e:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
 
       - uses: actions/setup-python@v5
         with:
@@ -46,14 +57,26 @@ jobs:
         run: flutter pub get
 
       - uses: docker/setup-buildx-action@v3
+        if: inputs.image == ''
 
       - uses: docker/build-push-action@v6
+        if: inputs.image == ''
         with:
           context: ./backend
           load: true
           tags: backend:integration
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Опубликованный образ backend
+        if: inputs.image != ''
+        env:
+          IMAGE: ${{ inputs.image }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "$GH_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker pull "$IMAGE"
+          docker tag "$IMAGE" backend:integration
 
       - name: Стек backend, сценарий backend, 5 тестовых авто, статьи поддержки и E2E клиента
         run: >-

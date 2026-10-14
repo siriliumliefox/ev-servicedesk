@@ -12,6 +12,8 @@ name: cd-staging
 #     backend:staging-<git_sha> перетегируется в backend:staging
 #     (scripts/rollback-staging.sh).
 # Запуск разрешён только из develop (и окружение staging принимает только develop).
+# После сборки — полный regression-набор на опубликованном образе и артефактах web (глава 23, ADR 0027 п. 5,
+# regression.yml); на откате не запускается — откатываются на коммит, уже прошедший regression.
 
 on:
   push:
@@ -26,6 +28,13 @@ on:
       - "docker-compose.yml"   # образ MinIO smoke-теста (x-minio-image), интеграционный стек
       - "docker-compose.integration.yml"
       - ".github/workflows/cd-staging.yml"
+      # Regression (глава 23): каждый коммит develop с клиентом или тестами получает образ staging-<sha>.
+      - "mobile/**"
+      - "system-e2e/**"
+      - ".github/workflows/regression.yml"
+      - ".github/workflows/web-e2e.yml"
+      - ".github/workflows/mobile-e2e.yml"
+      - ".github/workflows/mobile-ui-e2e.yml"
   workflow_dispatch:
     inputs:
       git_sha:
@@ -35,6 +44,7 @@ on:
 permissions:
   contents: read
   packages: write
+  actions: read   # regression.yml: артефакты web этого прогона
 
 concurrency:
   group: cd-staging
@@ -196,3 +206,11 @@ jobs:
           echo "  1) подтянет ghcr.io/${GITHUB_REPOSITORY,,}/backend:staging (= staging-$SHA)"
           echo "  2) перезапустит backend-сервис"
           echo "  3) выложит web-engineer-staging-$SHA / web-admin-staging-$SHA (артефакты сборки)"
+
+  regression:
+    needs: [build-backend-image, build-web]
+    if: github.ref == 'refs/heads/develop' && (github.event_name == 'push' || inputs.git_sha == '')
+    uses: ./.github/workflows/regression.yml
+    with:
+      git_sha: ${{ github.sha }}
+      artifacts_run_id: ${{ github.run_id }}

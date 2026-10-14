@@ -9,13 +9,18 @@
   reply    — ответ инженера в чат тикета: взять в работу (или переназначить) и написать;
              --status resolved — затем решить тикет (push «Статус обращения»);
   answer   — для UI E2E (mobile/scripts/e2e_ui.sh): дождаться нового тикета из дерева решений,
-             ответить в чат и опубликовать новость и акцию (клиент к этому времени уже есть).
+             ответить в чат и опубликовать новость и акцию (клиент к этому времени уже есть);
+  notify   — центр уведомлений (глава 23, ADR 0027 п. 15: E2E-11, E2E-12): клиент
+             E2E_NOTIFY_PHONE с Zeekr 001, у которого подходит замена масла редуктора, —
+             напоминание о ТО (worker напоминаний) и уведомление о прошивке версии из таблицы;
+             клиент потом входит в приложение.
 
   cd backend && poetry run python scripts/e2e_support.py seed
   cd backend && poetry run python scripts/e2e_support.py reply --ticket 12
 
 Окружение: API_BASE_URL, E2E_JOB_RUNNER (префикс разовой задачи в контейнере стека — CLI
-администратора). Каждый ответ сверяется с docs/openapi.yaml (как e2e_backend.py).
+администратора, worker напоминаний); для notify — E2E_NOTIFY_PHONE и E2E_CODE. Каждый ответ
+сверяется с docs/openapi.yaml (как e2e_backend.py).
 """
 
 import argparse
@@ -23,10 +28,22 @@ import json
 import os
 import sys
 import time
+from datetime import date
 from pathlib import Path
 from typing import Any
 
-from e2e_backend import Api, Failed, Headers, Jobs, bootstrap_admin, check, create_engineer
+from e2e_backend import (
+    Api,
+    Failed,
+    Headers,
+    Jobs,
+    bootstrap_admin,
+    check,
+    create_engineer,
+    due_soon_vehicle,
+    register_client,
+    zeekr_regulation,
+)
 
 TABLE = Path(__file__).resolve().parents[2] / "docs" / "specs" / "support_flow.json"
 
@@ -132,6 +149,31 @@ def answer(api: Api, admin: Headers, table: dict[str, Any], timeout: int) -> Non
     check(False, f"за {timeout} с не появился тикет «{title}…»")
 
 
+def notify(
+    api: Api, admin: Headers, jobs: Jobs, table: dict[str, Any], phone: str, code: str
+) -> None:
+    """Клиент с напоминанием о ТО и уведомлением о прошивке в ленте — до входа в приложение."""
+    data = table["notifications"]
+    client = register_client(api, phone, code)
+    model_id = zeekr_regulation(api, admin)
+    vehicle_id = due_soon_vehicle(api, admin, client, date.today())
+    jobs.run("python", "-m", "app.workers.maintenance_reminders")
+    body = {
+        "vehicle_model_id": model_id,
+        "version": data["firmware_version"],
+        "released_at": str(date.today()),
+    }
+    api.json("POST", "/firmware-releases", 201, headers=admin, json=body)
+    feed = api.json("GET", "/notifications", headers=client.headers)["items"]
+    kinds = {n["type"] for n in feed if n["type"] == "firmware" or n["vehicle_id"] == vehicle_id}
+    check(
+        kinds >= {"maintenance", "firmware"}, f"в ленте клиента нет напоминания и прошивки: {kinds}"
+    )
+    print(
+        f"PASS  клиент с авто №{vehicle_id}: напоминание о ТО и прошивка {data['firmware_version']}"
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -143,23 +185,30 @@ def main(argv: list[str] | None = None) -> int:
     reply_args.add_argument("--status", choices=["in_progress", "waiting_vendor", "resolved"])
     answer_args = sub.add_parser("answer")
     answer_args.add_argument("--timeout", type=int, default=600)
+    sub.add_parser("notify")
     args = parser.parse_args(argv)
 
     env = os.environ
-    missing = [n for n in ("API_BASE_URL", "E2E_JOB_RUNNER") if not env.get(n)]
+    names = ["API_BASE_URL", "E2E_JOB_RUNNER"]
+    if args.command == "notify":
+        names += ["E2E_NOTIFY_PHONE", "E2E_CODE"]
+    missing = [n for n in names if not env.get(n)]
     if missing:
         print(f"Нужны {', '.join(missing)} — запускается из scripts/integration_stack.sh")
         return 2
     api = Api(env["API_BASE_URL"])
     table = load_table()
     try:
-        admin = bootstrap_admin(api, Jobs(env["E2E_JOB_RUNNER"]))
+        jobs = Jobs(env["E2E_JOB_RUNNER"])
+        admin = bootstrap_admin(api, jobs)
         if args.command == "seed":
             seed(api, admin, table)
         elif args.command == "publish":
             publish(api, admin, table)
         elif args.command == "answer":
             answer(api, admin, table, args.timeout)
+        elif args.command == "notify":
+            notify(api, admin, jobs, table, env["E2E_NOTIFY_PHONE"], env["E2E_CODE"])
         else:
             text = args.text or table["engineer_reply"]
             reply(api, admin, args.ticket, text, args.status)
