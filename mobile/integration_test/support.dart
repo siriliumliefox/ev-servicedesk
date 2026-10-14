@@ -32,19 +32,18 @@ Future<void> tapLikeUser(WidgetTester tester, Finder finder) async {
   await tester.tap(finder);
 }
 
-/// Запросить SMS-код. Если номер только что запрашивал код (seed стека), сервер отклоняет повтор раньше 60 с
-/// (429) — подождать и повторить, пока не появится поле кода.
+/// Запросить SMS-код номером, которому seed только что запрашивал код: сервер отклоняет повтор раньше 60 с (429,
+/// «Слишком много попыток») — один раз подождать и повторить. Ждём ответ сервера, а не таймаут: на медленном
+/// эмуляторе запрос идёт дольше, и кнопка в это время показывает индикатор вместо текста.
 Future<void> requestCode(WidgetTester tester, String phone) async {
+  await waitFor(tester, find.text('Получить код'));
   await tester.enterText(find.byKey(const Key('phone')), phone.substring(4));
-  final end = DateTime.now().add(const Duration(seconds: 100));
-  while (true) {
+  final codeField = find.byKey(const Key('code'));
+  for (var attempt = 0;; attempt++) {
     await tapLikeUser(tester, find.text('Получить код'));
-    try {
-      await waitForAny(tester, [find.byKey(const Key('code'))], timeout: const Duration(seconds: 10));
-      return;
-    } on TestFailure {
-      if (DateTime.now().isAfter(end)) rethrow;
-      await Future<void>.delayed(const Duration(seconds: 15));
-    }
+    final shown = await waitForAny(tester, [codeField, find.textContaining('Слишком много попыток')]);
+    if (shown == codeField) return;
+    expect(attempt, 0, reason: 'пауза между запросами кода — один раз');
+    await Future<void>.delayed(const Duration(seconds: 61));
   }
 }

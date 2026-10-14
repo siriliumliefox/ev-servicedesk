@@ -32,7 +32,6 @@ void main() {
     await tester.pumpWidget(EvServiceDeskApp(repository: await createRepository()));
 
     // Вход клиентом, которого завёл e2e_support.py notify: авто уже есть — сразу главный экран.
-    await waitFor(tester, find.text('Получить код'));
     await requestCode(tester, _phone); // seed только что запрашивал код этого номера
     await tester.enterText(find.byKey(const Key('code')), _code);
     await tapLikeUser(tester, find.descendant(of: find.byKey(const Key('consent')), matching: find.byType(Checkbox)));

@@ -16,18 +16,9 @@ import 'support.dart';
 const _phone = String.fromEnvironment('E2E_SCHEME_PHONE');
 const _code = String.fromEnvironment('E2E_CODE');
 
-/// Вход тестовым номером; seed только что запрашивал код этого номера — при паузе между запросами (429) ждём.
+/// Вход тестовым номером (seed только что запрашивал код — `requestCode` переждёт паузу между запросами).
 Future<void> _signIn(WidgetTester tester) async {
-  await waitFor(tester, find.text('Получить код'));
-  await tester.enterText(find.byKey(const Key('phone')), _phone.substring(4));
-  final codeField = find.byKey(const Key('code'));
-  for (var attempt = 0;; attempt++) {
-    await tapLikeUser(tester, find.text('Получить код'));
-    final shown = await waitForAny(tester, [codeField, find.textContaining('Слишком много попыток')]);
-    if (shown == codeField) break;
-    expect(attempt, 0, reason: 'пауза между запросами кода — один раз');
-    await Future<void>.delayed(const Duration(seconds: 61));
-  }
+  await requestCode(tester, _phone);
   await tester.enterText(find.byKey(const Key('code')), _code);
   await tapLikeUser(tester, find.descendant(of: find.byKey(const Key('consent')), matching: find.byType(Checkbox)));
   await tapLikeUser(tester, find.text('Войти'));
