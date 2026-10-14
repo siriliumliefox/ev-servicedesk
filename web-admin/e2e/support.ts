@@ -2,7 +2,7 @@
 // вход администратора через экран входа и проверки «со стороны» — запросы к API от клиента и сотрудников:
 // изменение в админ-панели проверяется по тому, что видит клиент, а не по экрану самой панели.
 import { readFileSync } from 'node:fs'
-import { expect, type Page } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
 import { aggregateStatus, submitLogin } from '@ev-servicedesk/web-shared/e2e'
 
 export { api, staffLoginStatus, staffToken } from '@ev-servicedesk/web-shared/e2e'
@@ -15,7 +15,6 @@ export interface Staff {
 
 export interface Seed {
   admin: Staff
-  engineers: Staff[]
   client: {
     access_token: string
     vehicle_id: number
@@ -25,7 +24,18 @@ export interface Seed {
     interval_km: number
     mileage: number
   }
-  ticket_id: number
+  /** Наборы сценария «пользователи» по браузеру: chromium — 0, firefox — 1, webkit — 2 (seed --sets 3). */
+  user_sets: { engineers: [Staff, Staff]; ticket_id: number }[]
+}
+
+const PROJECTS = ['chromium', 'firefox', 'webkit']
+
+/** Набор «пользователи» текущего браузера: сценарий меняет данные (блокировка, сброс пароля). */
+export function usersFor(seed: Seed): Seed['user_sets'][number] {
+  const index = PROJECTS.indexOf(test.info().project.name)
+  const set = seed.user_sets[index]
+  if (!set) throw new Error(`Нет набора «пользователи» для ${test.info().project.name}: seed --sets ${index + 1}`)
+  return set
 }
 
 export function loadSeed(): Seed {

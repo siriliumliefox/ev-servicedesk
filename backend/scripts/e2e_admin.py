@@ -3,7 +3,10 @@
 
 На работающем стеке (scripts/integration_stack.sh — окружение команды после «--»):
 
-  seed --out FILE  — администратор (вход в админ-панель), два инженера (у первого — тикет в работе),
+  seed --out FILE [--sets N]
+                     администратор (вход в админ-панель), наборы «пользователи» по браузеру
+                     (глава 23: сценарий меняет данные — блокировка, сброс пароля): в каждом два
+                     инженера, у первого — тикет в работе;
                      клиент E2E_ADMIN_PHONE с Zeekr 001 и регламентом салонного фильтра 20 000 км
                      (замена при 0 км, пробег 10 000 — статус «зелёный»), контрольный набор
                      аналитики (март 2026, docs/ANALYTICS_CONTROL.md) и обновлённая витрина.
@@ -136,17 +139,24 @@ def analytics_control(jobs: Jobs, compose: str) -> None:
     jobs.run("python", "-m", "app.workers.analytics", "--once")
 
 
-def seed(api: Api, jobs: Jobs, compose: str, phone: str, code: str) -> dict[str, Any]:
+def user_set(api: Api, admin: Headers, client: Headers, vehicle_id: int) -> dict[str, Any]:
+    """Два инженера, у первого — тикет клиента: сценарий «пользователи» одного браузера."""
+    engineers = [staff_account(api, admin, "engineer") for _ in range(2)]
+    ticket = engineer_ticket(api, client, vehicle_id, engineers[0])
+    return {"engineers": engineers, "ticket_id": ticket}
+
+
+def seed(api: Api, jobs: Jobs, compose: str, phone: str, code: str, sets: int) -> dict[str, Any]:
     admin_headers, admin = bootstrap_admin_account(api, jobs)
-    engineers = [staff_account(api, admin_headers, "engineer") for _ in range(2)]
     client = client_car(api, admin_headers, phone, code)
-    ticket = engineer_ticket(api, client.pop("headers"), client["vehicle_id"], engineers[0])
+    headers = client.pop("headers")
+    user_sets = [user_set(api, admin_headers, headers, client["vehicle_id"]) for _ in range(sets)]
     analytics_control(jobs, compose)
     print(
-        f"PASS  администратор, инженеров: {len(engineers)}, клиент с авто №{client['vehicle_id']} "
-        f"({client['model_label']}), тикет №{ticket} у инженера, контрольный набор загружен"
+        f"PASS  администратор, наборов «пользователи»: {len(user_sets)}, клиент с авто "
+        f"№{client['vehicle_id']} ({client['model_label']}), контрольный набор загружен"
     )
-    return {"admin": admin, "engineers": engineers, "client": client, "ticket_id": ticket}
+    return {"admin": admin, "client": client, "user_sets": user_sets}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -154,6 +164,9 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     seed_args = sub.add_parser("seed")
     seed_args.add_argument("--out", type=Path, required=True)
+    seed_args.add_argument(
+        "--sets", type=int, default=1, help="наборы «пользователи» — по браузеру"
+    )
     args = parser.parse_args(argv)
 
     env = os.environ
@@ -170,6 +183,7 @@ def main(argv: list[str] | None = None) -> int:
             env["E2E_COMPOSE"],
             env["E2E_ADMIN_PHONE"],
             env["E2E_CODE"],
+            args.sets,
         )
     except Failed as exc:
         print(f"FAIL  {exc}")

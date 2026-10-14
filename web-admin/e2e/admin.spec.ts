@@ -4,7 +4,7 @@
 // дашборда — с ручным расчётом контрольного набора (docs/ANALYTICS_CONTROL.md, март 2026). Пользователи,
 // публикация и статья проверяются по API со стороны сотрудника и клиента.
 import { expect, test, type Page } from '@playwright/test'
-import { api, clientStatus, kpi, loadSeed, signIn, signInAdmin, staffLoginStatus, staffToken } from './support.ts'
+import { api, clientStatus, kpi, loadSeed, signIn, signInAdmin, staffLoginStatus, staffToken, usersFor } from './support.ts'
 
 const seed = loadSeed()
 
@@ -25,7 +25,7 @@ async function revise(page: Page, km: number) {
 }
 
 test('вход: инженеру — отказ, администратору — админ-панель', async ({ page }) => {
-  await signIn(page, seed.engineers[1])
+  await signIn(page, usersFor(seed).engineers[1])
   await expect(page.getByRole('alert')).toHaveText('Админ-панель — только для администраторов. Инженер работает в кабинете инженера.')
   await signInAdmin(page, seed)
   await expect(page.getByText(`Администратор ${seed.admin.phone}`)).toBeVisible()
@@ -79,7 +79,7 @@ test('дашборд совпадает с ручным расчётом кон�
 })
 
 test('пользователи: новый инженер входит; переназначение тикета; сброс пароля и блокировка', async ({ page }) => {
-  const [first, second] = seed.engineers
+  const { engineers: [first, second], ticket_id: ticketId } = usersFor(seed)
   await signInAdmin(page, seed)
   await page.getByRole('link', { name: 'Пользователи' }).click()
 
@@ -95,11 +95,11 @@ test('пользователи: новый инженер входит; пере
   await page.getByLabel('Поиск по телефону').fill(first.phone)
   await page.getByRole('link', { name: first.phone }).click()
   const tickets = page.getByRole('region', { name: 'Нерешённые тикеты сотрудника' })
-  await tickets.getByLabel(`Кому: тикет #${seed.ticket_id}`).selectOption({ label: second.phone })
+  await tickets.getByLabel(`Кому: тикет #${ticketId}`).selectOption({ label: second.phone })
   await tickets.getByRole('button', { name: 'Переназначить' }).click()
   await expect(tickets.getByText('Нерешённых тикетов нет')).toBeVisible()
   const admin = await staffToken(seed.admin)
-  const ticket = await api<{ assigned_engineer_id: number }>('GET', `/tickets/${seed.ticket_id}`, admin)
+  const ticket = await api<{ assigned_engineer_id: number }>('GET', `/tickets/${ticketId}`, admin)
   expect(ticket.assigned_engineer_id).toBe(second.id)
 
   // Сброс пароля: прежний не подходит, новый — да.
