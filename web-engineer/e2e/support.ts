@@ -1,7 +1,7 @@
 // Опора E2E главы 21: данные стека (backend/scripts/e2e_engineer.py seed), клиент по API и его
 // WebSocket — «синхронизация у клиента в реальном времени» проверяется по событиям, которые получил клиент.
 import { readFileSync } from 'node:fs'
-import { expect, test, type Locator, type Page } from '@playwright/test'
+import { expect, type Locator, type Page } from '@playwright/test'
 import { api, guardCsp, submitLogin, type Account } from '@ev-servicedesk/web-shared/e2e'
 
 /** Тикеты одного браузера (клиент создаёт не больше 10 тикетов в час — их заводит seed, а не тест). */
@@ -25,17 +25,8 @@ export interface Seed {
   }
   quick_reply_title: string
   tickets: number[]
+  /** Тикеты по браузеру — `forBrowser` (seed --sets 3). */
   e2e_sets: E2ESet[]
-}
-
-const PROJECTS = ['chromium', 'firefox', 'webkit']
-
-/** Набор тикетов текущего браузера: chromium — 0, firefox — 1, webkit — 2 (seed --e2e-sets 3). */
-export function ticketsFor(seed: Seed): E2ESet {
-  const index = PROJECTS.indexOf(test.info().project.name)
-  const set = seed.e2e_sets[index]
-  if (!set) throw new Error(`Нет набора тикетов для ${test.info().project.name}: seed --e2e-sets ${index + 1}`)
-  return set
 }
 
 export function loadSeed(): Seed {

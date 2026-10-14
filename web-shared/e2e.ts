@@ -46,6 +46,18 @@ export async function aggregateStatus(clientToken: string, vehicleId: number, co
   return items.find((s) => s.aggregate_type_code === code)?.status ?? "нет агрегата";
 }
 
+/**
+ * Данные текущего браузера. Набор, который меняет общие данные стека (блокировка, взятие тикета, замена агрегата),
+ * получает от seed по элементу на каждый проект Playwright (`--sets N`) — в порядке `projects` конфига.
+ */
+export function forBrowser<T>(sets: readonly T[], what: string): T {
+  const { project, config } = test.info();
+  const index = config.projects.findIndex((p) => p.name === project.name);
+  const set = sets[index];
+  if (set === undefined) throw new Error(`Нет данных «${what}» для ${project.name}: seed --sets ${index + 1}`);
+  return set;
+}
+
 /** Нарушения CSP страниц под `guardCsp` — проверяются после каждого теста. */
 const violations: string[] = [];
 

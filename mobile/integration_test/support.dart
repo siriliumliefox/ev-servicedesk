@@ -18,15 +18,10 @@ Future<Finder> waitForAny(WidgetTester tester, List<Finder> finders,
 Future<void> waitFor(WidgetTester tester, Finder finder) => waitForAny(tester, [finder]);
 
 /// Тап как у пользователя: клавиатура скрыта, элемент прокручен в видимую область (на симуляторе клавиатура
-/// настоящая и закрывает кнопки внизу экрана). Элемент длинного списка за кэшем ListView ещё не построен (низкий
-/// экран Android-эмулятора, глава 23) — список прокручивается, пока он не появится.
+/// настоящая и закрывает кнопки внизу экрана). Элемент должен быть построен — в длинном списке сначала `revealIn`.
 Future<void> tapLikeUser(WidgetTester tester, Finder finder) async {
   FocusManager.instance.primaryFocus?.unfocus();
   await tester.pump(const Duration(milliseconds: 500));
-  if (finder.evaluate().isEmpty) {
-    final list = find.byWidgetPredicate((w) => w is Scrollable && axisDirectionToAxis(w.axisDirection) == Axis.vertical);
-    await tester.scrollUntilVisible(finder, 200, scrollable: list.first);
-  }
   await tester.ensureVisible(finder);
   await tester.pump(const Duration(milliseconds: 300));
   await tester.tap(finder);
@@ -46,4 +41,12 @@ Future<void> requestCode(WidgetTester tester, String phone) async {
     expect(attempt, 0, reason: 'пауза между запросами кода — один раз');
     await Future<void>.delayed(const Duration(seconds: 61));
   }
+}
+
+/// Прокрутить список экрана `screen`, пока не построится `finder`: элемент ленивого ListView за его кэшем ещё не
+/// создан (форма длиннее экрана — низкий экран Android-эмулятора, глава 23).
+Future<void> revealIn(WidgetTester tester, Finder screen, Finder finder) async {
+  if (finder.evaluate().isNotEmpty) return;
+  final list = find.descendant(of: screen, matching: find.byType(Scrollable)).first;
+  await tester.scrollUntilVisible(finder, 200, scrollable: list);
 }

@@ -4,7 +4,8 @@
 // дашборда — с ручным расчётом контрольного набора (docs/ANALYTICS_CONTROL.md, март 2026). Пользователи,
 // публикация и статья проверяются по API со стороны сотрудника и клиента.
 import { expect, test, type Page } from '@playwright/test'
-import { api, clientStatus, kpi, loadSeed, signIn, signInAdmin, staffLoginStatus, staffToken, usersFor } from './support.ts'
+import { forBrowser } from '@ev-servicedesk/web-shared/e2e'
+import { api, clientStatus, kpi, loadSeed, signIn, signInAdmin, staffLoginStatus, staffToken } from './support.ts'
 
 const seed = loadSeed()
 
@@ -25,7 +26,7 @@ async function revise(page: Page, km: number) {
 }
 
 test('вход: инженеру — отказ, администратору — админ-панель', async ({ page }) => {
-  await signIn(page, usersFor(seed).engineers[1])
+  await signIn(page, forBrowser(seed.user_sets, 'пользователи').engineers[1])
   await expect(page.getByRole('alert')).toHaveText('Админ-панель — только для администраторов. Инженер работает в кабинете инженера.')
   await signInAdmin(page, seed)
   await expect(page.getByText(`Администратор ${seed.admin.phone}`)).toBeVisible()
@@ -79,7 +80,7 @@ test('дашборд совпадает с ручным расчётом кон�
 })
 
 test('пользователи: новый инженер входит; переназначение тикета; сброс пароля и блокировка', async ({ page }) => {
-  const { engineers: [first, second], ticket_id: ticketId } = usersFor(seed)
+  const { engineers: [first, second], ticket_id: ticketId } = forBrowser(seed.user_sets, 'пользователи')
   await signInAdmin(page, seed)
   await page.getByRole('link', { name: 'Пользователи' }).click()
 
