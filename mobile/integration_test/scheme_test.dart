@@ -35,11 +35,12 @@ Future<void> _signIn(WidgetTester tester) async {
 
 /// Схема нового авто: на медленном Android-эмуляторе статусы грузятся дольше, а экран после переключения может
 /// остаться прокрученным вниз (схема вверху не построена) — ждём до 60 с, возвращая экран к началу.
-Future<void> _waitForScheme(WidgetTester tester, Finder screen, Finder zone) async {
+/// `lists` — без `.first`: пока авто загружается, списка на экране нет.
+Future<void> _waitForScheme(WidgetTester tester, Finder lists, Finder zone) async {
   final end = DateTime.now().add(const Duration(seconds: 60));
   while (zone.evaluate().isEmpty) {
     if (DateTime.now().isAfter(end)) throw TestFailure('Не дождались схемы: $zone');
-    if (screen.evaluate().isNotEmpty) await tester.fling(screen, const Offset(0, 600), 2000);
+    if (lists.evaluate().isNotEmpty) await tester.fling(lists.first, const Offset(0, 600), 2000);
     await tester.pump(const Duration(seconds: 1));
   }
 }
@@ -73,8 +74,9 @@ void main() {
           if (aggregateSchemePositions.containsKey(s.aggregateTypeCode)) s
       ];
       // Экран «Авто» — ленивый ListView: схема вверху, строки списка строятся при прокрутке к ним.
-      final screen = find.descendant(of: find.byType(RefreshIndicator), matching: find.byType(Scrollable)).first;
-      await _waitForScheme(tester, screen, find.byKey(Key('zone-${onScheme.first.aggregateTypeCode}')));
+      final lists = find.descendant(of: find.byType(RefreshIndicator), matching: find.byType(Scrollable));
+      await _waitForScheme(tester, lists, find.byKey(Key('zone-${onScheme.first.aggregateTypeCode}')));
+      final screen = lists.first;
 
       for (final s in onScheme) {
         final expected = '${s.aggregateTypeName}: ${s.status.label}';
