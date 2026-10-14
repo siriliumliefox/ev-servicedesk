@@ -9,15 +9,11 @@
 # redact и проверяются на утечку. Стек удаляется при выходе (тома тоже).
 # Нужны: docker compose ≥ 2.24 (!reset), poetry-окружение backend (dev-зависимости).
 # Запуск: scripts/integration_stack.sh <образ> [-- команда]   (например backend:smoke)
-# Команда после «--» выполняется на том же стеке после сценария backend (глава 18, ADR 0022 п. 2:
-# E2E мобильного клиента) с окружением API_BASE_URL, E2E_PHONE, E2E_CODE — свой тестовый номер,
-# не тот, что блокирует сценарий backend; E2E_SCHEME_PHONE — номер клиента 5 тестовых авто схемы
-# агрегатов, E2E_JOB_RUNNER — префикс разовой задачи в контейнере API (глава 19, ADR 0023 п. 7),
-# E2E_SUPPORT_PHONE — клиент сценария главы 20 (ADR 0024 п. 1); E2E_WEB_PHONE — клиент сценария веб-кабинета
-# инженера главы 21 (ADR 0025 п. 14); E2E_ADMIN_PHONE — клиент сценария админ-панели главы 22, E2E_COMPOSE —
-# префикс docker compose стека: разовый контейнер с каталогом тестов (контрольный набор аналитики, ADR 0026 п. 14);
-# E2E_SYSTEM_PHONE и E2E_SYSTEM_PHONE_Y — клиенты X и Y межролевых сценариев главы 23 (ADR 0027 п. 8);
-# E2E_NOTIFY_PHONE — клиент центра уведомлений мобильного UI E2E главы 23 (ADR 0027 п. 15).
+# Команда после «--» выполняется на том же стеке после сценария backend (глава 18, ADR 0022 п. 2) с окружением:
+# API_BASE_URL, E2E_CODE — код тестовых номеров, E2E_JOB_RUNNER — префикс разовой задачи в контейнере API
+# (глава 19, ADR 0023 п. 7), E2E_COMPOSE — префикс docker compose стека (разовый контейнер с каталогом тестов,
+# ADR 0026 п. 14), и тестовые номера клиентов наборов — CLIENT_PHONES ниже (у каждого набора свой номер, не тот,
+# что блокирует сценарий backend).
 # Глава 20 (ADR 0024 п. 2, 5): MinIO открыт на INTEGRATION_S3_PORT (19000), presigned URL подписываются
 # для INTEGRATION_S3_PUBLIC (по умолчанию http://127.0.0.1:19000; iPhone — http://<mac>.local:19000).
 # FCM_SERVICE_ACCOUNT_FILE — JSON-ключ Firebase (scripts/firebase_dev_setup.sh): настоящий push вместо
@@ -37,15 +33,20 @@ PROJECT="ev-integration-$$"
 PORT="${INTEGRATION_PORT:-18080}"
 S3_PORT="${INTEGRATION_S3_PORT:-19000}"
 S3_PUBLIC="${INTEGRATION_S3_PUBLIC:-http://127.0.0.1:$S3_PORT}"
-E2E_PHONE="+375290009001"  # тестовый номер стека: SMS не отправляется (ADR 0021 п. 6)
-CLIENT_E2E_PHONE="+375290009002"  # тестовый номер для команды после «--» (ADR 0022 п. 2)
-SCHEME_E2E_PHONE="+375290009003"  # клиент 5 тестовых авто схемы агрегатов (ADR 0023 п. 7)
-SUPPORT_E2E_PHONE="+375290009004"  # клиентский сценарий главы 20: дерево → тикет → чат (ADR 0024 п. 1)
-WEB_E2E_PHONE="+375290009005"  # клиент сценария веб-кабинета инженера главы 21 (ADR 0025 п. 14)
-ADMIN_E2E_PHONE="+375290009006"  # клиент сценария админ-панели главы 22 (ADR 0026 п. 15)
-SYSTEM_E2E_PHONE="+375290009007"  # клиент X межролевых сценариев главы 23 (ADR 0027 п. 8)
-SYSTEM_E2E_PHONE_Y="+375290009008"  # клиент Y другой модели — таргетинг прошивки (ADR 0027 п. 15)
-NOTIFY_E2E_PHONE="+375290009009"  # клиент центра уведомлений: напоминание о ТО и прошивка (ADR 0027 п. 15)
+# Тестовые номера: SMS не отправляется, код — E2E_CODE (ADR 0021 п. 6). E2E_PHONE — сценарий backend.
+E2E_PHONE="+375290009001"
+CLIENT_PHONES=(
+  E2E_PHONE=+375290009002           # E2E мобильного клиента (ADR 0022 п. 2)
+  E2E_SCHEME_PHONE=+375290009003    # 5 тестовых авто схемы агрегатов (ADR 0023 п. 7)
+  E2E_SUPPORT_PHONE=+375290009004   # клиентский сценарий главы 20: дерево → тикет → чат (ADR 0024 п. 1)
+  E2E_WEB_PHONE=+375290009005       # клиент веб-кабинета инженера главы 21 (ADR 0025 п. 14)
+  E2E_ADMIN_PHONE=+375290009006     # клиент админ-панели главы 22 (ADR 0026 п. 15)
+  E2E_SYSTEM_PHONE=+375290009007    # клиент X межролевых сценариев главы 23 (ADR 0027 п. 8)
+  E2E_SYSTEM_PHONE_Y=+375290009008  # клиент Y другой модели — таргетинг прошивки (ADR 0027 п. 15)
+  E2E_NOTIFY_PHONE=+375290009009    # центр уведомлений: напоминание о ТО и прошивка (ADR 0027 п. 15)
+)
+TEST_PHONES="$E2E_PHONE"
+for pair in "${CLIENT_PHONES[@]}"; do TEST_PHONES+=",${pair#*=}"; done
 
 ENV_FILE="$(mktemp)"
 chmod 600 "$ENV_FILE"
@@ -59,7 +60,7 @@ cat >"$ENV_FILE" <<EOF
 JWT_SECRET=$JWT_SECRET
 SMS_CODE_SECRET=$SMS_CODE_SECRET
 SMS_PROVIDER=fake
-SMS_TEST_PHONES=$E2E_PHONE,$CLIENT_E2E_PHONE,$SCHEME_E2E_PHONE,$SUPPORT_E2E_PHONE,$WEB_E2E_PHONE,$ADMIN_E2E_PHONE,$SYSTEM_E2E_PHONE,$SYSTEM_E2E_PHONE_Y,$NOTIFY_E2E_PHONE
+SMS_TEST_PHONES=$TEST_PHONES
 SMS_TEST_CODE=$E2E_CODE
 EOF
 # Фрагмент закрытого ключа Firebase — для проверки логов на утечку (сам ключ не печатается).
@@ -128,10 +129,8 @@ fi
 # set -o pipefail: код выхода сценария не теряется в пайпе через redact.
 
 if [ "${#EXTRA[@]}" -gt 0 ]; then
-  if (API_BASE_URL="http://127.0.0.1:$PORT" E2E_PHONE="$CLIENT_E2E_PHONE" E2E_CODE="$E2E_CODE" \
-      E2E_SCHEME_PHONE="$SCHEME_E2E_PHONE" E2E_SUPPORT_PHONE="$SUPPORT_E2E_PHONE" E2E_WEB_PHONE="$WEB_E2E_PHONE" E2E_JOB_RUNNER="$JOB_RUNNER" \
-      E2E_ADMIN_PHONE="$ADMIN_E2E_PHONE" E2E_SYSTEM_PHONE="$SYSTEM_E2E_PHONE" E2E_SYSTEM_PHONE_Y="$SYSTEM_E2E_PHONE_Y" \
-      E2E_NOTIFY_PHONE="$NOTIFY_E2E_PHONE" E2E_COMPOSE="$(printf '%q ' "${COMPOSE[@]}")" \
+  if (env API_BASE_URL="http://127.0.0.1:$PORT" E2E_CODE="$E2E_CODE" E2E_JOB_RUNNER="$JOB_RUNNER" \
+      E2E_COMPOSE="$(printf '%q ' "${COMPOSE[@]}")" "${CLIENT_PHONES[@]}" \
       "${EXTRA[@]}" 2>&1 | redact); then
     echo "PASS  ${EXTRA[*]}"
   else

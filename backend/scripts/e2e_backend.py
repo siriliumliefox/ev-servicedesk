@@ -163,15 +163,14 @@ def unblock_test_client(api: Api, admin: Headers, phone: str) -> None:
             api.json("PATCH", f"/users/{user['id']}", headers=admin, json={"is_active": True})
 
 
-def zeekr_regulation(api: Api, admin: Headers) -> int:
+def zeekr_regulation(
+    api: Api, admin: Headers, code: str = AGGREGATE, interval_km: int = INTERVAL_KM
+) -> int:
+    """Регламент агрегата модели Zeekr 001 (пересмотр — новая версия); возвращает id модели."""
     models = api.json("GET", "/vehicle-models", headers=admin, params={"search": "Zeekr"})
     check(models["items"], "модели Zeekr нет в справочнике")
     model_id = models["items"][0]["id"]
-    body = {
-        "vehicle_model_id": model_id,
-        "aggregate_type_code": AGGREGATE,
-        "interval_km": INTERVAL_KM,
-    }
+    body = {"vehicle_model_id": model_id, "aggregate_type_code": code, "interval_km": interval_km}
     api.json("POST", "/maintenance-regulations", 201, headers=admin, json=body)
     return model_id
 

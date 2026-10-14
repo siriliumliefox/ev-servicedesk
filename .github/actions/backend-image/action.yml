@@ -1,0 +1,38 @@
+name: backend-image
+description: >-
+  Образ backend для стека E2E под тегом backend:integration: собранный из исходников (кэш GitHub Actions) или
+  опубликованный в ghcr.io по digest (regression, глава 23, ADR 0027 п. 5 — вызывающему нужен packages: read).
+inputs:
+  image:
+    description: "Опубликованный образ (ghcr.io/…@sha256:…); пусто — собрать из ./backend"
+    default: ""
+runs:
+  using: composite
+  steps:
+    - uses: docker/setup-buildx-action@v3
+      if: inputs.image == ''
+
+    - uses: docker/build-push-action@v6
+      if: inputs.image == ''
+      with:
+        context: ./backend
+        load: true
+        tags: backend:integration
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    - uses: docker/login-action@v3
+      if: inputs.image != ''
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ github.token }}
+
+    - name: Опубликованный образ
+      if: inputs.image != ''
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+      run: |
+        docker pull "$IMAGE"
+        docker tag "$IMAGE" backend:integration

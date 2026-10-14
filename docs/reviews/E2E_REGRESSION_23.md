@@ -78,3 +78,17 @@ Firefox из Playwright 1.63 не запускается на macOS 27 («Could 
 | Исследовательское тестирование X1–X5, B1 проведено, находки заведены | NOT RUN |
 | 3 прогона клиентского сценария главы 20 владельцем на iPhone (ADR 0024 п. 3) | NOT RUN |
 | Подпись владельца: «Принято как RC1» | — |
+
+## Ревью `/thermo-nuclear-code-quality-review` (владелец, 2026-10-14, до merge)
+| # | Находка | Исправление |
+|---|---|---|
+| 1 | `PrototypeRepository.ts` перешёл порог 1000 строк (922 → 1006): авто, статусы и история ТО — внутри класса прототипа | `prototype/garage.ts` (`Garage`: пробег, статусы, история, замена и работа с кодами ошибок backend); в репозитории — проверка прав по тикетам и делегирование; 951 строка |
+| 2 | Прототип отвечал на ошибки замены `VALIDATION_ERROR` с текстом — форма не могла показать ошибку у поля, тексты дублировали `errors.ts` | те же коды и поля, что у backend (`REPLACED_AT_IN_FUTURE`, `PERFORMED_AT_IN_FUTURE`, `MILEAGE_AHEAD_OF_VEHICLE`, `MAINTENANCE_SUBJECT_REQUIRED`); тексты — только по коду (`errors.ts`) |
+| 3 | `MaintenanceForm`: условие `target.code === null` в семи местах, фиктивная цель «другая работа» (имя формы «Другая работа: другая работа»), четыре константы ошибок полей | `aggregate: AggregateRef \| null`; таблица `FIELD_OF` (код ошибки → поле); варианты «Замена / Работа без замены» — данные `KINDS`; одна функция сохранения |
+| 4 | `VehiclePanel`: своя строка статуса вместо канонического `useNotify`, необязательные `editable`/`onChanged` при единственном вызове | уведомление кабинета (`useNotify`); пропсы обязательные; одно состояние открытой формы, `formFor` |
+| 5 | E2E-помощники (`api`, вход сотрудника, проверка CSP, статус агрегата) — третья копия в `system-e2e` (уже были в `web-engineer`, `web-admin`), плюс `staffApi` | `@ev-servicedesk/web-shared/e2e` (`web-shared/e2e.ts`, как `./vite`): `api`, `staffToken`, `staffLoginStatus`, `aggregateStatus`, `guardCsp`, `submitLogin`, `todayInMinsk`; три набора используют его |
+| 6 | `system.spec.ts`: тип `ReturnType<Page['getByRole']>` вместо `Locator` | `Locator` |
+| 7 | `e2e_system.py` повторял поиск модели Zeekr и создание регламента из `e2e_backend.zeekr_regulation` | `zeekr_regulation(api, admin, code, interval_km)` с параметрами — общий для всех сценариев |
+| 8 | Шаги «образ backend: собрать или скачать по digest» и подготовка Poetry скопированы в 4 workflow | composite actions `.github/actions/backend-image` и `backend-poetry` |
+| 9 | `web-e2e.yml`: скачивание артефактов и переменные сборок — с условиями по названию набора | при regression скачиваются обе сборки, обе переменные передаются всегда — каждый конфиг читает свою |
+| 10 | `integration_stack.sh`: номера клиентов (9) перечислены трижды — переменные, `SMS_TEST_PHONES`, окружение команды — и абзацем в шапке | массив `CLIENT_PHONES` («переменная=номер»): из него — список тестовых номеров и окружение команды |

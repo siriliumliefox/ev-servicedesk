@@ -2,7 +2,7 @@
 // клиент — по API, как мобильное приложение (его интерфейс проверяют Flutter-тесты тех же сценариев, матрица —
 // docs/specs/e2e_matrix.yaml). E2E-08 — замена агрегата, E2E-11 — прошивка по модели, E2E-15 — вход по ролям,
 // E2E-16 — главный сценарий «клиент → инженер → клиент → администратор».
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Locator, type Page } from '@playwright/test'
 import { ADMIN_URL, ENGINEER_URL } from './apps.ts'
 import {
   ADMIN_HEADING,
@@ -43,12 +43,12 @@ async function takeTicket(page: Page, id: number) {
 }
 
 /** Замена агрегата из карточки авто — пробег по умолчанию текущий, дата — сегодня. */
-async function replaceFromPanel(panel: ReturnType<Page['getByRole']>, name: string) {
+async function replaceFromPanel(page: Page, panel: Locator, name: string) {
   await panel.getByRole('button', { name: `Замена или работа: ${name}` }).click()
   const form = panel.getByRole('form', { name: `Замена или работа: ${name}` })
   await expect(form.getByRole('radio', { name: /Замена/ })).toBeChecked()
   await form.getByRole('button', { name: 'Сохранить' }).click()
-  await expect(panel.getByRole('status').filter({ hasText: `Замена сохранена: ${name}` })).toBeVisible()
+  await expect(page.getByText(`Замена сохранена: ${name}`)).toBeVisible()
   const row = panel.getByRole('region', { name: 'Статусы агрегатов' }).getByRole('listitem').filter({ hasText: name })
   await expect(row).toContainText('Заменено')
 }
@@ -79,7 +79,7 @@ test('замена агрегата из карточки тикета → у к
 
   await signIn(page, ENGINEER_URL, seed.engineer, ENGINEER_HEADING)
   const panel = await takeTicket(page, ticket.id)
-  await replaceFromPanel(panel, name)
+  await replaceFromPanel(page, panel, name)
 
   // Клиент видит результат сразу — без перезапуска и деплоя.
   expect(await clientStatus(x, car.id, code)).toBe('green')
@@ -150,7 +150,7 @@ test('главный сценарий: тикет клиента → ответ 
   await panel.getByLabel('Ответ клиенту').fill(reply)
   await panel.getByRole('button', { name: 'Отправить' }).click()
   await expect(panel.getByText(reply)).toBeVisible()
-  await replaceFromPanel(panel, name)
+  await replaceFromPanel(engineer, panel, name)
   await panel.getByRole('button', { name: 'Решено' }).click()
   await expect(panel.getByText('Тикет решён — чтобы ответить, верните его в работу')).toBeVisible()
 

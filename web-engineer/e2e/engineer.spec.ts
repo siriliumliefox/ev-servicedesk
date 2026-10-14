@@ -11,9 +11,9 @@ import {
   dragWithMouse,
   loadSeed,
   signIn,
-  staffApi,
   ticketsFor,
 } from './support.ts'
+import { api, staffToken } from '@ev-servicedesk/web-shared/e2e'
 
 const seed = loadSeed()
 
@@ -47,7 +47,7 @@ test('E2E: в работу → быстрый ответ → «Решено»; �
   await expect(panel.getByText(seed.quick_reply_title).first()).toBeVisible()
 
   // Ответ клиента приходит инженеру без перезагрузки.
-  await client.api('POST', `/tickets/${id}/messages`, { body: 'Пробки появились, спасибо!' })
+  await client.api('POST', `/tickets/${id}/messages`, { body: 'Пробки появились, спасибо!' }, 201)
   await expect(panel.getByText('Пробки появились, спасибо!')).toBeVisible({ timeout: 2000 })
 
   // Закрытие — с клавиатуры: «В работе» → «Решено» (через «Ожидает вендора»), с подтверждением.
@@ -128,8 +128,9 @@ test('карточка авто из тикета: модель, прошивк�
   const engineer = seed.engineers[0]
   // После сценария E2E тикет решён этим инженером; при отдельном запуске он ещё в очереди — история ТО авто
   // открыта только инженеру тикета (ADR 0014), поэтому тикет берётся по API.
-  const ticket = await staffApi<{ assigned_engineer_id: number | null }>(engineer, 'GET', `/tickets/${id}`)
-  if (ticket.assigned_engineer_id === null) await staffApi(engineer, 'POST', `/tickets/${id}/claim`)
+  const token = await staffToken(engineer)
+  const ticket = await api<{ assigned_engineer_id: number | null }>('GET', `/tickets/${id}`, token)
+  if (ticket.assigned_engineer_id === null) await api('POST', `/tickets/${id}/claim`, token)
 
   await signIn(page, engineer)
   await card(page, id).click()

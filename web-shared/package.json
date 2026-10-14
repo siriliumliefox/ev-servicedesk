@@ -7,7 +7,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./theme.css": "./src/theme/theme.css",
-    "./vite": "./vite.ts"
+    "./vite": "./vite.ts",
+    "./e2e": "./e2e.ts"
   },
   "scripts": {
     "test": "vitest run"

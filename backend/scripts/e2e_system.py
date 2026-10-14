@@ -36,6 +36,7 @@ from e2e_backend import (
     digits,
     register_client,
     write_private,
+    zeekr_regulation,
 )
 
 # Агрегаты сценариев: замена из карточки тикета (E2E-08) и главный сценарий (E2E-16) — на разных
@@ -47,17 +48,9 @@ OTHER_MODEL = "Li Auto"  # VIN не распознаётся мок-декоде
 
 
 def regulations(api: Api, admin: Headers) -> int:
-    models = api.json("GET", "/vehicle-models", headers=admin, params={"search": "Zeekr"})
-    check(models["items"], "модели Zeekr нет в справочнике")
-    model_id = models["items"][0]["id"]
-    for code in AGGREGATES.values():
-        body = {
-            "vehicle_model_id": model_id,
-            "aggregate_type_code": code,
-            "interval_km": INTERVAL_KM,
-        }
-        api.json("POST", "/maintenance-regulations", 201, headers=admin, json=body)
-    return model_id
+    """Регламенты обоих агрегатов сценариев у Zeekr 001; возвращает id модели."""
+    model_ids = {zeekr_regulation(api, admin, code, INTERVAL_KM) for code in AGGREGATES.values()}
+    return model_ids.pop()
 
 
 def worn_car(api: Api, admin: Headers, client: Client) -> dict[str, Any]:

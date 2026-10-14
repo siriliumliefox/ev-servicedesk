@@ -12,7 +12,8 @@ const api = process.env.API_BASE_URL ?? 'http://127.0.0.1:18080'
 const media = process.env.E2E_MEDIA_ORIGIN ?? 'http://127.0.0.1:19000'
 
 function app(name: 'web-engineer' | 'web-admin', url: string, prebuilt: string | undefined) {
-  const dist = prebuilt ?? `../system-e2e/.apps/${name}`
+  // Пустая строка — как отсутствие (CI передаёт переменную всегда).
+  const dist = prebuilt || `../system-e2e/.apps/${name}`
   const build = prebuilt ? '' : `npx vite build --outDir ${dist} --emptyOutDir && `
   const port = new URL(url).port
   return {

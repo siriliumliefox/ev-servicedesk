@@ -15,71 +15,77 @@ import {
 } from '@ev-servicedesk/web-shared'
 import { useEngineer } from '../repo.ts'
 
-type Kind = 'replacement' | 'work'
-
-const DESCRIPTION_MAX = 255
-
-export interface MaintenanceTarget {
-  /** Агрегат; `null` — общая работа без агрегата (описание обязательно). */
-  code: string | null
+export interface AggregateRef {
+  code: string
   name: string
 }
 
+type Kind = 'replacement' | 'work'
+type Field = 'date' | 'mileage' | 'description'
+
+const KINDS: readonly { kind: Kind; label: string; hint: string }[] = [
+  { kind: 'replacement', label: 'Замена', hint: 'Счётчик выработки сбросится' },
+  { kind: 'work', label: 'Работа без замены', hint: 'Осмотр, долив — счётчик не меняется' },
+]
+
+/** Ошибки контракта, относящиеся к полю формы, показываются у поля; остальные — под формой. */
+const FIELD_OF: Readonly<Record<string, Field>> = {
+  REPLACED_AT_IN_FUTURE: 'date',
+  PERFORMED_AT_IN_FUTURE: 'date',
+  MILEAGE_AHEAD_OF_VEHICLE: 'mileage',
+  MAINTENANCE_SUBJECT_REQUIRED: 'description',
+}
+
+const DESCRIPTION_MAX = 255
+
+/** `aggregate` — замена или работа по агрегату; `null` — другая работа без агрегата (описание обязательно). */
 export function MaintenanceForm({
   vehicle,
-  target,
+  aggregate,
   onSaved,
   onCancel,
 }: {
   vehicle: Vehicle
-  target: MaintenanceTarget
+  aggregate: AggregateRef | null
   onSaved: (message: string) => void
   onCancel: () => void
 }) {
   const { repo, now } = useEngineer()
   const today = todayInMinsk(now())
-  const [kind, setKind] = useState<Kind>(target.code === null ? 'work' : 'replacement')
+  const [kind, setKind] = useState<Kind>(aggregate ? 'replacement' : 'work')
   const [date, setDate] = useState(today)
   const [mileage, setMileage] = useState(String(vehicle.mileage))
   const [description, setDescription] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<unknown>(null)
 
-  const replacement = kind === 'replacement'
   const km = Number(mileage)
   const mileageValid = mileage.trim() !== '' && Number.isInteger(km) && km >= 0
-  const needsDescription = target.code === null && !description.trim()
+  const ready = mileageValid && (aggregate !== null || description.trim() !== '')
+  const field = error instanceof ApiError ? FIELD_OF[error.code] : undefined
+  const errorAt = (name: Field) => (field === name ? errorText(error) : undefined)
+  // Правка поля снимает прежнюю ошибку сервера.
+  const edit = <T,>(set: (value: T) => void) => (value: T) => {
+    set(value)
+    setError(null)
+  }
 
-  // Ошибка сервера показывается у поля, к которому относится; остальное — под формой.
-  const code = error instanceof ApiError ? error.code : null
-  const dateError = code === 'REPLACED_AT_IN_FUTURE' || code === 'PERFORMED_AT_IN_FUTURE' ? errorText(error) : undefined
-  const mileageError = code === 'MILEAGE_AHEAD_OF_VEHICLE' ? errorText(error) : undefined
-  const descriptionError = code === 'MAINTENANCE_SUBJECT_REQUIRED' ? errorText(error) : undefined
-  const formError = dateError || mileageError || descriptionError ? null : error
+  const save = (note: string | null): Promise<string> => {
+    if (aggregate && kind === 'replacement') {
+      const body = { replaced_at: date, mileage_at_replacement: km, description: note }
+      return repo.replaceAggregateStatus(vehicle.id, aggregate.code, body).then(() => `Замена сохранена: ${aggregate.name}`)
+    }
+    const body = { aggregate_type_code: aggregate?.code ?? null, performed_at: date, mileage_at_service: km, description: note }
+    return repo.createMaintenanceRecord(vehicle.id, body).then(() => (aggregate ? `Работа сохранена: ${aggregate.name}` : 'Работа сохранена'))
+  }
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
-    if (busy || !mileageValid || needsDescription) return
+    if (busy || !ready) return
     setBusy(true)
     setError(null)
-    const note = description.trim() || null
     try {
-      if (replacement && target.code !== null) {
-        await repo.replaceAggregateStatus(vehicle.id, target.code, {
-          replaced_at: date,
-          mileage_at_replacement: km,
-          description: note,
-        })
-        onSaved(`Замена сохранена: ${target.name}`)
-      } else {
-        await repo.createMaintenanceRecord(vehicle.id, {
-          aggregate_type_code: target.code,
-          performed_at: date,
-          mileage_at_service: km,
-          description: note,
-        })
-        onSaved(`Работа сохранена: ${target.name}`)
-      }
+      onSaved(await save(description.trim() || null))
     } catch (e) {
       setError(e)
       setBusy(false)
@@ -89,48 +95,37 @@ export function MaintenanceForm({
   return (
     <form
       onSubmit={submit}
-      aria-label={`${target.code === null ? 'Другая работа' : 'Замена или работа'}: ${target.name}`}
+      aria-label={aggregate ? `Замена или работа: ${aggregate.name}` : 'Другая работа'}
       className="grid gap-3 rounded-md border border-border-strong bg-surface p-3"
     >
-      {target.code !== null && (
+      {aggregate && (
         <fieldset className="grid gap-2">
           <legend className="pb-1 text-label">Что сделано</legend>
-          {(
-            [
-              ['replacement', 'Замена', 'Счётчик выработки сбросится'],
-              ['work', 'Работа без замены', 'Осмотр, долив — счётчик не меняется'],
-            ] as const
-          ).map(([value, label, hint]) => (
-            <label key={value} className="flex cursor-pointer items-start gap-2 text-body-sm">
+          {KINDS.map((k) => (
+            <label key={k.kind} className="flex cursor-pointer items-start gap-2 text-body-sm">
               <input
                 type="radio"
-                name={`maintenance-kind-${target.code}`}
+                name={`maintenance-kind-${aggregate.code}`}
                 className="mt-1 size-4 accent-(--ev-fg)"
-                checked={kind === value}
-                onChange={() => {
-                  setKind(value)
-                  setError(null)
-                }}
+                checked={kind === k.kind}
+                onChange={() => edit(setKind)(k.kind)}
               />
               <span>
-                {label}
-                <span className="block text-caption text-fg-muted">{hint}</span>
+                {k.label}
+                <span className="block text-caption text-fg-muted">{k.hint}</span>
               </span>
             </label>
           ))}
         </fieldset>
       )}
       <TextField
-        label={replacement ? 'Дата замены' : 'Дата работы'}
+        label={kind === 'replacement' ? 'Дата замены' : 'Дата работы'}
         type="date"
         required
         max={today}
         value={date}
-        error={dateError}
-        onChange={(e) => {
-          setDate(e.target.value)
-          setError(null)
-        }}
+        error={errorAt('date')}
+        onChange={(e) => edit(setDate)(e.target.value)}
       />
       <TextField
         label="Пробег, км"
@@ -141,34 +136,28 @@ export function MaintenanceForm({
         step={1}
         value={mileage}
         hint={
-          replacement
+          kind === 'replacement'
             ? `Не больше текущего пробега авто (${formatKm(vehicle.mileage)})`
             : `Больше текущего (${formatKm(vehicle.mileage)}) — пробег авто обновится`
         }
-        error={mileageError ?? (mileageValid ? undefined : 'Целое число километров, не меньше 0')}
-        onChange={(e) => {
-          setMileage(e.target.value)
-          setError(null)
-        }}
+        error={errorAt('mileage') ?? (mileageValid ? undefined : 'Целое число километров, не меньше 0')}
+        onChange={(e) => edit(setMileage)(e.target.value)}
       />
       <TextArea
-        label={target.code === null ? 'Что сделано' : 'Комментарий'}
-        hint={target.code === null ? 'Обязательно для работы без агрегата' : 'Необязательно'}
-        required={target.code === null}
+        label={aggregate ? 'Комментарий' : 'Что сделано'}
+        hint={aggregate ? 'Необязательно' : 'Обязательно для работы без агрегата'}
+        required={!aggregate}
         maxLength={DESCRIPTION_MAX}
         value={description}
-        error={descriptionError}
-        onChange={(e) => {
-          setDescription(e.target.value)
-          setError(null)
-        }}
+        error={errorAt('description')}
+        onChange={(e) => edit(setDescription)(e.target.value)}
       />
-      <InlineError error={formError} />
+      <InlineError error={field ? null : error} />
       <div className="flex justify-end gap-2">
         <Button type="button" variant="ghost" size="sm" onClick={onCancel}>
           Отмена
         </Button>
-        <Button type="submit" size="sm" disabled={busy || !mileageValid || needsDescription}>
+        <Button type="submit" size="sm" disabled={busy || !ready}>
           {busy ? 'Сохраняем…' : 'Сохранить'}
         </Button>
       </div>

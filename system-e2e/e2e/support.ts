@@ -1,13 +1,11 @@
-// Опора межролевых E2E (глава 23, ADR 0027 п. 8): данные стека (backend/scripts/e2e_system.py seed), запросы
-// клиента и сотрудника по API, вход в приложения сотрудников с проверкой CSP, разовые задачи в контейнере API.
+// Опора межролевых E2E (глава 23, ADR 0027 п. 8): данные стека (backend/scripts/e2e_system.py seed), авто браузера,
+// лента клиента, вход в приложения сотрудников и разовые задачи в контейнере API; общее — web-shared/e2e.ts.
 import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { expect, test, type Page } from '@playwright/test'
+import { aggregateStatus, api, guardCsp, submitLogin, type Account } from '@ev-servicedesk/web-shared/e2e'
 
-export interface Account {
-  phone: string
-  password: string
-}
+export { api, staffToken, submitLogin, todayInMinsk } from '@ev-servicedesk/web-shared/e2e'
 
 export interface Car {
   id: number
@@ -46,35 +44,6 @@ export function carFor(seed: Seed): Car {
   return car
 }
 
-const API = `${process.env.API_BASE_URL ?? 'http://127.0.0.1:18080'}/v1`
-
-/** Запрос к API напрямую (клиент — как мобильное приложение); `expected` — ожидаемый статус. */
-export async function api<T>(method: string, path: string, token: string | null, body?: unknown, expected = 200): Promise<T> {
-  const response = await fetch(`${API}${path}`, {
-    method,
-    headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), 'Content-Type': 'application/json' },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  })
-  const text = await response.text()
-  expect(response.status, `${method} ${path} → ${response.status} ${text}`).toBe(expected)
-  return (text ? JSON.parse(text) : undefined) as T
-}
-
-export async function staffToken(account: Account): Promise<string> {
-  const body = await api<{ access_token: string }>('POST', '/auth/staff/login', null, account)
-  return body.access_token
-}
-
-/** Статус «светофор» агрегата так, как его видит клиент. */
-export async function clientStatus(client: ClientAccount, vehicleId: number, code: string): Promise<string> {
-  const { items } = await api<{ items: { aggregate_type_code: string; status: string }[] }>(
-    'GET',
-    `/vehicles/${vehicleId}/aggregate-statuses`,
-    client.access_token,
-  )
-  return items.find((s) => s.aggregate_type_code === code)?.status ?? 'нет агрегата'
-}
-
 export interface FeedItem {
   type: string
   message: string
@@ -84,11 +53,6 @@ export async function feed(client: ClientAccount): Promise<FeedItem[]> {
   return (await api<{ items: FeedItem[] }>('GET', '/notifications?page_size=100', client.access_token)).items
 }
 
-/** Сегодня по Минску (YYYY-MM-DD) — период аналитики (ADR 0020). */
-export function todayInMinsk(): string {
-  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Minsk' }).format(new Date())
-}
-
 /** Разовая задача в контейнере API стека (E2E_JOB_RUNNER — shlex-строка docker compose … exec -T backend). */
 export function runJob(...args: string[]): string {
   const runner = process.env.E2E_JOB_RUNNER
@@ -96,36 +60,17 @@ export function runJob(...args: string[]): string {
   return execFileSync('bash', ['-c', `${runner} "$@"`, '_', ...args], { encoding: 'utf8' })
 }
 
-/** Нарушения CSP за тест — проверяются после каждого теста. */
-const violations: string[] = []
-
-test.afterEach(() => {
-  const found = violations.splice(0)
-  expect(found, 'нарушения CSP').toEqual([])
-})
-
-/** Заполнить форму входа приложения сотрудника (результат проверяет тест). */
-export async function submitLogin(page: Page, url: string, account: Account): Promise<void> {
-  // Нарушение CSP — с источником; без источника — инъекция самого Playwright (см. web-engineer/e2e/support.ts).
-  await page.addInitScript(() => {
-    document.addEventListener('securitypolicyviolation', (e) => {
-      if (!e.sourceFile) return
-      console.error(`CSP-VIOLATION ${e.violatedDirective} blocked=${e.blockedURI} source=${e.sourceFile}:${e.lineNumber}`)
-    })
-  })
-  page.on('console', (message) => {
-    if (message.text().startsWith('CSP-VIOLATION')) violations.push(message.text())
-  })
-  await page.goto(url)
-  await page.getByLabel('Телефон').fill(account.phone)
-  await page.getByLabel('Пароль').fill(account.password)
-  await page.getByRole('button', { name: 'Войти' }).click()
-}
-
 export const ENGINEER_HEADING = 'EV-ServiceDesk · Кабинет инженера'
 export const ADMIN_HEADING = 'Админ-панель · Дашборд'
 
+/** Вход сотрудника с проверкой CSP страницы; `heading` — заголовок приложения после входа. */
 export async function signIn(page: Page, url: string, account: Account, heading: string): Promise<void> {
+  await guardCsp(page)
   await submitLogin(page, url, account)
   await expect(page.getByRole('heading', { name: heading })).toBeVisible()
+}
+
+/** Статус «светофор» агрегата так, как его видит клиент. */
+export function clientStatus(client: ClientAccount, vehicleId: number, code: string): Promise<string> {
+  return aggregateStatus(client.access_token, vehicleId, code)
 }
