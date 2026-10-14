@@ -51,3 +51,10 @@ export function toIsoDate(date: Date): string {
   const d = String(date.getDate()).padStart(2, "0");
   return `${y}-${m}-${d}`;
 }
+
+const minskDate = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Minsk", year: "numeric", month: "2-digit", day: "2-digit" });
+
+/** Сегодняшняя дата по Минску (YYYY-MM-DD) — граница «не в будущем» у дат работ и замен в контракте. */
+export function todayInMinsk(now: Date = new Date()): string {
+  return minskDate.format(now);
+}

@@ -25,6 +25,11 @@ export const ERROR_TEXTS: Readonly<Record<string, string>> = {
   ATTACHMENT_TOO_LARGE: "Файл слишком большой.",
   ATTACHMENT_TYPE_NOT_ALLOWED: "Такой тип файла не поддерживается.",
   TOO_MANY_ATTACHMENTS: "Слишком много вложений — не больше 10.",
+  // Замена и работы по агрегату (E-05, глава 23, ADR 0027 п. 14).
+  REPLACED_AT_IN_FUTURE: "Дата замены не может быть позже сегодняшней.",
+  PERFORMED_AT_IN_FUTURE: "Дата работы не может быть позже сегодняшней.",
+  MILEAGE_AHEAD_OF_VEHICLE: "Пробег замены больше текущего пробега авто — уточните пробег у клиента.",
+  MAINTENANCE_SUBJECT_REQUIRED: "Опишите работу: без агрегата нужен комментарий.",
   // Админ-панель (глава 22, ADR 0026): регламенты и справочник агрегатов.
   AGGREGATE_TYPE_EXISTS: "Агрегат с таким кодом уже есть.",
   AGGREGATE_TYPE_NOT_FOUND: "Такого агрегата нет в справочнике — обновите страницу.",

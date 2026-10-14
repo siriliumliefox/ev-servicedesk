@@ -3,6 +3,8 @@
 // backend (переходы статусов тикета, claim 409, валидация дерева решений, пользователи), здесь —
 // упрощённо, с теми же кодами ошибок; финальные правила — backend (главы 12–17, 22).
 import type {
+  AggregateReplaceRequest,
+  AggregateStatus,
   AggregateStatusThresholds,
   AggregateStatusThresholdsUpdateRequest,
   AggregateType,
@@ -20,6 +22,8 @@ import type {
   KnowledgeArticleRevisionSummary,
   KnowledgeArticleUpdateRequest,
   MaintenanceConversionStats,
+  MaintenanceRecord,
+  MaintenanceRecordCreateRequest,
   MaintenanceRecordList,
   MaintenanceRegulation,
   MaintenanceRegulationCreateRequest,
@@ -43,6 +47,7 @@ import type {
   VehicleModel,
 } from "../data/models.ts";
 import { TICKET_CATEGORIES } from "../data/models.ts";
+import { toIsoDate } from "../data/format.ts";
 import { allowedTransitions } from "../data/ticketFlow.ts";
 import { checkNode, validateTree } from "./decisionTree.ts";
 import {
@@ -121,6 +126,9 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
   private treeNodes: DecisionTreeNode[] = [];
   private aggregateTypes: AggregateType[] = [];
   private regulations: MaintenanceRegulation[] = [];
+  private statuses: Record<number, AggregateStatus[]> = {};
+  private records: Record<number, MaintenanceRecord[]> = {};
+  private vehicles: Vehicle[] = [];
   private thresholds: AggregateStatusThresholds = {
     yellow_from_percent: 70,
     red_above_percent: 100,
@@ -174,6 +182,10 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
     this.treeNodes = empty ? [] : clone(DECISION_TREE_NODES);
     this.aggregateTypes = clone(AGGREGATE_TYPES);
     this.regulations = empty ? [] : seedRegulations();
+    this.statuses = clone(AGGREGATE_STATUSES);
+    this.records = clone(MAINTENANCE_RECORDS);
+    // Пробег меняет работа по агрегату — у каждого экземпляра свои авто.
+    this.vehicles = VEHICLES.map((v) => clone(v.vehicle));
     this.thresholds = {
       yellow_from_percent: 70,
       red_above_percent: 100,
@@ -318,7 +330,43 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
   }
 
   listMaintenanceRecords(vehicleId: number, query: PageQuery = {}): Promise<MaintenanceRecordList> {
-    return this.call(() => slice(MAINTENANCE_RECORDS[vehicleId] ?? [], query));
+    return this.call(() => slice(this.records[vehicleId] ?? [], query));
+  }
+
+  replaceAggregateStatus(vehicleId: number, aggregateTypeCode: string, body: AggregateReplaceRequest): Promise<AggregateStatus> {
+    return this.call(() => {
+      const vehicle = this.vehicleForChange(vehicleId);
+      const current = (this.statuses[vehicleId] ?? []).find((s) => s.aggregate_type_code === aggregateTypeCode);
+      if (!current) throw new ApiError("AGGREGATE_TYPE_NOT_FOUND", "Неизвестный код агрегата", 404);
+      if (body.replaced_at > toIsoDate(this.clock())) throw validation("Дата замены не может быть позже сегодняшней.", "replaced_at");
+      if (body.mileage_at_replacement > vehicle.mileage) {
+        throw new ApiError("MILEAGE_AHEAD_OF_VEHICLE", "Пробег замены больше текущего пробега авто — уточните пробег у клиента.", 409);
+      }
+      this.addRecord(vehicleId, aggregateTypeCode, body.replaced_at, body.mileage_at_replacement, body.description ?? null, "replacement");
+      // Замена задним числом попадает только в историю ТО (ADR 0016) — счётчик не сбрасывается.
+      if (current.last_replaced_at && body.replaced_at < current.last_replaced_at) return clone(current);
+      // В прототипе нет регламентов авто — свежая замена всегда 🟢 с нулевой выработкой.
+      Object.assign(current, {
+        status: "green",
+        percentage: 0,
+        last_replaced_at: body.replaced_at,
+        last_replaced_mileage: body.mileage_at_replacement,
+      });
+      return clone(current);
+    });
+  }
+
+  createMaintenanceRecord(vehicleId: number, body: MaintenanceRecordCreateRequest): Promise<MaintenanceRecord> {
+    return this.call(() => {
+      const vehicle = this.vehicleForChange(vehicleId);
+      const code = body.aggregate_type_code ?? null;
+      const description = body.description?.trim() || null;
+      if (body.performed_at > toIsoDate(this.clock())) throw validation("Дата работы не может быть позже сегодняшней.", "performed_at");
+      if (code === null && description === null) throw validation("Опишите работу: без агрегата нужен комментарий.", "description");
+      // Пробег работы выше текущего поднимает пробег авто (контракт createMaintenanceRecord).
+      vehicle.mileage = Math.max(vehicle.mileage, body.mileage_at_service);
+      return clone(this.addRecord(vehicleId, code, body.performed_at, body.mileage_at_service, description, "work"));
+    });
   }
 
   /** События — от действий в этой сессии прототипа (сети нет): «живой» чат без WebSocket. */
@@ -894,12 +942,48 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
       // Эскалация из дерева решений (ADR 0018 п. 11) — тикеты фикстур созданы не из базы знаний.
       source_article: null,
       attachments: [],
-      vehicle_context: { vehicle, aggregate_statuses: AGGREGATE_STATUSES[vehicle.id] ?? [] },
+      vehicle_context: { vehicle: clone(vehicle), aggregate_statuses: clone(this.statuses[vehicle.id] ?? []) },
     };
   }
 
+  /** Авто, которое инженер может менять: по своему нерешённому тикету (как backend, ADR 0014). */
+  private vehicleForChange(vehicleId: number): Vehicle {
+    const own = this.tickets.some(
+      (t) =>
+        t.seed.vehicle_id === vehicleId &&
+        t.status !== "resolved" &&
+        (this.role === "admin" || t.assigned_engineer_id === ENGINEER_ID),
+    );
+    if (!own) throw new ApiError("FORBIDDEN", "Авто меняет инженер, назначенный на нерешённый тикет", 403);
+    return this.vehicles.find((v) => v.id === vehicleId)!;
+  }
+
+  private addRecord(
+    vehicleId: number,
+    code: string | null,
+    at: string,
+    mileage: number,
+    description: string | null,
+    kind: MaintenanceRecord["kind"],
+  ): MaintenanceRecord {
+    const record: MaintenanceRecord = {
+      id: this.nextId++,
+      aggregate_type_code: code,
+      performed_by: USERS[this.role === "admin" ? ADMIN_ID : ENGINEER_ID],
+      performed_at: at,
+      mileage_at_service: mileage,
+      description,
+      kind,
+    };
+    // История — новые сверху (по дате работы, как listMaintenanceRecords).
+    const list = (this.records[vehicleId] ??= []);
+    list.push(record);
+    list.sort((a, b) => b.performed_at.localeCompare(a.performed_at) || b.id - a.id);
+    return record;
+  }
+
   private vehicle(t: TicketRecord): Vehicle {
-    return VEHICLES.find((x) => x.vehicle.id === t.seed.vehicle_id)!.vehicle;
+    return this.vehicles.find((v) => v.id === t.seed.vehicle_id)!;
   }
 
   private article(articleId: number): KnowledgeArticle {

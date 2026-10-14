@@ -1,7 +1,16 @@
 // Кабинет инженера на реальном API (глава 21, ADR 0025 п. 6): операции `EngineerRepository` через
 // `ApiSession` (Bearer, refresh, тексты ошибок по коду), события тикета — `openTicketLive`.
 // Общие операции — `HttpCommonRepository`; история сообщений выгружается всеми страницами.
-import type { MaintenanceRecordList, TicketDetail, TicketMessage, TicketStatus } from "../models.ts";
+import type {
+  AggregateReplaceRequest,
+  AggregateStatus,
+  MaintenanceRecord,
+  MaintenanceRecordCreateRequest,
+  MaintenanceRecordList,
+  TicketDetail,
+  TicketMessage,
+  TicketStatus,
+} from "../models.ts";
 import type {
   EngineerRepository,
   PageQuery,
@@ -58,6 +67,21 @@ export class HttpEngineerRepository extends HttpCommonRepository implements Engi
   listMaintenanceRecords(vehicleId: number, query: PageQuery = {}): Promise<MaintenanceRecordList> {
     return this.session.request((c) =>
       c.GET("/vehicles/{vehicleId}/maintenance-records", { params: { path: { vehicleId }, query } }),
+    );
+  }
+
+  replaceAggregateStatus(vehicleId: number, aggregateTypeCode: string, body: AggregateReplaceRequest): Promise<AggregateStatus> {
+    return this.session.request((c) =>
+      c.POST("/vehicles/{vehicleId}/aggregate-statuses/{aggregateTypeCode}/replace", {
+        params: { path: { vehicleId, aggregateTypeCode } },
+        body,
+      }),
+    );
+  }
+
+  createMaintenanceRecord(vehicleId: number, body: MaintenanceRecordCreateRequest): Promise<MaintenanceRecord> {
+    return this.session.request((c) =>
+      c.POST("/vehicles/{vehicleId}/maintenance-records", { params: { path: { vehicleId } }, body }),
     );
   }
 
