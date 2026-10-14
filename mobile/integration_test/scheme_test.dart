@@ -33,6 +33,17 @@ Future<void> _signIn(WidgetTester tester) async {
   await tapLikeUser(tester, find.text('Войти'));
 }
 
+/// Схема нового авто: на медленном Android-эмуляторе статусы грузятся дольше, а экран после переключения может
+/// остаться прокрученным вниз (схема вверху не построена) — ждём до 60 с, возвращая экран к началу.
+Future<void> _waitForScheme(WidgetTester tester, Finder screen, Finder zone) async {
+  final end = DateTime.now().add(const Duration(seconds: 60));
+  while (zone.evaluate().isEmpty) {
+    if (DateTime.now().isAfter(end)) throw TestFailure('Не дождались схемы: $zone');
+    if (screen.evaluate().isNotEmpty) await tester.fling(screen, const Offset(0, 600), 2000);
+    await tester.pump(const Duration(seconds: 1));
+  }
+}
+
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
   WidgetController.hitTestWarningShouldBeFatal = true;
@@ -61,9 +72,9 @@ void main() {
         for (final s in statuses)
           if (aggregateSchemePositions.containsKey(s.aggregateTypeCode)) s
       ];
-      await waitFor(tester, find.byKey(Key('zone-${onScheme.first.aggregateTypeCode}')));
       // Экран «Авто» — ленивый ListView: схема вверху, строки списка строятся при прокрутке к ним.
       final screen = find.descendant(of: find.byType(RefreshIndicator), matching: find.byType(Scrollable)).first;
+      await _waitForScheme(tester, screen, find.byKey(Key('zone-${onScheme.first.aggregateTypeCode}')));
 
       for (final s in onScheme) {
         final expected = '${s.aggregateTypeName}: ${s.status.label}';
