@@ -80,7 +80,11 @@ export BACKEND_IMAGE="$IMAGE" BACKEND_ENV_FILE="$ENV_FILE" ENVIRONMENT=staging \
   INTEGRATION_PORT="$PORT" INTEGRATION_S3_PORT="$S3_PORT" S3_PUBLIC_ENDPOINT="$S3_PUBLIC" S3_ACCESS_KEY S3_SECRET_KEY S3_BUCKET=ev-servicedesk-integration \
   POSTGRES_USER=integration POSTGRES_PASSWORD POSTGRES_DB=ev_servicedesk_integration
 COMPOSE=(docker compose -p "$PROJECT" -f "$ROOT/docker-compose.yml"
-         -f "$ROOT/docker-compose.integration.yml" --profile full)
+         -f "$ROOT/docker-compose.integration.yml")
+# Дополнительные файлы compose через пробел — например, нагрузочный стенд главы 24
+# (scripts/load_stack.sh, docker-compose.load.yml: ресурсы, прокси-заголовки, эмуляция FCM).
+for extra in ${INTEGRATION_EXTRA_COMPOSE:-}; do COMPOSE+=(-f "$extra"); done
+COMPOSE+=(--profile full)
 
 # Построчный вывод (BSD sed — -l, GNU — -u): строки команды после «--» видны сразу, а не в конце.
 if sed --version >/dev/null 2>&1; then SED_LINE=-u; else SED_LINE=-l; fi

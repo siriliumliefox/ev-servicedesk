@@ -26,6 +26,12 @@ class Settings(BaseSettings):
     # Опечатка («prod») — ошибка старта, а не тихий local. Образ задаёт production (Dockerfile).
     environment: Literal["local", "test", "staging", "production"] = "local"
     database_url: str = "postgresql+psycopg://ev:ev@localhost:5432/ev_servicedesk"
+    # Пул соединений на процесс (ADR 0028 п. 15): процессы × (pool + overflow) + worker'ы
+    # должны помещаться в max_connections PostgreSQL. Ожидание свободного соединения — не дольше
+    # db_pool_timeout_seconds, затем 500 (а не зависание запроса).
+    db_pool_size: int = Field(5, ge=1, le=100)
+    db_max_overflow: int = Field(10, ge=0, le=100)
+    db_pool_timeout_seconds: float = Field(30, gt=0, le=120)
     redis_url: str = "redis://localhost:6379/0"
 
     # --- JWT (Глава 10, ADR 0013) ---
@@ -108,7 +114,7 @@ class Settings(BaseSettings):
     redis_pubsub_ping_seconds: float = Field(10, gt=0, le=60)
     # Кадров в очереди одного подключения; не успевающий получатель закрывается 1013.
     ws_event_queue_size: int = Field(100, ge=1)
-    ws_max_sockets_per_user: int = Field(10, ge=1)  # одновременно, на процесс; сверх — 4429
+    ws_max_sockets_per_user: int = Field(10, ge=1)  # одновременно, во всех процессах; сверх — 4429
     ws_connects_per_ip_minute: int = Field(60, ge=1)  # попыток подключения; сверх — 4429
 
     # --- Push и worker уведомлений (Глава 15, ADR 0019) ---
@@ -120,10 +126,20 @@ class Settings(BaseSettings):
     # Worker: опрос очереди, если сигнал Redis потерян; размер пачки; повторы (ADR 0019 п. 9).
     notifications_poll_seconds: float = Field(5, gt=0, le=300)
     notifications_batch_size: int = Field(100, ge=1, le=1000)
+    # Одновременных вызовов FCM в worker (ADR 0028 п. 12): рассылка 10 000 получателей ≤ 5 мин.
+    push_send_concurrency: int = Field(16, ge=1, le=64)
     push_max_attempts: int = Field(5, ge=1, le=20)
     push_retry_base_seconds: float = Field(10, gt=0, le=3600)
     # Аренда строки очереди на время отправки: дольше таймаута FCM (запрос OAuth + отправка).
     push_lease_seconds: float = Field(60, ge=5, le=3600)
+    # Эмуляция FCM фейковым отправителем на нагрузочном стенде (Глава 24, ADR 0028 п. 11):
+    # задержка ответа (равномерно в диапазоне) и доли ответов «токен недействителен» и
+    # «временная ошибка». По умолчанию выключена; с PUSH_PROVIDER=fcm не действует, а фейковый
+    # push в production запрещён — значит, и эмуляция.
+    push_fake_latency_min_ms: int = Field(0, ge=0, le=10_000)
+    push_fake_latency_max_ms: int = Field(0, ge=0, le=10_000)
+    push_fake_invalid_percent: float = Field(0, ge=0, le=100)
+    push_fake_retry_percent: float = Field(0, ge=0, le=100)
     # Напоминания о ТО — раз в сутки, час по Europe/Minsk (ADR 0019 п. 7).
     maintenance_reminder_hour: int = Field(10, ge=0, le=23)
 
@@ -134,6 +150,14 @@ class Settings(BaseSettings):
     def _default_channel_prefix(self) -> "Settings":
         if not self.redis_channel_prefix:
             self.redis_channel_prefix = f"ev-servicedesk:{self.environment}"
+        return self
+
+    @model_validator(mode="after")
+    def _check_push_fake_emulation(self) -> "Settings":
+        if self.push_fake_latency_max_ms < self.push_fake_latency_min_ms:
+            raise ValueError("PUSH_FAKE_LATENCY_MAX_MS меньше PUSH_FAKE_LATENCY_MIN_MS")
+        if self.push_fake_invalid_percent + self.push_fake_retry_percent > 100:
+            raise ValueError("PUSH_FAKE_INVALID_PERCENT + PUSH_FAKE_RETRY_PERCENT больше 100")
         return self
 
     @property

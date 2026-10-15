@@ -10,6 +10,7 @@
 
 import json
 import logging
+import random
 import threading
 import time
 from dataclasses import dataclass, field
@@ -56,15 +57,53 @@ class PushSender(Protocol):
     def send(self, message: PushMessage) -> PushResult: ...
 
 
-class FakePushSender:
-    """Отправитель в памяти: всё «доставлено»; тесты задают исход для токена через `outcomes`."""
+@dataclass(frozen=True)
+class FcmEmulation:
+    """Поведение FCM для нагрузочного стенда (ADR 0028 п. 11): задержка и доли ошибок."""
 
-    def __init__(self) -> None:
+    latency_min_seconds: float = 0
+    latency_max_seconds: float = 0
+    invalid_ratio: float = 0
+    retry_ratio: float = 0
+
+    @classmethod
+    def from_settings(cls, settings: Settings) -> "FcmEmulation":
+        return cls(
+            settings.push_fake_latency_min_ms / 1000,
+            settings.push_fake_latency_max_ms / 1000,
+            settings.push_fake_invalid_percent / 100,
+            settings.push_fake_retry_percent / 100,
+        )
+
+    def respond(self, rng: random.Random) -> PushResult:
+        """Ждёт «ответа FCM» (вне блокировок) и возвращает исход по заданным долям."""
+        if self.latency_max_seconds:
+            time.sleep(rng.uniform(self.latency_min_seconds, self.latency_max_seconds))
+        roll = rng.random()
+        if roll < self.invalid_ratio:
+            return PushResult(Outcome.INVALID_TOKEN, "UNREGISTERED")
+        if roll < self.invalid_ratio + self.retry_ratio:
+            return PushResult(Outcome.RETRY, "UNAVAILABLE")
+        return PushResult(Outcome.SENT)
+
+
+class FakePushSender:
+    """Отправитель в памяти: всё «доставлено»; тесты задают исход для токена через `outcomes`.
+
+    С `emulation` (нагрузочный стенд) отвечает с задержкой и долей ошибок, как FCM, и не
+    копит отправленное в памяти: за долгий прогон это десятки тысяч сообщений.
+    """
+
+    def __init__(self, emulation: FcmEmulation | None = None) -> None:
         self.sent: list[PushMessage] = []
         self.outcomes: dict[str, PushResult] = {}
         self._lock = threading.Lock()
+        self._emulation = emulation
+        self._rng = random.Random()
 
     def send(self, message: PushMessage) -> PushResult:
+        if self._emulation is not None:
+            return self._emulation.respond(self._rng)
         with self._lock:
             result = self.outcomes.get(message.token, PushResult(Outcome.SENT))
             if result.outcome is Outcome.SENT:
@@ -221,4 +260,5 @@ def get_push_sender(settings: Settings) -> PushSender:
     if settings.push_provider == "fcm":
         account = ServiceAccount.from_json(settings.fcm_service_account_json)
         return FcmPushSender(account, settings.fcm_timeout_seconds)
-    return FakePushSender()
+    emulation = FcmEmulation.from_settings(settings)
+    return FakePushSender(emulation if emulation != FcmEmulation() else None)
