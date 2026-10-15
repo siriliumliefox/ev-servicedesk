@@ -24,4 +24,9 @@ export INTEGRATION_EXTRA_COMPOSE="$ROOT/docker-compose.load.yml" \
   INTEGRATION_S3_PUBLIC="http://minio:9000" \
   INTEGRATION_PORT="${LOAD_PORT:-18380}" \
   INTEGRATION_S3_PORT="${LOAD_S3_PORT:-19300}"
-exec "$ROOT/scripts/integration_stack.sh" "$IMAGE" -- "$ROOT/load/run.sh" "$@"
+# macOS: сон замораживает Docker, а часы при пробуждении прыгают вперёд — токены «истекают»,
+# k6 растягивает этапы (прогон главы 24 испорчен так 2026-10-15). caffeinate держит систему без
+# сна на время прогона; закрытая крышка всё равно усыпит. На Linux (CI) его нет — не нужен.
+WAKE=()
+if command -v caffeinate >/dev/null 2>&1; then WAKE=(caffeinate -i); fi
+exec ${WAKE[@]+"${WAKE[@]}"} "$ROOT/scripts/integration_stack.sh" "$IMAGE" -- "$ROOT/load/run.sh" "$@"
