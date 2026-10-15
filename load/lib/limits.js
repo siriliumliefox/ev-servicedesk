@@ -7,10 +7,15 @@ import { WebSocket } from 'k6/websockets';
 
 import { WS_BASE, ipFor, meta, request } from './common.js';
 
+// Свои «IP» на каждый прогон: счётчики лимитов живут в Redis до часа (SMS), и следующий
+// сценарий на том же стенде иначе начал бы с заполненного окна.
+const RUN_IP_BASE = 250000 + (Math.floor(Date.now() / 1000) % 100000) * 4;
+const limitsIp = (k) => ipFor(RUN_IP_BASE + k);
+
 const randomPhone = (prefix) => `${prefix}${String(Math.floor(Math.random() * 1e7)).padStart(7, '0')}`;
 
 function smsPerIp() {
-  const ip = ipFor(250000);
+  const ip = limitsIp(0);
   const codes = [];
   for (let i = 0; i < 31; i += 1) {
     const r = request('POST', '/auth/phone/request-code', { phone: randomPhone('+37529') },
@@ -25,7 +30,7 @@ function smsPerIp() {
 }
 
 function staffLoginPerIp() {
-  const ip = ipFor(250001);
+  const ip = limitsIp(1);
   const codes = [];
   for (let i = 0; i < 21; i += 1) {
     const r = request('POST', '/auth/staff/login', { phone: randomPhone('+37525'), password: 'wrong-password' },
@@ -39,7 +44,7 @@ function staffLoginPerIp() {
   const phoneCodes = [];
   for (let i = 0; i < 6; i += 1) {
     const r = request('POST', '/auth/staff/login', { phone: meta.limitsStaffPhone, password: 'wrong-password' },
-      { name: 'limits.staff_login', kind: 'limits', ip: ipFor(250002), expected: [401, 429] });
+      { name: 'limits.staff_login', kind: 'limits', ip: limitsIp(2), expected: [401, 429] });
     phoneCodes.push(r.status);
   }
   check(phoneCodes, { 'Вход сотрудника: 6-я неверная попытка по номеру → 429': (c) => c[5] === 429 });
@@ -48,7 +53,7 @@ function staffLoginPerIp() {
 // 61 подключение за минуту с одного IP: 60 закрывает сервер по таймауту auth (4401) или мы
 // сами, одно — 4429.
 function wsPerIp() {
-  const ip = ipFor(250003);
+  const ip = limitsIp(3);
   const closes = new Array(61).fill(null);
   for (let i = 0; i < 61; i += 1) {
     const ws = new WebSocket(`${WS_BASE}/tickets/1/ws`, null, {

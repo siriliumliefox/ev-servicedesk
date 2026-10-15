@@ -104,6 +104,13 @@ def analyze(out: Path) -> dict:
         "phases": {k: v.row() for k, v in sorted(by_phase.items())},
         "kinds": {k: v.row() for k, v in sorted(by_kind_phase.items())},
         "minutes": {m - first_minute: by_minute[m].row(60) for m in sorted(by_minute)},
+        # Минуты без единого запроса посреди прогона — сон или заморозка машины (часы прыгнули):
+        # такой прогон недостоверен (глава 24, 2026-10-15).
+        "gaps": [
+            m - first_minute
+            for m in range(min(by_minute, default=0), max(by_minute, default=0))
+            if m not in by_minute
+        ],
         "chat_delivery_ms": {
             "count": len(chat),
             "p95": round(pct(chat, 95), 1),
@@ -111,6 +118,9 @@ def analyze(out: Path) -> dict:
         },
         "containers": containers(out / "docker_stats.jsonl"),
     }
+    broadcast = out / "broadcast.json"
+    if broadcast.exists():
+        report["broadcast"] = json.loads(broadcast.read_text())
     summary = out / "summary.json"
     if summary.exists():
         metrics = json.loads(summary.read_text())["metrics"]
@@ -122,9 +132,6 @@ def analyze(out: Path) -> dict:
         stale = metrics.get("stale_board_cards")
         if stale:
             report["stale_board_cards"] = stale["values"].get("count")
-        broadcast = metrics.get("broadcast_delivery_seconds")
-        if broadcast:
-            report["broadcast_delivery_seconds"] = broadcast["values"].get("max")
     return report
 
 
@@ -170,6 +177,8 @@ def table(rows: dict, key: str) -> list[str]:
 
 def markdown(report: dict, out: Path) -> str:
     lines = [f"# Прогон {out.name}", ""]
+    if report["gaps"]:
+        lines += [f"**Недостоверен:** нет запросов в минуты {report['gaps']} (сон машины).", ""]
     if "thresholds" in report:
         lines += ["## Пороги k6", ""]
         lines += [f"- {'PASS' if ok else 'FAIL'} `{k}`" for k, ok in report["thresholds"].items()]
@@ -177,8 +186,13 @@ def markdown(report: dict, out: Path) -> str:
     if "stale_board_cards" in report:
         stale = report["stale_board_cards"]
         lines += [f"Карточки, взятые другим инженером (ожидаемые 404): {stale}", ""]
-    if "broadcast_delivery_seconds" in report:
-        lines += [f"Доставка рассылки: {report['broadcast_delivery_seconds']:.0f} с", ""]
+    if "broadcast" in report:
+        b = report["broadcast"]
+        lines += [
+            f"Рассылка: {b['deliveries']} доставок (получателей {b['recipients']}), последняя за "
+            f"{b['last_done_s']} с, половина — за {b['median_s']} с, в очереди {b['pending']}",
+            "",
+        ]
     for title, key, col in (
         ("Чтение и изменение по фазам", "kinds", "вид/фаза"),
         ("Операции (по убыванию p95)", "operations", "операция"),
@@ -209,6 +223,9 @@ def main() -> int:
         print(f"  {k:<22} n={v['requests']:<7} p95={v['p95_ms']} мс p99={v['p99_ms']} мс")
     for k, v in report["phases"].items():
         print(f"  ошибки {k:<15} {v['error_rate'] * 100:.2f} %")
+    if report["gaps"]:
+        print(f"FAIL  прогон недостоверен: нет запросов в минуты {report['gaps']} (сон машины?)")
+        return 1
     return 0
 
 

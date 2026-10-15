@@ -203,23 +203,11 @@ export function adminAction(a) {
   weighted(ADMIN_ACTIONS)(a);
 }
 
-// Рассылка всем клиентам (новость: прошивка адресуется одной модели, ADR 0019) и ожидание
-// последней доставки — норматив 5 мин (ADR 0028 п. 12). Возвращает секунды или null.
-export function broadcastAndWait(a, limitSeconds = 600) {
-  const r = write('POST', '/notifications', { type: 'news', message: 'Нагрузка: новость для всех' },
+// Рассылка всем клиентам (новость: прошивка адресуется одной модели, ADR 0019). Время
+// доставки меряет load/run.sh по БД (ADR 0028 п. 12).
+export function broadcast(a) {
+  write('POST', '/notifications', { type: 'news', message: 'Нагрузка: новость для всех' },
     'notifications.create', a, { expected: [201] });
-  if (r.status !== 201) return null;
-  const id = r.json().id;
-  const started = Date.now();
-  while ((Date.now() - started) / 1000 < limitSeconds) {
-    sleep(5);
-    const list = get('/notifications/published?type=news&page_size=5', 'notifications.published', a);
-    const item = (json(list, { items: [] }).items || []).find((n) => n.id === id);
-    if (item && item.stats.delivered + item.stats.failed >= item.stats.recipients) {
-      return { seconds: (Date.now() - started) / 1000, stats: item.stats };
-    }
-  }
-  return null;
 }
 
 // ---------- Всплеск после рассылки: клиент открывает приложение (peak.js) ----------

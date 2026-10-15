@@ -86,6 +86,36 @@ for scenario in "$@"; do
     FROM pg_stat_statements ORDER BY total_exec_time DESC LIMIT 20" >"$out/pg_top20.csv"
   "${COMPOSE[@]}" logs --no-color --since "$log_since" postgres 2>/dev/null \
     | grep -E 'duration: [0-9.]+ ms' >"$out/pg_slow.log" || true
+  # Доставка рассылки (peak, ADR 0028 п. 12) — по БД: последняя доставка или окончательная
+  # ошибка от публикации и строки, оставшиеся в очереди. Норматив — 300 с и пустая очередь.
+  if [ "$scenario" = peak ]; then
+    psql_stack -At -F, -c "
+      WITH n AS (SELECT id, created_at FROM notification
+                 WHERE type = 'news' AND created_at >= '$log_since' ORDER BY id DESC LIMIT 1)
+      SELECT (SELECT count(*) FROM notification_recipient r WHERE r.notification_id = n.id),
+             count(d.id), count(d.delivered_at), count(d.failed_at),
+             count(*) FILTER (WHERE d.id IS NOT NULL AND d.delivered_at IS NULL AND d.failed_at IS NULL),
+             round(extract(epoch FROM max(coalesce(d.delivered_at, d.failed_at)) - n.created_at)),
+             round(extract(epoch FROM percentile_disc(0.5) WITHIN GROUP
+                   (ORDER BY coalesce(d.delivered_at, d.failed_at)) - n.created_at))
+      FROM n LEFT JOIN notification_delivery d ON d.notification_id = n.id
+      GROUP BY n.id, n.created_at" >"$out/broadcast.csv" || true
+    if ! python3 - "$out" <<'PY'; then status=1; fi
+import json, sys
+out = sys.argv[1]
+row = open(f"{out}/broadcast.csv").read().strip().split(",")
+if len(row) < 7 or not row[5]:
+    print("FAIL  рассылка: публикации нет или ничего не доставлено")
+    sys.exit(1)
+keys = ["recipients", "deliveries", "delivered", "failed", "pending", "last_done_s", "median_s"]
+b = dict(zip(keys, (int(float(x)) for x in row)))
+json.dump(b, open(f"{out}/broadcast.json", "w"))
+ok = b["pending"] == 0 and b["last_done_s"] <= 300
+print(f"{'PASS' if ok else 'FAIL'}  рассылка: {b['deliveries']} доставок, последняя за "
+      f"{b['last_done_s']} с (половина — за {b['median_s']} с), в очереди {b['pending']}")
+sys.exit(0 if ok else 1)
+PY
+  fi
   python3 "$ROOT/load/analyze.py" "$out" || status=1
 
   if [ "$status" -eq 0 ]; then

@@ -4,17 +4,16 @@
 // пятый тикет — с фото), инженеры разбирают очередь; затем 50 RPS (15–25) — восстановление.
 //
 // Пороги: steady — нормативы времени ответа; peak — доля ошибок < 1 % и p99 ≤ 2 с; recovery
-// (15–17) — только доля ошибок; с 17-й минуты снова нормативы. Доставка рассылки ≤ 5 мин.
-
-import { Trend } from 'k6/metrics';
+// (15–17) — только доля ошибок; с 17-й минуты снова нормативы. Доставку рассылки (≤ 5 мин,
+// ADR 0028 п. 12) меряет load/run.sh по БД после сценария: k6 видит только сводку API, где
+// получатели без действующего push-токена есть, а доставок у них нет.
 
 import { adminSession, clients, guarded, setPhases, summaryTo, thresholds } from '../lib/common.js';
 import { CHAT_GRACE, FULL, USERS, rampingVus } from '../lib/mixed.js';
-import { broadcastAndWait, burstSession } from '../lib/roles.js';
+import { broadcast as publishBroadcast, burstSession } from '../lib/roles.js';
 
 export { admin, chat, client, engineer } from '../lib/mixed.js';
 
-const broadcastSeconds = new Trend('broadcast_delivery_seconds');
 const scaleTime = (minutes) => (FULL ? minutes * 60 : minutes * 12); // ci: 25 мин → 5 мин
 const at = (minutes) => `${scaleTime(minutes)}s`;
 const BURST_PEAK = FULL ? 10 : 2; // сессий в секунду на пике всплеска
@@ -27,7 +26,7 @@ export const options = {
     chat: rampingVus(USERS.chat * 2, at(14), 'chat', { ramp: at(1), startTime: at(5), grace: CHAT_GRACE }),
     broadcast: {
       executor: 'per-vu-iterations', exec: 'broadcast', vus: 1, iterations: 1,
-      startTime: at(10), maxDuration: at(12),
+      startTime: at(10), maxDuration: '1m',
     },
     burst: {
       executor: 'ramping-arrival-rate',
@@ -44,10 +43,7 @@ export const options = {
       ],
     },
   },
-  thresholds: {
-    ...thresholds(['steady', 'peak', 'recovery']),
-    broadcast_delivery_seconds: [`max<${FULL ? 300 : 120}`],
-  },
+  thresholds: thresholds(['steady', 'peak', 'recovery']),
   summaryTrendStats: ['avg', 'med', 'p(95)', 'p(99)', 'max', 'count'],
 };
 
@@ -66,9 +62,7 @@ export function setup() {
 
 export const broadcast = guarded((data) => {
   setPhases(data.phases, data.start);
-  const result = broadcastAndWait(adminSession(), scaleTime(12));
-  broadcastSeconds.add(result ? result.seconds : 100000);
-  if (result) console.log(`Рассылка: ${JSON.stringify(result.stats)} за ${result.seconds.toFixed(0)} с`);
+  publishBroadcast(adminSession());
 });
 
 let burstPhasesSet = false;
