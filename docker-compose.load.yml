@@ -19,6 +19,21 @@ services:
       - log_min_duration_statement=100
       - -c
       - log_parameter_max_length=0
+      # Настройки под 2 ГБ памяти (ADR 0028 п. 15) — обязательны и для production (глава 26).
+      # max_connections: 2 процесса API × (5 + 10) + worker уведомлений и аналитики (по 15) +
+      # разовые задачи и запас.
+      - -c
+      - shared_buffers=512MB
+      - -c
+      - effective_cache_size=1536MB
+      - -c
+      - work_mem=8MB
+      - -c
+      - maintenance_work_mem=128MB
+      - -c
+      - random_page_cost=1.1
+      - -c
+      - max_connections=100
     deploy:
       resources:
         limits: {cpus: "2", memory: 2g}

@@ -6,6 +6,10 @@ import http from 'k6/http';
 import { sleep } from 'k6';
 import { clearInterval, setInterval, setTimeout } from 'k6/timers';
 import { WebSocket } from 'k6/websockets';
+import { Counter } from 'k6/metrics';
+
+// Карточки тикетов, взятых другим инженером после загрузки доски (ожидаемые 404).
+const staleCards = new Counter('stale_board_cards');
 
 import {
   BURST_CLIENT_OFFSET, SEARCH, Session, WS_BASE, chatDelivery, clients, errors, get, json, meta, phaseNow,
@@ -133,7 +137,15 @@ const ENGINEER_ACTIONS = [
   [450, (e) => {
     const t = pick([...e.board.new, ...e.board.in_progress]);
     if (!t) return;
-    get(`/tickets/${t.id}`, 'tickets.get', e.s);
+    // Доска устаревает до 15 с: новый тикет мог взять другой инженер, и он больше не виден
+    // (RBAC-04, ADR 0017) — 404 здесь ожидаемый исход гонки, как 409 при взятии.
+    const fromQueue = t.status === 'new';
+    const card = get(`/tickets/${t.id}`, 'tickets.get', e.s,
+      { expected: fromQueue ? [200, 404] : [200], headers: {} });
+    if (card.status === 404) {
+      staleCards.add(1);
+      return;
+    }
     get(`/tickets/${t.id}/messages?page_size=50`, 'tickets.messages.list', e.s);
     if (t.vehicle_id) {
       get(`/vehicles/${t.vehicle_id}/aggregate-statuses`, 'aggregates.statuses', e.s);
@@ -251,7 +263,16 @@ export function chatSession(c, holdSeconds, intervalSeconds) {
   });
   const sent = {};
   let timer = null;
+  let closing = false;
+  // Закрываем один раз: повторный close() даёт ошибку «close sent» (наш артефакт, не сервера).
+  const close = () => {
+    if (closing) return;
+    closing = true;
+    if (timer) clearInterval(timer);
+    ws.close();
+  };
   const send = () => {
+    if (closing) return;
     const marker = `${exec.vu.idInTest}-${Date.now()}`;
     sent[marker] = Date.now();
     const r = write('POST', `/tickets/${ticketId}/messages`, { body: `Чат ${marker}` },
@@ -260,7 +281,7 @@ export function chatSession(c, holdSeconds, intervalSeconds) {
       // Инженер решил тикет (409 TICKET_RESOLVED) — следующий раз клиент создаст новый.
       delete sent[marker];
       c.ticketIds = c.ticketIds.filter((id) => id !== ticketId);
-      ws.close();
+      close();
     }
   };
   ws.onopen = () => ws.send(JSON.stringify({ type: 'auth', access_token: c.s.access }));
@@ -282,11 +303,12 @@ export function chatSession(c, holdSeconds, intervalSeconds) {
     console.warn(`WebSocket тикета ${ticketId}: ${e && e.error}`);
   };
   ws.onclose = (event) => {
+    closing = true;
     if (timer) clearInterval(timer);
     // Ожидаемое закрытие — наше (1000/1005); 4401/1011/1013 и прочее — ошибка (ADR 0028 п. 3).
     const ok = !event || !event.code || event.code === 1000 || event.code === 1005;
     errors.add(!ok, { name: 'tickets.ws', kind: 'ws', phase: phaseNow(), code: String(event && event.code) });
   };
-  setTimeout(() => ws.close(), holdSeconds * 1000);
+  setTimeout(close, holdSeconds * 1000);
 }
 

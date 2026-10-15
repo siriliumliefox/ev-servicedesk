@@ -20,5 +20,10 @@ COPY app ./app
 COPY alembic.ini ./
 COPY alembic ./alembic
 
+# Процессов uvicorn (Глава 24, ADR 0028 п. 15): Python занимает одно ядро на процесс; сервер —
+# 2 vCPU. uvicorn читает WEB_CONCURRENCY сам; лимит WebSocket на пользователя общий (Redis).
+# Пул БД на процесс — DB_POOL_SIZE + DB_MAX_OVERFLOW: процессы × пул ≤ max_connections PostgreSQL.
+ENV WEB_CONCURRENCY=2
+
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

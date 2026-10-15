@@ -119,6 +119,9 @@ def analyze(out: Path) -> dict:
             for name, m in metrics.items()
             for expr, ok in (m.get("thresholds") or {}).items()
         }
+        stale = metrics.get("stale_board_cards")
+        if stale:
+            report["stale_board_cards"] = stale["values"].get("count")
         broadcast = metrics.get("broadcast_delivery_seconds")
         if broadcast:
             report["broadcast_delivery_seconds"] = broadcast["values"].get("max")
@@ -171,6 +174,9 @@ def markdown(report: dict, out: Path) -> str:
         lines += ["## Пороги k6", ""]
         lines += [f"- {'PASS' if ok else 'FAIL'} `{k}`" for k, ok in report["thresholds"].items()]
         lines.append("")
+    if "stale_board_cards" in report:
+        stale = report["stale_board_cards"]
+        lines += [f"Карточки, взятые другим инженером (ожидаемые 404): {stale}", ""]
     if "broadcast_delivery_seconds" in report:
         lines += [f"Доставка рассылки: {report['broadcast_delivery_seconds']:.0f} с", ""]
     for title, key, col in (

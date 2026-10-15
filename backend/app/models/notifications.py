@@ -59,6 +59,13 @@ class Notification(IdMixin, CreatedAtMixin, Base):
             name="maintenance_target",
         ),
         Index("ix_notification_created_at", "created_at"),
+        # Список рассылок администратора (published_stmt): без напоминаний о ТО (ADR 0028 п. 15).
+        Index(
+            "ix_notification_published",
+            text("created_at DESC"),
+            text("id DESC"),
+            postgresql_where=text("type IN ('firmware', 'news', 'promo')"),
+        ),
     )
 
     type: Mapped[NotificationType] = mapped_column(
