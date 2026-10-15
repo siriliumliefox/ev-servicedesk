@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.core.time import BUSINESS_TZ
 from app.domain.notifications.dispatch import retry_delay
-from app.domain.notifications.push import Outcome, PushResult
+from app.domain.notifications.push import FakePushSender, FcmEmulation, Outcome, PushResult
 from app.domain.notifications.reminders import run_maintenance_reminders
 from app.domain.tickets.events import MessageCreated, TicketEvents, TicketUpdated
 from app.models import (
@@ -128,6 +128,21 @@ def test_batches_are_drained(client, admin, make_owner, make_worker, sender, set
     publish(client, admin, type="promo", message="Всем")
     assert worker.dispatch() == 3
     assert {m.token for m in sender.sent} == {o.token for o in owners}
+
+
+def test_sends_are_parallel_across_tokens(client, admin, make_owner, make_worker, settings, db):
+    """Рассылка не ждёт FCM последовательно (ADR 0028 п. 12): 24 токена × 100 мс за ≪ 2,4 с."""
+    owners = [make_owner(None) for _ in range(24)]
+    slow = FakePushSender(FcmEmulation(latency_min_seconds=0.1, latency_max_seconds=0.1))
+    worker = make_worker()
+    worker.sender = slow
+    worker.settings = settings.model_copy(update={"push_send_concurrency": 8})
+    news = publish(client, admin, type="news", message="Всем сразу")
+    started = time.perf_counter()
+    assert worker.dispatch() == len(owners)
+    elapsed = time.perf_counter() - started
+    assert elapsed < 1.2, f"отправка последовательная: {elapsed:.2f} с"
+    assert all(d.delivered_at for d in deliveries(db, news["id"]))
 
 
 # ---------- Доставка < 10 с: публикация → сигнал Redis → отправитель ----------

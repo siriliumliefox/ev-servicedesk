@@ -16,6 +16,7 @@ K6_IMAGE="grafana/k6:2.3.0@sha256:9c2dee7f8ed74d317e4027c06a10f169b625638189de8d
 : "${E2E_COMPOSE:?запускается из scripts/load_stack.sh}"
 read -r -a COMPOSE <<<"$E2E_COMPOSE"
 RESULTS="${LOAD_RESULTS:-$ROOT/load/results}"
+mkdir -p "$RESULTS" && RESULTS="$(cd "$RESULTS" && pwd)"  # docker -v — только абсолютный путь
 SEED_DIR="$(mktemp -d)"
 chmod 700 "$SEED_DIR"
 STATS_PID=""

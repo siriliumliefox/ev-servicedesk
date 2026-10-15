@@ -84,3 +84,54 @@ def reserve(
     except BaseException:
         undo_hit(redis, key)
         raise
+
+
+# Места одновременных подключений (ADR 0028 п. 15): множество с арендой — член = подключение,
+# балл = срок аренды по часам Redis. Истёкшие аренды (процесс упал, не освободив место)
+# вычищаются при следующем захвате, поэтому место не теряется навсегда.
+# Время — с микросекундами: при целых секундах аренда, продлённая в конце секунды, истекала
+# бы раньше срока.
+_NOW = "local t = redis.call('TIME') local now = tonumber(t[1]) + tonumber(t[2]) / 1000000\n"
+_ACQUIRE_SLOT = (
+    _NOW
+    + """
+redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', now)
+if redis.call('ZCARD', KEYS[1]) >= tonumber(ARGV[1]) then return 0 end
+redis.call('ZADD', KEYS[1], now + tonumber(ARGV[2]), ARGV[3])
+redis.call('EXPIRE', KEYS[1], math.ceil(tonumber(ARGV[2])))
+return 1
+"""
+)
+_RENEW_SLOT = (
+    _NOW
+    + """
+redis.call('ZADD', KEYS[1], 'XX', now + tonumber(ARGV[1]), ARGV[2])
+redis.call('EXPIRE', KEYS[1], math.ceil(tonumber(ARGV[1])))
+return 1
+"""
+)
+
+
+@dataclass
+class Slot:
+    """Место подключения в общем для всех процессов лимите (`ws_max_sockets_per_user`).
+
+    Аренда продлевается, пока подключение живо (`renew` не реже чем раз в `lease_seconds`).
+    """
+
+    redis: Redis
+    key: str
+    member: str
+    lease_seconds: float
+
+    def acquire(self, limit: int) -> bool:
+        script = self.redis.register_script(_ACQUIRE_SLOT)
+        return bool(script(keys=[PREFIX + self.key], args=[limit, self.lease_seconds, self.member]))
+
+    def renew(self) -> None:
+        self.redis.register_script(_RENEW_SLOT)(
+            keys=[PREFIX + self.key], args=[self.lease_seconds, self.member]
+        )
+
+    def release(self) -> None:
+        self.redis.zrem(PREFIX + self.key, self.member)

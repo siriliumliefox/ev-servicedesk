@@ -11,7 +11,8 @@
 4403, деактивированный — 4401. По истечении access-токена — 4401.
 
 Лимиты: попытки подключения с IP (`ws_connects_per_ip_minute`, Redis) и одновременные
-подключения пользователя в процессе (`ws_max_sockets_per_user`) — сверх них 4429. Сбой Redis
+подключения пользователя (`ws_max_sockets_per_user`, Redis — общий для всех процессов) — сверх
+них 4429. Сбой Redis
 или БД — 1011; не успевающий забирать события получатель — 1013.
 
 Отказы — исключения домена (ApiError) и инфраструктуры; код закрытия выбирается в одном
@@ -25,8 +26,8 @@ import asyncio
 import contextlib
 import logging
 import re
-from collections import Counter
-from collections.abc import Iterator
+import uuid
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal, NoReturn
 
@@ -80,24 +81,26 @@ Frame = dict[str, Any]
 READY: Frame = {"type": "ready"}
 PubSubHubDep = Annotated[PubSubHub, Depends(get_pubsub_hub)]
 
-# Открытые подключения пользователя в процессе (лимит `ws_max_sockets_per_user`). В uvicorn
-# все обработчики WebSocket процесса — в одном цикле событий, поэтому блокировка не нужна
-# (проверка и увеличение счётчика идут без await между ними).
-_open_sockets: Counter[int] = Counter()
+# Аренда места подключения пользователя в Redis (ADR 0028 п. 15): общий лимит для всех
+# процессов uvicorn. Продлевается в паузах доставки (LISTEN_TIMEOUT_SECONDS) и на событиях.
+SOCKET_LEASE_SECONDS = 90
+SOCKET_RENEW_SECONDS = LISTEN_TIMEOUT_SECONDS
 
 
-@contextlib.contextmanager
-def _user_socket(user_id: int, limit: int) -> Iterator[None]:
-    """Место подключения пользователя; освобождается и при аварийном завершении."""
-    if _open_sockets[user_id] >= limit:
+@contextlib.asynccontextmanager
+async def _user_socket(redis: Redis, user_id: int, limit: int) -> AsyncIterator[rate_limit.Slot]:
+    """Место подключения пользователя; освобождается и при аварийном завершении (а если
+    процесс упал — по истечении аренды)."""
+    slot = rate_limit.Slot(redis, f"ws-user:{user_id}", uuid.uuid4().hex, SOCKET_LEASE_SECONDS)
+    if not await run_in_threadpool(slot.acquire, limit):
         raise rate_limited(0, "Слишком много одновременных подключений")
-    _open_sockets[user_id] += 1
     try:
-        yield
+        yield slot
     finally:
-        _open_sockets[user_id] -= 1
-        if not _open_sockets[user_id]:
-            del _open_sockets[user_id]
+        try:
+            await asyncio.shield(run_in_threadpool(slot.release))
+        except Exception:  # Redis недоступен: место освободит истечение аренды
+            logger.warning("Место подключения не освобождено — истечёт по аренде")
 
 
 def _ticket_id(raw: str) -> int:
@@ -177,10 +180,15 @@ async def _forward(
     claims: AccessClaims,
     ticket_id: int,
     presign: Presign,
+    slot: rate_limit.Slot,
 ) -> NoReturn:
     """`ready`, затем события канала → клиенту — до истечения токена или потери доступа."""
     await websocket.send_json(READY)
+    renewed = asyncio.get_running_loop().time()
     while True:
+        if asyncio.get_running_loop().time() - renewed >= SOCKET_RENEW_SECONDS:
+            await run_in_threadpool(slot.renew)
+            renewed = asyncio.get_running_loop().time()
         remaining = (claims.expires_at - datetime.now(UTC)).total_seconds()
         if remaining <= 0:
             raise unauthorized("Срок действия токена истёк")
@@ -203,9 +211,12 @@ async def _relay(
     claims: AccessClaims,
     ticket_id: int,
     presign: Presign,
+    slot: rate_limit.Slot,
 ) -> None:
     """Доставка до закрытия: возврат — клиент отключился сам, иначе исключение доставки."""
-    forward = asyncio.create_task(_forward(websocket, listener, scope, claims, ticket_id, presign))
+    forward = asyncio.create_task(
+        _forward(websocket, listener, scope, claims, ticket_id, presign, slot)
+    )
     drain = asyncio.create_task(_drain(websocket))
     try:
         await asyncio.wait({forward, drain}, return_when=asyncio.FIRST_COMPLETED)
@@ -279,13 +290,13 @@ async def _serve(
         "Слишком много попыток подключения",
     )
     claims = await _authenticate(websocket, settings)
-    with _user_socket(claims.user_id, settings.ws_max_sockets_per_user):
+    async with _user_socket(redis, claims.user_id, settings.ws_max_sockets_per_user) as slot:
         ticket_id = _ticket_id(ticket_ref)
         await run_in_threadpool(_check_access, scope, claims.user_id, ticket_id)
         # Доступ проверяется до подписки: отказ не трогает Redis. Потерю доступа между
         # проверкой и подпиской ловит проверка на следующем событии и REST после `ready`.
         listener = await hub.subscribe(events.channel(ticket_id))
         try:
-            await _relay(websocket, listener, scope, claims, ticket_id, presign)
+            await _relay(websocket, listener, scope, claims, ticket_id, presign, slot)
         finally:
             hub.unsubscribe(listener)

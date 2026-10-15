@@ -32,7 +32,15 @@ def get_by_id[M](db: Session, model: type[M], value: int, **kwargs: Any) -> M | 
 @lru_cache
 def get_engine() -> Engine:
     # hide_parameters: телефоны и прочие ПД не попадают в текст исключений и логи (ADR 0005).
-    return create_engine(get_settings().database_url, pool_pre_ping=True, hide_parameters=True)
+    settings = get_settings()
+    return create_engine(
+        settings.database_url,
+        pool_pre_ping=True,
+        hide_parameters=True,
+        pool_size=settings.db_pool_size,
+        max_overflow=settings.db_max_overflow,
+        pool_timeout=settings.db_pool_timeout_seconds,
+    )
 
 
 @lru_cache
