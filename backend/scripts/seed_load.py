@@ -10,7 +10,8 @@
 
 Объём при --clients 10000: 10 моделей с двумя прошивками и регламентами на все агрегаты,
 10 000 клиентов с согласием ПД, авто, статусами агрегатов и одним push-токеном, 20 инженеров,
-3 администратора, 20 000 тикетов за 2 года и 60 000 сообщений, 8 000 работ ТО, 20 000
+3 администратора, 20 000 тикетов за 2 года и 60 000 сообщений, история ТО (замена на каждый
+статус агрегата — 60 000, и 8 000 работ), 20 000
 напоминаний о ТО, 30 000 доставок push, 200 опубликованных статей базы знаний.
 
 В FILE (0600) — id и токены: у клиента одна сессия, у сотрудника — сотни (виртуальных
@@ -134,12 +135,22 @@ VOLUME_SQL = [
        FROM ticket t JOIN vehicle v ON v.id = t.vehicle_id
        CROSS JOIN generate_series(1, 3) k
        WHERE v.vin LIKE 'LDTS%'""",
-    # Работы ТО: замены по тикетам категории «Агрегаты/ТО» и записанные администратором.
+    # История ТО. Замена агрегата пишет и статус, и запись истории (ADR 0016) — на каждую
+    # последнюю замену своя запись «замена» (иначе аудит целостности: replacement_without_history).
+    """INSERT INTO maintenance_record (vehicle_id, aggregate_type_id, performed_by_user_id,
+                                      performed_at, mileage_at_service, kind)
+       SELECT s.vehicle_id, s.aggregate_type_id, e.id, s.last_replaced_at,
+              s.last_replaced_mileage, 'replacement'
+       FROM vehicle_aggregate_status s
+       JOIN vehicle v ON v.id = s.vehicle_id AND v.vin LIKE 'LDTS%'
+       CROSS JOIN (SELECT min(id) id FROM app_user WHERE phone LIKE :engineer_phone || '%') e
+       WHERE s.last_replaced_at IS NOT NULL""",
+    # Работы без замены (осмотр, долив) — по тикетам и записанные администратором.
     """INSERT INTO maintenance_record (vehicle_id, aggregate_type_id, performed_by_user_id,
                                       ticket_id, performed_at, mileage_at_service, description)
        SELECT t.vehicle_id, a.id, coalesce(t.assigned_engineer_id, e.id),
               CASE WHEN t.n % 2 = 0 THEN t.id END, t.created_at::date + 1,
-              greatest(v.mileage - (t.n * 13) % 20000, 0), 'Замена'
+              greatest(v.mileage - (t.n * 13) % 20000, 0), 'Осмотр'
        FROM (SELECT id, vehicle_id, assigned_engineer_id, created_at,
                     row_number() OVER (ORDER BY id) n
              FROM ticket WHERE description LIKE 'Нагрузочный тикет %') t

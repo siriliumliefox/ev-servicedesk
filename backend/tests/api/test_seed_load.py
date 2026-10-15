@@ -11,6 +11,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
+from app.tools.integrity import run_checks
 from scripts.seed_load import ADMINS, ARTICLES, ENGINEERS, refuse_production, seed, sessions
 from tests.api.conftest import API, bearer
 
@@ -51,6 +52,11 @@ def test_volume_matches_adr(db: Session, seeded: dict) -> None:
         " ON v.id = s.vehicle_id WHERE v.vin LIKE 'LDTS%'",
     )
     assert statuses == CLIENTS * count(db, "SELECT count(*) FROM aggregate_type")
+
+
+def test_seeded_data_passes_integrity_audit(db: Session, seeded: dict) -> None:
+    """Сид согласован, как данные, созданные через API (аудит целостности, ADR 0021 п. 8)."""
+    assert [(v.check.name, v.count) for v in run_checks(db)] == []
 
 
 def test_seeded_tokens_work_like_login(client: TestClient, seeded: dict) -> None:
