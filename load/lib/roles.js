@@ -50,7 +50,9 @@ function ticketCard(c) {
   get(`/tickets/${id}/messages?page_size=50`, 'tickets.messages.list', c.s);
 }
 
-export function createTicket(c, withPhoto) {
+// expected — ожидаемые коды создания: в чате клиент за долгий прогон упирается в лимит
+// «10 тикетов в час» (ADR 0017), 429 там — работа лимита, а не сбой.
+export function createTicket(c, withPhoto, expected = [201]) {
   const body = {
     vehicle_id: c.vehicleId,
     category: pick(CATEGORIES),
@@ -70,7 +72,7 @@ export function createTicket(c, withPhoto) {
       body.attachments = [{ file_url: fileUrl, file_type: 'photo' }];
     }
   }
-  const r = write('POST', '/tickets', body, 'tickets.create', c.s, { expected: [201] });
+  const r = write('POST', '/tickets', body, 'tickets.create', c.s, { expected });
   if (r.status === 201) c.ticketIds.unshift(r.json().id);
   return r;
 }
@@ -242,9 +244,12 @@ export function burstSession(withTicket) {
 // «запись → Redis → WebSocket». Подключение живёт holdSeconds, затем переподключение.
 export function chatSession(c, holdSeconds, intervalSeconds) {
   c.s.ensureFresh(holdSeconds + 60);
-  if (!c.ticketIds.length) createTicket(c, false);
+  if (!c.ticketIds.length) createTicket(c, false, [201, 429]);
   const ticketId = c.ticketIds[0];
-  if (!ticketId) return;
+  if (!ticketId) {
+    sleep(60); // лимит тикетов в час исчерпан — ждём, а не долбим API без паузы
+    return;
+  }
   const ws = new WebSocket(`${WS_BASE}/tickets/${ticketId}/ws`, null, {
     headers: { 'X-Forwarded-For': c.s.ip },
     tags: { name: 'tickets.ws' },
