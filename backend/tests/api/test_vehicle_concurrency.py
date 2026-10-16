@@ -9,7 +9,7 @@ from collections.abc import Iterator
 
 import pytest
 from redis import Redis
-from sqlalchemy import Engine, delete, func, select
+from sqlalchemy import Engine, delete, func, select, text
 from sqlalchemy.orm import Session
 
 from app.core.errors import ApiError
@@ -95,3 +95,37 @@ def test_unique_index_race_maps_to_409(
         isinstance(r, Vehicle) or (isinstance(r, ApiError) and r.status_code == 409)
         for r in results
     ), results
+
+
+def test_open_reference_to_vehicle_does_not_block_mileage(
+    migrated_engine: Engine, real_redis: Redis, two_clients: tuple[int, int]
+):
+    """Глава 24 (прогон k6): суточные напоминания о ТО — одна долгая транзакция, и вставки со
+    ссылкой на авто держат FOR KEY SHARE до её конца. Изменение авто — FOR NO KEY UPDATE (ключ
+    не меняется), поэтому обновление пробега не ждёт эту транзакцию (было — до минуты в 10:00).
+    """
+    user_id = two_clients[0]
+    with Session(migrated_engine) as setup:
+        vehicle = service.create_vehicle(
+            setup,
+            real_redis,
+            api_settings(),
+            MockVinDecoder(),
+            setup.get(AppUser, user_id),
+            VIN,
+            None,
+        )
+        vehicle_id = vehicle.id
+    with Session(migrated_engine) as holder, Session(migrated_engine) as writer:
+        # Ссылка на авто в открытой транзакции — как запись напоминания (FK → FOR KEY SHARE).
+        holder.execute(
+            text(
+                "INSERT INTO notification (type, vehicle_id, aggregate_type_id, message)"
+                " SELECT 'maintenance', :v, min(id), 'тест' FROM aggregate_type"
+            ),
+            {"v": vehicle_id},
+        )
+        writer.execute(text("SET LOCAL lock_timeout = '2s'"))
+        updated = service.update_mileage(writer, writer.get(AppUser, user_id), vehicle_id, 12_345)
+        assert updated.mileage == 12_345
+        holder.rollback()

@@ -4,6 +4,7 @@
 # (E2E_COMPOSE — префикс docker compose стека, POSTGRES_USER/POSTGRES_DB).
 #
 # 1. Сид в разовом контейнере из образа-кандидата (backend/scripts/seed_load.py) — один раз.
+#    На 7-й минуте каждого сценария — суточные напоминания о ТО (как в 10:00 в production).
 # 2. Для каждого сценария: сброс pg_stat_statements, k6 в сети стека (свой X-Forwarded-For у
 #    каждого виртуального пользователя), docker stats раз в 5 с, затем топ-20 запросов и журнал
 #    медленных запросов. Итог k6 и разбор по минутам (load/analyze.py) — в каталоге результата.
@@ -20,9 +21,11 @@ mkdir -p "$RESULTS" && RESULTS="$(cd "$RESULTS" && pwd)"  # docker -v — тол
 SEED_DIR="$(mktemp -d)"
 chmod 700 "$SEED_DIR"
 STATS_PID=""
+REMINDERS_PID=""
 # shellcheck disable=SC2329  # вызывается из trap
 cleanup() {
   [ -n "$STATS_PID" ] && kill "$STATS_PID" 2>/dev/null || true
+  [ -n "$REMINDERS_PID" ] && kill "$REMINDERS_PID" 2>/dev/null || true
   rm -rf "$SEED_DIR"  # токены стенда
 }
 trap cleanup EXIT
@@ -49,6 +52,7 @@ echo "PASS  сид за $((SECONDS - started)) с"
 
 failed=0
 first=1
+scenario_no=0
 for scenario in "$@"; do
   # Refresh-токены прошлого сценария повёрнуты, access истекают через 15 мин — новые сессии.
   [ "$first" -eq 1 ] || seed --tokens-only >/dev/null
@@ -68,6 +72,21 @@ for scenario in "$@"; do
     done ) &
   STATS_PID=$!
 
+  # Суточные напоминания о ТО во время нагрузки — как в 10:00 в production: одна долгая
+  # транзакция со ссылками на авто (глава 24: из-за неё обновление пробега ждало до минуты).
+  # Дата сдвигается на 30 дней на сценарий — каждый запуск создаёт новые напоминания.
+  scenario_no=$((scenario_no + 1))
+  reminders_date="$(python3 -c "import datetime,sys; print(datetime.date.today() + datetime.timedelta(days=30 * int(sys.argv[1])))" "$scenario_no")"
+  reminders_delay=420
+  [ "${LOAD_PROFILE:-full}" = ci ] && reminders_delay=60
+  ( sleep "$reminders_delay"
+    started=$SECONDS
+    "${COMPOSE[@]}" exec -T backend python -m app.workers.maintenance_reminders \
+      --date "$reminders_date" >"$out/reminders.log" 2>&1
+    echo "duration_seconds=$((SECONDS - started)) date=$reminders_date" >>"$out/reminders.log"
+  ) &
+  REMINDERS_PID=$!
+
   echo "Сценарий $scenario → ${out#"$ROOT"/}"
   status=0
   docker run --rm --network "$NETWORK" -u "$(id -u):$(id -g)" \
@@ -78,6 +97,8 @@ for scenario in "$@"; do
   kill "$STATS_PID" 2>/dev/null || true
   wait "$STATS_PID" 2>/dev/null || true
   STATS_PID=""
+  wait "$REMINDERS_PID" 2>/dev/null || true
+  grep -hE "создано|duration_seconds" "$out/reminders.log" 2>/dev/null | sed 's/^/  напоминания о ТО: /' || true
 
   psql_stack -q --csv -c "
     SELECT calls, round(total_exec_time::numeric, 1) AS total_ms,
