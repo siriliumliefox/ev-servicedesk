@@ -64,8 +64,10 @@ const OPS = {
   ticket_create_photo: () => createTicket(iterationClient(0.65), true),
   board: () => pollBoard(en()),
   ticket_get_staff: () => {
-    const t = pick(en().board.new.length ? en().board.new : (pollBoard(en()), en().board.new));
-    if (t) get(`/tickets/${t.id}`, 'tickets.get', en().s);
+    const e = en();
+    if (!e.board.new.length) pollBoard(e);
+    const t = pick(e.board.new);
+    if (t) get(`/tickets/${t.id}`, 'tickets.get', e.s);
   },
   analytics: () => {
     get(`/analytics/ticket-resolution?${range()}`, 'analytics.resolution', ad());

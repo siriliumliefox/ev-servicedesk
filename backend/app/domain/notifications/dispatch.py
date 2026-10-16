@@ -15,7 +15,6 @@ FCM идёт вне транзакции (параллельно, `push_send_con
 передача авто после постановки в очередь не приводят к push.
 """
 
-import contextlib
 import logging
 from collections import defaultdict, deque
 from collections.abc import Callable
@@ -165,25 +164,16 @@ def _token_revoked(db: Session, token_id: int) -> bool:
     return db.scalar(select(PushToken.revoked_at).where(PushToken.id == token_id)) is not None
 
 
-class _Inline(Executor):
-    """Отправка в вызывающем потоке — когда параллельность выключена (`push_send_concurrency=1`)."""
-
-    def submit(self, fn: Callable[..., PushResult], /, *args: object) -> Future[PushResult]:
-        future: Future[PushResult] = Future()
-        future.set_result(fn(*args))
-        return future
-
-
 def dispatch_due(
     db: Session,
     sender: PushSender,
     settings: Settings,
+    pool: Executor,
     stopping: Callable[[], bool] = lambda: False,
-    pool: Executor | None = None,
 ) -> int:
     """Одна пачка ждущих доставок; возвращает число обработанных строк.
 
-    С `pool` вызовы FCM идут параллельно (ADR 0028 п. 12): ответ FCM ~100 мс, и рассылка на
+    Вызовы FCM идут в `pool` параллельно (ADR 0028 п. 12): ответ FCM ~100 мс, и рассылка на
     10 000 получателей последовательно заняла бы ~17 мин. Параллельно — разные токены; доставки
     одного токена — по очереди: исход предыдущей записан до проверки следующей, и мёртвый токен
     не уходит в FCM повторно. БД — только в этом потоке (сессия не потокобезопасна).
@@ -192,7 +182,6 @@ def dispatch_due(
     строки остаются арендованными и уйдут после истечения аренды — без повторной отправки уже
     доставленных.
     """
-    runner = pool or _Inline()
     leased, done = _lease(db, settings)
     queues: dict[int, deque[_Leased]] = defaultdict(deque)
     for item in leased:
@@ -211,7 +200,7 @@ def dispatch_due(
                 closed += 1
                 continue
             db.commit()  # не держать транзакцию открытой во время сетевого вызова
-            in_flight[runner.submit(send_safely, sender, item.message)] = item
+            in_flight[pool.submit(send_safely, sender, item.message)] = item
             break
         return closed
 
@@ -234,15 +223,12 @@ def drain(
 ) -> int:
     """Отправляет, пока пачки полные и процесс не останавливается; возвращает число строк.
 
-    Параллельность отправки — `push_send_concurrency` (1 — последовательно, без пула).
+    Одновременных вызовов FCM — `push_send_concurrency` (1 — по одному).
     """
     total = 0
-    with contextlib.ExitStack() as stack:
-        pool = None
-        if settings.push_send_concurrency > 1:
-            pool = stack.enter_context(ThreadPoolExecutor(settings.push_send_concurrency))
+    with ThreadPoolExecutor(settings.push_send_concurrency) as pool:
         while not stopping():
-            done = dispatch_due(db, sender, settings, stopping, pool)
+            done = dispatch_due(db, sender, settings, pool, stopping)
             total += done
             if done < settings.notifications_batch_size:
                 break

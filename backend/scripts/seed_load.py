@@ -223,7 +223,7 @@ def seed_volume(db: Session, clients: int, now: datetime) -> None:
         "now": now,
     }
     for sql in VOLUME_SQL:
-        db.execute(text(sql), {k: v for k, v in params.items() if f":{k}" in sql})
+        db.execute(text(sql), params)  # лишние параметры text() игнорирует
 
 
 def seed_articles(db: Session, count: int) -> None:

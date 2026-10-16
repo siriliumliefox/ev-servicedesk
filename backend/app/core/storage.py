@@ -7,6 +7,7 @@
 Ключи доступа и ключи объектов в тексты ошибок и цепочку их причин не попадают.
 """
 
+from collections.abc import Callable
 from functools import lru_cache
 from typing import Any, NamedTuple, Protocol
 
@@ -14,7 +15,7 @@ import boto3
 from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 
-from app.core.config import Settings, get_settings
+from app.core.config import SAFE_ENVIRONMENTS, Settings, get_settings
 
 
 class StorageError(Exception):
@@ -228,3 +229,11 @@ def _s3_storage() -> S3ObjectStorage:
 def get_storage() -> ObjectStorage:
     """Зависимость FastAPI; в тестах подменяется (хранилище в памяти или MinIO)."""
     return _s3_storage()
+
+
+def require_bucket(settings: Settings, storage: Callable[[], ObjectStorage]) -> None:
+    """Вне local/test без доступного бакета приложение не стартует (ADR 0017 п. 11);
+    local/test S3 не требуют. Хранилище создаётся только когда нужно (`storage` — фабрика).
+    Вызывают: `app.preflight` до запуска uvicorn и lifespan каждого процесса."""
+    if settings.environment not in SAFE_ENVIRONMENTS:
+        storage().check_bucket()

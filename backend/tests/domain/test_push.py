@@ -16,6 +16,7 @@ from pydantic import ValidationError
 from app.core.config import Settings
 from app.domain.notifications.push import (
     FCM_SCOPE,
+    EmulatedFcmSender,
     FakePushSender,
     FcmCredentialsError,
     FcmPushSender,
@@ -236,7 +237,7 @@ def test_fake_sender_emulates_fcm_latency_and_error_shares():
         ),
     )
     sender = get_push_sender(settings)
-    assert isinstance(sender, FakePushSender)
+    assert isinstance(sender, EmulatedFcmSender)
     outcomes = []
     started = time.perf_counter()
     for i in range(400):
@@ -247,7 +248,6 @@ def test_fake_sender_emulates_fcm_latency_and_error_shares():
     assert 0.12 < shares[Outcome.INVALID_TOKEN] < 0.28
     assert 0.22 < shares[Outcome.RETRY] < 0.38
     assert shares[Outcome.FAILED] == 0
-    assert sender.sent == [], "эмуляция не копит отправленное в памяти"
 
 
 def test_fake_sender_without_emulation_answers_instantly():

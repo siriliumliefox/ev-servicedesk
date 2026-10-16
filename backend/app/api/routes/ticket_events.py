@@ -82,21 +82,29 @@ READY: Frame = {"type": "ready"}
 PubSubHubDep = Annotated[PubSubHub, Depends(get_pubsub_hub)]
 
 # Аренда места подключения пользователя в Redis (ADR 0028 п. 15): общий лимит для всех
-# процессов uvicorn. Продлевается в паузах доставки (LISTEN_TIMEOUT_SECONDS) и на событиях.
+# процессов uvicorn. Пока подключение живо, аренду продлевает фоновая задача.
 SOCKET_LEASE_SECONDS = 90
-SOCKET_RENEW_SECONDS = LISTEN_TIMEOUT_SECONDS
+SOCKET_RENEW_SECONDS = 30
 
 
 @contextlib.asynccontextmanager
-async def _user_socket(redis: Redis, user_id: int, limit: int) -> AsyncIterator[rate_limit.Slot]:
-    """Место подключения пользователя; освобождается и при аварийном завершении (а если
-    процесс упал — по истечении аренды)."""
+async def _user_socket(redis: Redis, user_id: int, limit: int) -> AsyncIterator[None]:
+    """Место подключения пользователя на время блока; освобождается и при аварийном
+    завершении (а если процесс упал — по истечении аренды)."""
     slot = rate_limit.Slot(redis, f"ws-user:{user_id}", uuid.uuid4().hex, SOCKET_LEASE_SECONDS)
     if not await run_in_threadpool(slot.acquire, limit):
         raise rate_limited(0, "Слишком много одновременных подключений")
+
+    async def renew() -> NoReturn:
+        while True:
+            await asyncio.sleep(SOCKET_RENEW_SECONDS)
+            await run_in_threadpool(slot.renew)
+
+    renewing = asyncio.create_task(renew())
     try:
-        yield slot
+        yield
     finally:
+        renewing.cancel()
         try:
             await asyncio.shield(run_in_threadpool(slot.release))
         except Exception:  # Redis недоступен: место освободит истечение аренды
@@ -180,15 +188,10 @@ async def _forward(
     claims: AccessClaims,
     ticket_id: int,
     presign: Presign,
-    slot: rate_limit.Slot,
 ) -> NoReturn:
     """`ready`, затем события канала → клиенту — до истечения токена или потери доступа."""
     await websocket.send_json(READY)
-    renewed = asyncio.get_running_loop().time()
     while True:
-        if asyncio.get_running_loop().time() - renewed >= SOCKET_RENEW_SECONDS:
-            await run_in_threadpool(slot.renew)
-            renewed = asyncio.get_running_loop().time()
         remaining = (claims.expires_at - datetime.now(UTC)).total_seconds()
         if remaining <= 0:
             raise unauthorized("Срок действия токена истёк")
@@ -211,12 +214,9 @@ async def _relay(
     claims: AccessClaims,
     ticket_id: int,
     presign: Presign,
-    slot: rate_limit.Slot,
 ) -> None:
     """Доставка до закрытия: возврат — клиент отключился сам, иначе исключение доставки."""
-    forward = asyncio.create_task(
-        _forward(websocket, listener, scope, claims, ticket_id, presign, slot)
-    )
+    forward = asyncio.create_task(_forward(websocket, listener, scope, claims, ticket_id, presign))
     drain = asyncio.create_task(_drain(websocket))
     try:
         await asyncio.wait({forward, drain}, return_when=asyncio.FIRST_COMPLETED)
@@ -290,13 +290,13 @@ async def _serve(
         "Слишком много попыток подключения",
     )
     claims = await _authenticate(websocket, settings)
-    async with _user_socket(redis, claims.user_id, settings.ws_max_sockets_per_user) as slot:
+    async with _user_socket(redis, claims.user_id, settings.ws_max_sockets_per_user):
         ticket_id = _ticket_id(ticket_ref)
         await run_in_threadpool(_check_access, scope, claims.user_id, ticket_id)
         # Доступ проверяется до подписки: отказ не трогает Redis. Потерю доступа между
         # проверкой и подпиской ловит проверка на следующем событии и REST после `ready`.
         listener = await hub.subscribe(events.channel(ticket_id))
         try:
-            await _relay(websocket, listener, scope, claims, ticket_id, presign, slot)
+            await _relay(websocket, listener, scope, claims, ticket_id, presign)
         finally:
             hub.unsubscribe(listener)

@@ -118,9 +118,9 @@ def analyze(out: Path) -> dict:
         },
         "containers": containers(out / "docker_stats.jsonl"),
     }
-    broadcast = out / "broadcast.json"
+    broadcast = out / "broadcast.csv"
     if broadcast.exists():
-        report["broadcast"] = json.loads(broadcast.read_text())
+        report["broadcast"] = parse_broadcast(broadcast.read_text())
     summary = out / "summary.json"
     if summary.exists():
         metrics = json.loads(summary.read_text())["metrics"]
@@ -133,6 +133,31 @@ def analyze(out: Path) -> dict:
         if stale:
             report["stale_board_cards"] = stale["values"].get("count")
     return report
+
+
+BROADCAST_LIMIT_SECONDS = 300  # рассылка 10 000 получателям (ADR 0028 п. 12)
+BROADCAST_FIELDS = (
+    "recipients",
+    "deliveries",
+    "delivered",
+    "failed",
+    "pending",
+    "last_done_s",
+    "median_s",
+)
+
+
+def parse_broadcast(csv_row: str) -> dict | None:
+    """Строка load/run.sh по БД; None — публикации нет или ничего не доставлено."""
+    values = csv_row.strip().split(",")
+    if len(values) != len(BROADCAST_FIELDS) or not values[5]:
+        return None
+    # Длина сверена выше; zip(strict=) нет в Python 3.9 хоста (analyze.py — без зависимостей).
+    return dict(zip(BROADCAST_FIELDS, (int(float(v)) for v in values)))  # noqa: B905
+
+
+def broadcast_ok(b: dict | None) -> bool:
+    return b is not None and b["pending"] == 0 and b["last_done_s"] <= BROADCAST_LIMIT_SECONDS
 
 
 def containers(path: Path) -> dict:
@@ -166,6 +191,16 @@ def to_mib(value: str) -> float:
     return 0.0
 
 
+def broadcast_line(b: dict | None) -> str:
+    if b is None:
+        return "FAIL  рассылка: публикации нет или ничего не доставлено"
+    return (
+        f"{'PASS' if broadcast_ok(b) else 'FAIL'}  рассылка: {b['deliveries']} доставок "
+        f"(получателей {b['recipients']}), последняя за {b['last_done_s']} с "
+        f"(половина — за {b['median_s']} с), в очереди {b['pending']}"
+    )
+
+
 def table(rows: dict, key: str) -> list[str]:
     if not rows:
         return []
@@ -187,12 +222,7 @@ def markdown(report: dict, out: Path) -> str:
         stale = report["stale_board_cards"]
         lines += [f"Карточки, взятые другим инженером (ожидаемые 404): {stale}", ""]
     if "broadcast" in report:
-        b = report["broadcast"]
-        lines += [
-            f"Рассылка: {b['deliveries']} доставок (получателей {b['recipients']}), последняя за "
-            f"{b['last_done_s']} с, половина — за {b['median_s']} с, в очереди {b['pending']}",
-            "",
-        ]
+        lines += [broadcast_line(report["broadcast"]), ""]
     for title, key, col in (
         ("Чтение и изменение по фазам", "kinds", "вид/фаза"),
         ("Операции (по убыванию p95)", "operations", "операция"),
@@ -223,10 +253,14 @@ def main() -> int:
         print(f"  {k:<22} n={v['requests']:<7} p95={v['p95_ms']} мс p99={v['p99_ms']} мс")
     for k, v in report["phases"].items():
         print(f"  ошибки {k:<15} {v['error_rate'] * 100:.2f} %")
+    failed = False
+    if "broadcast" in report:
+        print(broadcast_line(report["broadcast"]))
+        failed = not broadcast_ok(report["broadcast"])
     if report["gaps"]:
         print(f"FAIL  прогон недостоверен: нет запросов в минуты {report['gaps']} (сон машины?)")
-        return 1
-    return 0
+        failed = True
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

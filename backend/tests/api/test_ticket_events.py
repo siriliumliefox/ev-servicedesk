@@ -435,7 +435,6 @@ def test_live_socket_keeps_its_place_beyond_lease(client, ticket_id, owner, sett
     monkeypatch.setattr(settings, "ws_max_sockets_per_user", 1)
     monkeypatch.setattr(ticket_events, "SOCKET_LEASE_SECONDS", 1)
     monkeypatch.setattr(ticket_events, "SOCKET_RENEW_SECONDS", 0.2)
-    monkeypatch.setattr(ticket_events, "LISTEN_TIMEOUT_SECONDS", 0.2)
     with connect(client, ticket_id) as live:
         auth(live, owner[1])
         time.sleep(2.5)  # дольше аренды: без продления место освободилось бы

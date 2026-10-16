@@ -9,14 +9,12 @@
 
 import sys
 
-from app.core.config import SAFE_ENVIRONMENTS, get_settings
-from app.core.storage import get_storage
+from app.core.config import get_settings
+from app.core.storage import get_storage, require_bucket
 
 
 def main() -> int:
-    settings = get_settings()
-    if settings.environment not in SAFE_ENVIRONMENTS:
-        get_storage().check_bucket()
+    require_bucket(get_settings(), get_storage)
     return 0
 
 

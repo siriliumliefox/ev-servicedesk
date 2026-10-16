@@ -57,53 +57,15 @@ class PushSender(Protocol):
     def send(self, message: PushMessage) -> PushResult: ...
 
 
-@dataclass(frozen=True)
-class FcmEmulation:
-    """Поведение FCM для нагрузочного стенда (ADR 0028 п. 11): задержка и доли ошибок."""
-
-    latency_min_seconds: float = 0
-    latency_max_seconds: float = 0
-    invalid_ratio: float = 0
-    retry_ratio: float = 0
-
-    @classmethod
-    def from_settings(cls, settings: Settings) -> "FcmEmulation":
-        return cls(
-            settings.push_fake_latency_min_ms / 1000,
-            settings.push_fake_latency_max_ms / 1000,
-            settings.push_fake_invalid_percent / 100,
-            settings.push_fake_retry_percent / 100,
-        )
-
-    def respond(self, rng: random.Random) -> PushResult:
-        """Ждёт «ответа FCM» (вне блокировок) и возвращает исход по заданным долям."""
-        if self.latency_max_seconds:
-            time.sleep(rng.uniform(self.latency_min_seconds, self.latency_max_seconds))
-        roll = rng.random()
-        if roll < self.invalid_ratio:
-            return PushResult(Outcome.INVALID_TOKEN, "UNREGISTERED")
-        if roll < self.invalid_ratio + self.retry_ratio:
-            return PushResult(Outcome.RETRY, "UNAVAILABLE")
-        return PushResult(Outcome.SENT)
-
-
 class FakePushSender:
-    """Отправитель в памяти: всё «доставлено»; тесты задают исход для токена через `outcomes`.
+    """Отправитель в памяти: всё «доставлено»; тесты задают исход для токена через `outcomes`."""
 
-    С `emulation` (нагрузочный стенд) отвечает с задержкой и долей ошибок, как FCM, и не
-    копит отправленное в памяти: за долгий прогон это десятки тысяч сообщений.
-    """
-
-    def __init__(self, emulation: FcmEmulation | None = None) -> None:
+    def __init__(self) -> None:
         self.sent: list[PushMessage] = []
         self.outcomes: dict[str, PushResult] = {}
         self._lock = threading.Lock()
-        self._emulation = emulation
-        self._rng = random.Random()
 
     def send(self, message: PushMessage) -> PushResult:
-        if self._emulation is not None:
-            return self._emulation.respond(self._rng)
         with self._lock:
             result = self.outcomes.get(message.token, PushResult(Outcome.SENT))
             if result.outcome is Outcome.SENT:
@@ -112,6 +74,42 @@ class FakePushSender:
 
     def to(self, token: str) -> list[PushMessage]:
         return [m for m in self.sent if m.token == token]
+
+
+@dataclass(frozen=True)
+class EmulatedFcmSender:
+    """Фейковый push, который отвечает как FCM, — для нагрузочного стенда (ADR 0028 п. 11):
+    задержка в диапазоне и доли «токен недействителен» и временных ошибок. Ничего не хранит:
+    за долгий прогон это десятки тысяч сообщений.
+    """
+
+    latency_min_seconds: float = 0
+    latency_max_seconds: float = 0
+    invalid_ratio: float = 0
+    retry_ratio: float = 0
+
+    @classmethod
+    def from_settings(cls, settings: Settings) -> "EmulatedFcmSender":
+        return cls(
+            settings.push_fake_latency_min_ms / 1000,
+            settings.push_fake_latency_max_ms / 1000,
+            settings.push_fake_invalid_percent / 100,
+            settings.push_fake_retry_percent / 100,
+        )
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.latency_max_seconds or self.invalid_ratio or self.retry_ratio)
+
+    def send(self, message: PushMessage) -> PushResult:
+        if self.latency_max_seconds:
+            time.sleep(random.uniform(self.latency_min_seconds, self.latency_max_seconds))
+        roll = random.random()
+        if roll < self.invalid_ratio:
+            return PushResult(Outcome.INVALID_TOKEN, "UNREGISTERED")
+        if roll < self.invalid_ratio + self.retry_ratio:
+            return PushResult(Outcome.RETRY, "UNAVAILABLE")
+        return PushResult(Outcome.SENT)
 
 
 class FcmCredentialsError(ValueError):
@@ -260,5 +258,5 @@ def get_push_sender(settings: Settings) -> PushSender:
     if settings.push_provider == "fcm":
         account = ServiceAccount.from_json(settings.fcm_service_account_json)
         return FcmPushSender(account, settings.fcm_timeout_seconds)
-    emulation = FcmEmulation.from_settings(settings)
-    return FakePushSender(emulation if emulation != FcmEmulation() else None)
+    emulated = EmulatedFcmSender.from_settings(settings)
+    return emulated if emulated.enabled else FakePushSender()

@@ -17,10 +17,10 @@ from app.api.routes import (
     users,
     vehicles,
 )
-from app.core.config import SAFE_ENVIRONMENTS, Settings, get_settings
+from app.core.config import Settings, get_settings
 from app.core.errors import install_error_handlers
 from app.core.pubsub import PubSubHub
-from app.core.storage import get_storage
+from app.core.storage import get_storage, require_bucket
 
 API_PREFIX = "/v1"  # servers в docs/openapi.yaml: http://localhost:8000/v1
 
@@ -39,9 +39,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         Общая подписка Redis pub/sub процесса (WebSocket событий тикета) соединяется при первом
         подписчике, а не при старте; при остановке закрывается.
         """
-        if settings.environment not in SAFE_ENVIRONMENTS:
-            storage = app.dependency_overrides.get(get_storage, get_storage)()
-            await run_in_threadpool(storage.check_bucket)
+        storage = app.dependency_overrides.get(get_storage, get_storage)
+        await run_in_threadpool(require_bucket, settings, storage)
         app.state.pubsub_hub = hub = PubSubHub.from_settings(settings)
         try:
             yield
