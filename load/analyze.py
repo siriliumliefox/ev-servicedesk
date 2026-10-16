@@ -246,6 +246,9 @@ def markdown(report: dict, out: Path) -> str:
 
 def main() -> int:
     out = Path(sys.argv[1])
+    if not (out / "raw.json.gz").exists():
+        print("FAIL  k6 не записал результаты (сценарий не стартовал — см. лог k6 выше)")
+        return 1
     report = analyze(out)
     (out / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=1))
     (out / "report.md").write_text(markdown(report, out))

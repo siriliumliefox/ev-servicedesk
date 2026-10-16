@@ -38,8 +38,10 @@ backend_container="$("${COMPOSE[@]}" ps -q backend)"
 NETWORK="$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{end}}' "$backend_container")"
 
 # Сид в разовом контейнере из образа-кандидата: тот же код и окружение (секрет JWT стенда).
+# От того же пользователя, что и k6: файл сида (0600) иначе принадлежит root, и на Linux k6 его
+# не прочтёт (Docker Desktop на macOS владельца подменяет — там это не видно).
 seed() {
-  "${COMPOSE[@]}" run --rm --no-deps -T -e PYTHONPATH=/app \
+  "${COMPOSE[@]}" run --rm --no-deps -T --user "$(id -u):$(id -g)" -e PYTHONPATH=/app \
     -v "$ROOT/backend/scripts:/app/load_scripts:ro" -v "$SEED_DIR:/out" \
     backend python /app/load_scripts/seed_load.py --out /out/seed.json "$@"
 }
