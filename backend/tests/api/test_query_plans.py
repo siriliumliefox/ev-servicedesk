@@ -97,7 +97,7 @@ def explain_all(db: Session, statements: list[tuple[str, Any]]) -> dict[str, lis
         plan = result.scalar_one()[0]["Plan"]  # psycopg разбирает JSON сам
         tables = [t for t in seq_scans(plan, rows) if not allowed(sql, t)]
         if tables:
-            bad[sql[:300]] = tables
+            bad[f"{sql}\n  параметры: {parameters}\n  план: {plan}"] = tables
     return bad
 
 
