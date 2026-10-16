@@ -2,8 +2,8 @@
 
 На объёме нагрузочного стенда (seed_load, 10 000 клиентов, 20 000 тикетов, 60 000 сообщений)
 проходят операции, которые k6 вызывает чаще всего, — от имени клиента, инженера и
-администратора. Каждый SQL-запрос операции перехватывается и проверяется EXPLAIN: по таблицам
-от MIN_ROWS строк нет полного сканирования (Seq Scan), кроме осознанных (ALLOWED). Новый запрос
+администратора. Каждый SQL-запрос операции перехватывается и проверяется EXPLAIN с запретом
+Seq Scan: по таблицам от MIN_ROWS строк для каждого запроса есть подходящий индекс. Новый запрос
 без индекса падает здесь, а не под нагрузкой.
 """
 
@@ -23,27 +23,6 @@ CLIENTS = 10_000
 # Полное чтение таблицы, в которой по статистике меньше строк, — выбор планировщика, а не дефект:
 # справочники, статьи базы знаний (сотни), вложения в тестовом объёме.
 MIN_ROWS = 1_000
-# Осознанные полные чтения: (фрагмент запроса, таблица, причина).
-ALLOWED = (
-    (
-        "SELECT count(*) AS count_1 FROM (SELECT app_user.id",
-        "app_user",
-        "всего пользователей для списка без фильтра в админ-панели — подсчёт и есть чтение всех",
-    ),
-    # Статистика доставки страницы рассылок: читаются все строки получателей и доставок этих
-    # рассылок (у рассылки на модель — тысячи), на тестовом объёме это заметная доля таблицы,
-    # и планировщик по статистике выбирает Seq Scan. Индекс по notification_id есть (UNIQUE).
-    (
-        "SELECT notification_recipient.notification_id, count(*)",
-        "notification_recipient",
-        "получатели последних рассылок — заметная доля таблицы",
-    ),
-    (
-        "SELECT notification_delivery.notification_id, count(notification_delivery.delivered_at)",
-        "notification_delivery",
-        "доставки последних рассылок — заметная доля таблицы",
-    ),
-)
 
 
 @pytest.fixture
@@ -76,10 +55,6 @@ def seq_scans(plan: dict, rows: dict[str, float]) -> list[str]:
     return found
 
 
-def allowed(sql: str, table: str) -> bool:
-    return any(sql.startswith(fragment) and table == t for fragment, t, _ in ALLOWED)
-
-
 def explain_all(db: Session, statements: list[tuple[str, Any]]) -> dict[str, list[str]]:
     """Запрос → большие таблицы, читаемые целиком (EXPLAIN без ANALYZE — ничего не меняет)."""
     connection = db.connection()
@@ -90,12 +65,16 @@ def explain_all(db: Session, statements: list[tuple[str, Any]]) -> dict[str, lis
             " AND relnamespace = 'public'::regnamespace"
         ).tuples()
     }
+    # Seq Scan запрещён планировщику: есть подходящий индекс — он будет выбран, и Seq Scan в
+    # плане означает «индекса нет». Без этого выбор между индексом и полным чтением ~1 % таблицы
+    # зависел бы от статистики (на CI — иначе, чем локально).
+    connection.exec_driver_sql("SET LOCAL enable_seqscan = off")
     bad: dict[str, list[str]] = {}
     for statement, parameters in statements:
         result = connection.exec_driver_sql(f"EXPLAIN (FORMAT JSON) {statement}", parameters)
         sql = " ".join(statement.split())
         plan = result.scalar_one()[0]["Plan"]  # psycopg разбирает JSON сам
-        tables = [t for t in seq_scans(plan, rows) if not allowed(sql, t)]
+        tables = seq_scans(plan, rows)
         if tables:
             bad[f"{sql}\n  параметры: {parameters}\n  план: {plan}"] = tables
     return bad
