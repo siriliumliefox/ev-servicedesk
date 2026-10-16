@@ -1,0 +1,24 @@
+pid,state,wait_event_type,xact_age,q
+3328,idle in transaction,Client,00:15:53.602639,"SELECT app_user.id AS app_user_id, app_user.phone AS app_user_phone, app_user.role AS app_user_role, app_user.telegram_i"
+3354,idle in transaction,Client,00:15:24.572573,"SELECT vehicle_model.id AS vehicle_model_id, vehicle_model.brand AS vehicle_model_brand, vehicle_model.model AS vehicle_"
+3348,idle in transaction,Client,00:15:24.493285,"SELECT notification.id, notification.type, notification.firmware_release_id, notification.target_vehicle_model_id, notif"
+3339,idle in transaction,Client,00:15:24.48921,"SELECT app_user.id AS app_user_id, app_user.phone AS app_user_phone, app_user.role AS app_user_role, app_user.telegram_i"
+3352,idle in transaction,Client,00:13:54.39655,"SELECT app_user.id AS app_user_id, app_user.phone AS app_user_phone, app_user.role AS app_user_role, app_user.telegram_i"
+3338,idle in transaction,Client,00:13:54.38668,"SELECT app_user.id AS app_user_id, app_user.phone AS app_user_phone, app_user.role AS app_user_role, app_user.telegram_i"
+3336,idle in transaction,Client,00:13:54.122137,"SELECT app_user.id AS app_user_id, app_user.phone AS app_user_phone, app_user.role AS app_user_role, app_user.telegram_i"
+3355,idle in transaction,Client,00:13:54.122044,"SELECT app_user.id AS app_user_id, app_user.phone AS app_user_phone, app_user.role AS app_user_role, app_user.telegram_i"
+3326,idle in transaction,Client,00:13:54.108852,"SELECT app_user.id AS app_user_id, app_user.phone AS app_user_phone, app_user.role AS app_user_role, app_user.telegram_i"
+3278,idle in transaction,Client,00:11:23.870506,"SELECT app_user.id AS app_user_id, app_user.phone AS app_user_phone, app_user.role AS app_user_role, app_user.telegram_i"
+3255,idle in transaction,Client,00:11:23.870199,"SELECT app_user.id AS app_user_id, app_user.phone AS app_user_phone, app_user.role AS app_user_role, app_user.telegram_i"
+3356,idle in transaction,Client,00:11:23.86888,"SELECT app_user.id AS app_user_id, app_user.phone AS app_user_phone, app_user.role AS app_user_role, app_user.telegram_i"
+3342,idle in transaction,Client,00:11:23.868184,"SELECT app_user.id AS app_user_id, app_user.phone AS app_user_phone, app_user.role AS app_user_role, app_user.telegram_i"
+3349,idle in transaction,Client,00:10:23.906022,"SELECT vehicle_model.id AS vehicle_model_id, vehicle_model.brand AS vehicle_model_brand, vehicle_model.model AS vehicle_"
+3353,idle in transaction,Client,00:10:23.206868,"SELECT app_user.id AS app_user_id, app_user.phone AS app_user_phone, app_user.role AS app_user_role, app_user.telegram_i"
+4776,active,,00:00:00,"SELECT pid, state, wait_event_type, now()-xact_start AS xact_age, left(regexp_replace(query,'\s+',' ','g'),120) q FROM p"
+3368,idle,Client,,ROLLBACK
+69,idle,Client,,COMMIT
+3358,idle,Client,,ROLLBACK
+68,idle,Client,,COMMIT
+3345,idle,Client,,COMMIT
+3880,idle,Client,,ROLLBACK
+3369,idle,Client,,ROLLBACK
