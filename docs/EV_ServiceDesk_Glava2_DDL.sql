@@ -962,5 +962,11 @@ ALTER TABLE maintenance_record ADD CONSTRAINT ck_maintenance_record_replacement_
 
 UPDATE alembic_version SET version_num='0014' WHERE alembic_version.version_num = '0013';
 
+-- Running upgrade 0014 -> 0015
+
+CREATE INDEX ix_notification_published ON notification (created_at DESC, id DESC) WHERE type IN ('firmware', 'news', 'promo');
+
+UPDATE alembic_version SET version_num='0015' WHERE alembic_version.version_num = '0014';
+
 COMMIT;
 

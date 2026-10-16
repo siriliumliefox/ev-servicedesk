@@ -90,7 +90,7 @@ def for_new_ticket(db: Session, user: AppUser, vehicle_id: int) -> Vehicle:
     """Активное видимое авто под SELECT ... FOR SHARE — запись нового тикета, иначе 404.
 
     Тикет создаётся только на активное авто (ADR 0017 п. 6): удаление и передача авто
-    (soft-delete под FOR UPDATE, ADR 0003) ждут commit тикета, а создание, дождавшись
+    (soft-delete под FOR NO KEY UPDATE, ADR 0003) ждут commit тикета, а создание, дождавшись
     удаления, видит deleted_at — 404.
     """
     _check_id(vehicle_id)
@@ -106,16 +106,20 @@ def for_new_ticket(db: Session, user: AppUser, vehicle_id: int) -> Vehicle:
 
 
 def for_change(db: Session, user: AppUser, vehicle_id: int) -> Change:
-    """Авто под SELECT ... FOR UPDATE, которое `user` может изменить, иначе 404/403.
+    """Авто под SELECT ... FOR NO KEY UPDATE, которое `user` может изменить, иначе 404/403.
 
-    Успешный путь — один запрос; 404 и 403 различаются только при отказе.
+    Изменения авто (пробег, прошивка, замена агрегата, мягкое удаление) не трогают ключ, поэтому
+    FOR NO KEY UPDATE: изменения по-прежнему идут по очереди и ждут создание тикета (FOR SHARE),
+    но не ждут чужие вставки со ссылкой на авто (FK берёт FOR KEY SHARE до конца транзакции) —
+    например, суточные напоминания о ТО одной транзакцией (глава 24, прогон k6: пробег ждал до
+    минуты). Успешный путь — один запрос; 404 и 403 различаются только при отказе.
     """
     _check_id(vehicle_id)
     allowed, ticket_id = _change_basis(user)
     row = db.execute(
         select(Vehicle, ticket_id)
         .where(Vehicle.id == vehicle_id, Vehicle.deleted_at.is_(None), _visible(user), allowed)
-        .with_for_update(of=Vehicle)
+        .with_for_update(of=Vehicle, key_share=True)
     ).one_or_none()
     if row is None:
         raise _change_denied(db, user, vehicle_id)

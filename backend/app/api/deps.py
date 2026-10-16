@@ -105,6 +105,11 @@ def get_current_user(
     except InvalidTokenError as exc:
         raise unauthorized("Недействительный или просроченный токен") from exc
     user = db.get(AppUser, claims.user_id)
+    # Соединение — обратно в пул до следующего захода в пул потоков (зависимости RBAC, сам
+    # обработчик): иначе запрос держит его, ожидая поток, и на пике пулы блокируют друг друга
+    # (глава 24, ADR 0028 п. 18). Транзакция читающая — COMMIT ничего не пишет; объект не
+    # сбрасывается (expire_on_commit=False), обработчик возьмёт соединение заново.
+    db.commit()
     if user is None or not user.is_available:
         raise unauthorized("Учётная запись недоступна")
     return user

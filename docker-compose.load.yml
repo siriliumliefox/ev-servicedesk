@@ -1,0 +1,71 @@
+# Нагрузочный стенд главы 24 (ADR 0028 п. 5, 8, 11, 14) поверх docker-compose.integration.yml:
+# тот же образ-кандидат в режиме ENVIRONMENT=staging, но с ресурсами будущего сервера (глава 26),
+# доверенным прокси для X-Forwarded-For, эмуляцией FCM и статистикой запросов PostgreSQL.
+# Запуск — только через scripts/load_stack.sh (INTEGRATION_EXTRA_COMPOSE).
+
+services:
+  postgres:
+    # pg_stat_statements — топ запросов прогона; журнал запросов дольше 100 мс без значений
+    # параметров (в них телефоны и хэши токенов).
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - pg_stat_statements.track=top
+      - -c
+      - track_io_timing=on
+      - -c
+      - log_min_duration_statement=100
+      - -c
+      - log_parameter_max_length=0
+      # Настройки под 2 ГБ памяти (ADR 0028 п. 15) — обязательны и для production (глава 26).
+      # max_connections: 2 процесса API × (5 + 10) + worker уведомлений и аналитики (по 15) +
+      # разовые задачи и запас.
+      - -c
+      - shared_buffers=512MB
+      - -c
+      - effective_cache_size=1536MB
+      - -c
+      - work_mem=8MB
+      - -c
+      - maintenance_work_mem=128MB
+      - -c
+      - random_page_cost=1.1
+      - -c
+      - max_connections=100
+    deploy:
+      resources:
+        limits: {cpus: "2", memory: 2g}
+
+  redis:
+    deploy:
+      resources:
+        limits: {cpus: "0.5", memory: 512m}
+
+  backend:
+    environment:
+      # k6 — в той же сети compose и шлёт каждому виртуальному пользователю свой
+      # X-Forwarded-For, как прокси production (ADR 0028 п. 8). Доверяем только частным
+      # подсетям Docker: снаружи API стенда доступен лишь на 127.0.0.1.
+      FORWARDED_ALLOW_IPS: "172.16.0.0/12,192.168.0.0/16"
+    deploy:
+      resources:
+        limits: {cpus: "2", memory: 2g}
+
+  notifications-worker:
+    environment:
+      # Эмуляция FCM (ADR 0028 п. 11): ответ 50–200 мс, 0,5 % «токен недействителен»,
+      # 0,5 % временных ошибок.
+      PUSH_FAKE_LATENCY_MIN_MS: "50"
+      PUSH_FAKE_LATENCY_MAX_MS: "200"
+      PUSH_FAKE_INVALID_PERCENT: "0.5"
+      PUSH_FAKE_RETRY_PERCENT: "0.5"
+    deploy:
+      resources:
+        limits: {cpus: "0.5", memory: 512m}
+
+  analytics-worker:
+    deploy:
+      resources:
+        limits: {cpus: "0.5", memory: 512m}

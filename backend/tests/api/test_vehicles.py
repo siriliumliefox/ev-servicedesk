@@ -332,7 +332,7 @@ def test_change_check_is_one_query(as_client, client, as_staff, make_ticket, db)
     finally:
         event.remove(connection, "before_cursor_execute", listener)
     assert (vehicle.id, ticket_id) == (vid, ticket.id)
-    assert len(statements) == 1 and "FOR UPDATE OF vehicle" in statements[0]
+    assert len(statements) == 1 and "FOR NO KEY UPDATE OF vehicle" in statements[0]
 
 
 # ---------- RBAC и аутентификация (контракт с Auth Service) ----------

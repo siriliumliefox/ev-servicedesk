@@ -53,3 +53,6 @@ mobile/firebase.ios.local.json
 system-e2e/.apps/
 system-e2e/playwright-report/
 system-e2e/test-results/
+
+# Нагрузочное тестирование (Глава 24): сырые данные прогонов — вне git
+load/results/

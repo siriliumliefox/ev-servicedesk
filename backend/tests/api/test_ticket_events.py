@@ -430,6 +430,19 @@ def test_user_socket_cap_closes_4429(client, ticket_id, owner, settings, monkeyp
         auth(again, owner[1])
 
 
+def test_live_socket_keeps_its_place_beyond_lease(client, ticket_id, owner, settings, monkeypatch):
+    """Аренда места в Redis продлевается, пока подключение живо (ADR 0028 п. 15)."""
+    monkeypatch.setattr(settings, "ws_max_sockets_per_user", 1)
+    monkeypatch.setattr(ticket_events, "SOCKET_LEASE_SECONDS", 1)
+    monkeypatch.setattr(ticket_events, "SOCKET_RENEW_SECONDS", 0.2)
+    with connect(client, ticket_id) as live:
+        auth(live, owner[1])
+        time.sleep(2.5)  # дольше аренды: без продления место освободилось бы
+        with connect(client, ticket_id) as extra:
+            extra.send_json({"type": "auth", "access_token": owner[1]})
+            assert close_code(extra) == 4429
+
+
 def test_connect_attempts_per_ip_close_4429(client, ticket_id, owner, settings, monkeypatch):
     monkeypatch.setattr(settings, "ws_connects_per_ip_minute", 2)
     for _ in range(2):

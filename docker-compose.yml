@@ -57,7 +57,8 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ev}"]
+      # -d: без него pg_isready идёт в БД с именем пользователя — в логе FATAL «database does not exist».
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ev} -d ${POSTGRES_DB:-ev_servicedesk}"]
       interval: 5s
       timeout: 5s
       retries: 10

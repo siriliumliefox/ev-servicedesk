@@ -4,6 +4,7 @@
 """
 
 import json
+import time
 
 import httpx
 import jwt
@@ -15,6 +16,7 @@ from pydantic import ValidationError
 from app.core.config import Settings
 from app.domain.notifications.push import (
     FCM_SCOPE,
+    EmulatedFcmSender,
     FakePushSender,
     FcmCredentialsError,
     FcmPushSender,
@@ -221,3 +223,47 @@ def test_broken_private_key_refused_at_start(account_json):
     with pytest.raises(FcmCredentialsError) as info:
         FcmPushSender(ServiceAccount.from_json(json.dumps(data)), timeout=5)
     assert "SECRET" not in str(info.value) and info.value.__cause__ is None
+
+
+def test_fake_sender_emulates_fcm_latency_and_error_shares():
+    """Нагрузочный стенд (ADR 0028 п. 11): задержка в диапазоне и доли ошибок, как у FCM."""
+    settings = Settings(
+        _env_file=None,
+        **base(
+            push_fake_latency_min_ms=5,
+            push_fake_latency_max_ms=10,
+            push_fake_invalid_percent=20,
+            push_fake_retry_percent=30,
+        ),
+    )
+    sender = get_push_sender(settings)
+    assert isinstance(sender, EmulatedFcmSender)
+    outcomes = []
+    started = time.perf_counter()
+    for i in range(400):
+        outcomes.append(sender.send(PushMessage(f"t{i}", "Заголовок", "Текст")).outcome)
+    elapsed = time.perf_counter() - started
+    assert 400 * 0.005 <= elapsed < 400 * 0.010 + 2, f"задержка вне диапазона: {elapsed:.2f} с"
+    shares = {o: outcomes.count(o) / len(outcomes) for o in Outcome}
+    assert 0.12 < shares[Outcome.INVALID_TOKEN] < 0.28
+    assert 0.22 < shares[Outcome.RETRY] < 0.38
+    assert shares[Outcome.FAILED] == 0
+
+
+def test_fake_sender_without_emulation_answers_instantly():
+    sender = get_push_sender(Settings(_env_file=None, **base()))
+    assert isinstance(sender, FakePushSender)
+    assert sender.send(PushMessage("t", "a", "b")).outcome is Outcome.SENT
+    assert len(sender.sent) == 1
+
+
+@pytest.mark.parametrize(
+    ("overrides", "error"),
+    [
+        ({"push_fake_latency_min_ms": 50, "push_fake_latency_max_ms": 10}, "LATENCY_MAX"),
+        ({"push_fake_invalid_percent": 60, "push_fake_retry_percent": 50}, "больше 100"),
+    ],
+)
+def test_fake_emulation_settings_are_consistent(overrides, error):
+    with pytest.raises(ValidationError, match=error):
+        Settings(_env_file=None, **base(**overrides))

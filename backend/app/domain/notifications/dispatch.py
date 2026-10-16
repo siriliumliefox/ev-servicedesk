@@ -2,7 +2,8 @@
 
 Строки очереди «арендуются»: короткая транзакция берёт пачку `FOR UPDATE SKIP LOCKED` и
 сдвигает `next_attempt_at` на срок аренды — реплики worker не берут одно и то же. Отправка в
-FCM идёт вне транзакции, исход каждой строки пишется своим коротким COMMIT: `delivered_at`
+FCM идёт вне транзакции (параллельно, `push_send_concurrency`), исход каждой строки пишется
+своим коротким COMMIT: `delivered_at`
 (FCM принял), повтор с паузой `base × 4^(n−1)` или `failed_at` + `error_code`; мёртвый токен
 отзывается. Так сбой посреди пачки не откатывает уже отправленные push (повторной рассылки
 нет), а запросы API (`opened`) не ждут всю пачку. Окно «отправлено, исход не записан»
@@ -15,7 +16,9 @@ FCM идёт вне транзакции, исход каждой строки �
 """
 
 import logging
+from collections import defaultdict, deque
 from collections.abc import Callable
+from concurrent.futures import FIRST_COMPLETED, Executor, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
@@ -165,25 +168,50 @@ def dispatch_due(
     db: Session,
     sender: PushSender,
     settings: Settings,
+    pool: Executor,
     stopping: Callable[[], bool] = lambda: False,
 ) -> int:
     """Одна пачка ждущих доставок; возвращает число обработанных строк.
 
-    При остановке процесса недоотправленные строки остаются арендованными и уйдут после
-    истечения аренды — без повторной отправки уже доставленных.
+    Вызовы FCM идут в `pool` параллельно (ADR 0028 п. 12): ответ FCM ~100 мс, и рассылка на
+    10 000 получателей последовательно заняла бы ~17 мин. Параллельно — разные токены; доставки
+    одного токена — по очереди: исход предыдущей записан до проверки следующей, и мёртвый токен
+    не уходит в FCM повторно. БД — только в этом потоке (сессия не потокобезопасна).
+
+    При остановке процесса новые отправки не начинаются, начатые дописываются; неотправленные
+    строки остаются арендованными и уйдут после истечения аренды — без повторной отправки уже
+    доставленных.
     """
     leased, done = _lease(db, settings)
+    queues: dict[int, deque[_Leased]] = defaultdict(deque)
     for item in leased:
-        if stopping():
-            break
-        if _token_revoked(db, item.token_id):
-            _record(
-                db, settings, item, PushResult(Outcome.FAILED, "TOKEN_REVOKED"), attempted=False
-            )
-        else:
+        queues[item.token_id].append(item)
+    in_flight: dict[Future[PushResult], _Leased] = {}
+
+    def start_next(token_id: int) -> int:
+        """Следующая доставка токена — в отправку; возвращает число закрытых без отправки."""
+        closed = 0
+        queue = queues[token_id]
+        while queue and not stopping():
+            item = queue.popleft()
+            if _token_revoked(db, item.token_id):
+                failed = PushResult(Outcome.FAILED, "TOKEN_REVOKED")
+                _record(db, settings, item, failed, attempted=False)
+                closed += 1
+                continue
             db.commit()  # не держать транзакцию открытой во время сетевого вызова
-            _record(db, settings, item, send_safely(sender, item.message))
-        done += 1
+            in_flight[pool.submit(send_safely, sender, item.message)] = item
+            break
+        return closed
+
+    for token_id in list(queues):
+        done += start_next(token_id)
+    while in_flight:
+        finished, _ = wait(in_flight, return_when=FIRST_COMPLETED)
+        for future in finished:
+            item = in_flight.pop(future)
+            _record(db, settings, item, future.result())
+            done += 1 + start_next(item.token_id)
     return done
 
 
@@ -193,11 +221,15 @@ def drain(
     settings: Settings,
     stopping: Callable[[], bool] = lambda: False,
 ) -> int:
-    """Отправляет, пока пачки полные и процесс не останавливается; возвращает число строк."""
+    """Отправляет, пока пачки полные и процесс не останавливается; возвращает число строк.
+
+    Одновременных вызовов FCM — `push_send_concurrency` (1 — по одному).
+    """
     total = 0
-    while not stopping():
-        done = dispatch_due(db, sender, settings, stopping)
-        total += done
-        if done < settings.notifications_batch_size:
-            break
+    with ThreadPoolExecutor(settings.push_send_concurrency) as pool:
+        while not stopping():
+            done = dispatch_due(db, sender, settings, pool, stopping)
+            total += done
+            if done < settings.notifications_batch_size:
+                break
     return total

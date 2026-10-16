@@ -1,0 +1,58 @@
+name: load
+
+# Нагрузочный прогон в облегчённом профиле (глава 24, ADR 0028 п. 5, 16): 50 пользователей вместо 500,
+# короткие этапы, те же пороги нормативов времени ответа и доли ошибок. Только ручной запуск: раннеры
+# GitHub шумные, результат — проверка, что сценарии и стенд работают, а не замер ёмкости (полный замер —
+# на стенде с ресурсами будущего сервера, scripts/load_stack.sh; на сервере — глава 26). В ci-gate не входит.
+# Образ: пусто — собрать из ветки; иначе опубликованный (ghcr.io/…@sha256:…).
+
+on:
+  workflow_dispatch:
+    inputs:
+      image:
+        description: "Опубликованный образ backend (ghcr.io/…@sha256:…); пусто — собрать из ветки"
+        default: ""
+      scenarios:
+        description: "Сценарии через пробел: per-op mixed peak soak"
+        default: "mixed peak"
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  load:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/backend-poetry
+
+      - uses: ./.github/actions/backend-image
+        with:
+          image: ${{ inputs.image }}
+
+      - name: Сценарии k6 на стенде из образа
+        env:
+          LOAD_PROFILE: ci
+          LOAD_CLIENTS: "5000"
+          SCENARIOS: ${{ inputs.scenarios }}
+        run: |
+          read -r -a list <<<"$SCENARIOS"
+          scripts/load_stack.sh backend:integration "${list[@]}"
+
+      - name: Итоги прогонов
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: load-results
+          # Сырые точки k6 (raw.json.gz) большие — только итоги и разбор.
+          path: |
+            load/results/*/report.md
+            load/results/*/report.json
+            load/results/*/summary.json
+            load/results/*/pg_top20.csv
+            load/results/*/pg_slow.log
+          if-no-files-found: ignore
+          retention-days: 30

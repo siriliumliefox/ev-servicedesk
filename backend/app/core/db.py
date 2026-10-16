@@ -1,6 +1,6 @@
 """Сессия SQLAlchemy для запросов API. Схема — только через Alembic (Глава 2)."""
 
-from collections.abc import Callable, Iterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractContextManager
 from functools import lru_cache
 from typing import Any
@@ -32,7 +32,15 @@ def get_by_id[M](db: Session, model: type[M], value: int, **kwargs: Any) -> M | 
 @lru_cache
 def get_engine() -> Engine:
     # hide_parameters: телефоны и прочие ПД не попадают в текст исключений и логи (ADR 0005).
-    return create_engine(get_settings().database_url, pool_pre_ping=True, hide_parameters=True)
+    settings = get_settings()
+    return create_engine(
+        settings.database_url,
+        pool_pre_ping=True,
+        hide_parameters=True,
+        pool_size=settings.db_pool_size,
+        max_overflow=settings.db_max_overflow,
+        pool_timeout=settings.db_pool_timeout_seconds,
+    )
 
 
 @lru_cache
@@ -40,10 +48,21 @@ def _session_factory() -> sessionmaker[Session]:
     return sessionmaker(bind=get_engine(), expire_on_commit=False)
 
 
-def get_db() -> Iterator[Session]:
-    """Зависимость FastAPI: сессия на запрос; в тестах подменяется."""
-    with _session_factory()() as session:
+async def get_db() -> AsyncIterator[Session]:
+    """Зависимость FastAPI: сессия на запрос; в тестах подменяется.
+
+    Асинхронный генератор — открытие и закрытие сессии в цикле событий, без захода в пул потоков
+    (глава 24, ADR 0028 п. 18): синхронная зависимость закрывала бы сессию отдельным заходом, и
+    запрос, уже отработавший, держал бы соединение, пока ждёт свободный поток. На пике все потоки
+    заняты запросами, ждущими соединение, а все соединения — запросами, ждущими поток: процесс
+    вставал. Сессия до первого запроса соединения не берёт; закрытие — возврат соединения в пул
+    (ROLLBACK по локальной сети, доли миллисекунды).
+    """
+    session = _session_factory()()
+    try:
         yield session
+    finally:
+        session.close()
 
 
 # Фабрика коротких сессий: `with scope() as db: ...`.

@@ -10,6 +10,7 @@
 
 import json
 import logging
+import random
 import threading
 import time
 from dataclasses import dataclass, field
@@ -73,6 +74,42 @@ class FakePushSender:
 
     def to(self, token: str) -> list[PushMessage]:
         return [m for m in self.sent if m.token == token]
+
+
+@dataclass(frozen=True)
+class EmulatedFcmSender:
+    """Фейковый push, который отвечает как FCM, — для нагрузочного стенда (ADR 0028 п. 11):
+    задержка в диапазоне и доли «токен недействителен» и временных ошибок. Ничего не хранит:
+    за долгий прогон это десятки тысяч сообщений.
+    """
+
+    latency_min_seconds: float = 0
+    latency_max_seconds: float = 0
+    invalid_ratio: float = 0
+    retry_ratio: float = 0
+
+    @classmethod
+    def from_settings(cls, settings: Settings) -> "EmulatedFcmSender":
+        return cls(
+            settings.push_fake_latency_min_ms / 1000,
+            settings.push_fake_latency_max_ms / 1000,
+            settings.push_fake_invalid_percent / 100,
+            settings.push_fake_retry_percent / 100,
+        )
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.latency_max_seconds or self.invalid_ratio or self.retry_ratio)
+
+    def send(self, message: PushMessage) -> PushResult:
+        if self.latency_max_seconds:
+            time.sleep(random.uniform(self.latency_min_seconds, self.latency_max_seconds))
+        roll = random.random()
+        if roll < self.invalid_ratio:
+            return PushResult(Outcome.INVALID_TOKEN, "UNREGISTERED")
+        if roll < self.invalid_ratio + self.retry_ratio:
+            return PushResult(Outcome.RETRY, "UNAVAILABLE")
+        return PushResult(Outcome.SENT)
 
 
 class FcmCredentialsError(ValueError):
@@ -221,4 +258,5 @@ def get_push_sender(settings: Settings) -> PushSender:
     if settings.push_provider == "fcm":
         account = ServiceAccount.from_json(settings.fcm_service_account_json)
         return FcmPushSender(account, settings.fcm_timeout_seconds)
-    return FakePushSender()
+    emulated = EmulatedFcmSender.from_settings(settings)
+    return emulated if emulated.enabled else FakePushSender()
