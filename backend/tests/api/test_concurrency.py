@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import ApiError
 from app.core.security import hash_refresh_token
-from app.domain.auth import codes, service, tokens
+from app.domain.auth import codes, service, staff, tokens
 from app.domain.auth.sms import FakeSmsProvider
 from app.models import AppUser, PdConsent, RefreshToken
 from app.models.enums import UserRole
@@ -116,14 +116,14 @@ def test_parallel_staff_logins_cannot_exceed_failure_limit(
             checks.append(1)
         return False
 
-    monkeypatch.setattr(service, "verify_password", counting_verify)
+    monkeypatch.setattr(staff, "verify_password", counting_verify)
     results = storm(
         30,
-        lambda: service.staff_login(
+        lambda: staff.login(
             _NoUserDb(), real_redis, settings, "+375295557777", "guess", "10.2.0.1"
         ),
     )
-    assert len(checks) <= settings.staff_login_failures_per_phone_15min
+    assert len(checks) <= settings.staff_login_failures_per_phone_ip_15min
     statuses = sorted(r.status_code for r in results if isinstance(r, ApiError))
     assert statuses.count(401) == len(checks) and statuses.count(429) == 30 - len(checks)
 

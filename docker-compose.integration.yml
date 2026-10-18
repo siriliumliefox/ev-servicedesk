@@ -24,3 +24,5 @@ services:
     pull_policy: never
   analytics-worker:
     pull_policy: never
+  privacy-worker:
+    pull_policy: never

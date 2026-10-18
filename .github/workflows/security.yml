@@ -1,0 +1,67 @@
+name: security
+
+# Сканирование OWASP ZAP (глава 25, ADR 0029 п. 7): стенд из образа (scripts/integration_stack.sh, режим
+# staging) + scripts/zap_scan.sh — активное сканирование API по docs/openapi.yaml без токена и от имени
+# client, engineer, admin, пассивный baseline веб-кабинетов на production-сборке. Вручную и раз в неделю
+# (develop); в ci-gate не входит — проход длится десятки минут. Красный — есть находки High
+# (backend/scripts/zap_summary.py). Отчёты — артефакт zap-results; сжатая сводка — в docs/reviews/security/.
+# Образ: пусто — собрать из ветки; иначе опубликованный (ghcr.io/…@sha256:…). На сервере — глава 26.
+
+on:
+  workflow_dispatch:
+    inputs:
+      image:
+        description: "Опубликованный образ backend (ghcr.io/…@sha256:…); пусто — собрать из ветки"
+        default: ""
+      web:
+        description: "Baseline веб-кабинетов (1/0)"
+        default: "1"
+  schedule:
+    - cron: "0 3 * * 1"   # понедельник 03:00 UTC, ветка по умолчанию
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  zap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/backend-poetry
+
+      - uses: ./.github/actions/backend-image
+        with:
+          image: ${{ inputs.image }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Сборка веб-кабинетов (production, CSP)
+        if: ${{ inputs.web != '0' }}
+        run: |
+          npm ci
+          npm run build -w web-engineer -w web-admin
+
+      - name: ZAP на стенде из образа
+        env:
+          INTEGRATION_ACCESS_TOKEN_TTL: "7200"
+          ZAP_OUT: ${{ github.workspace }}/zap-results
+          ZAP_WEB: ${{ inputs.web || '1' }}
+          ZAP_IMAGE: ghcr.io/zaproxy/zaproxy@sha256:5ccfff9a411743ab2615136a2edd7416bec9ce41572fa94e935df38c14adb2b6
+        run: scripts/integration_stack.sh backend:integration -- scripts/zap_scan.sh
+
+      - name: Сводка
+        if: always()
+        run: |
+          [ -f zap-results/summary.md ] && cat zap-results/summary.md >> "$GITHUB_STEP_SUMMARY" || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: zap-results
+          path: zap-results/
+          retention-days: 30

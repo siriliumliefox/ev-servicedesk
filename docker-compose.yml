@@ -177,6 +177,20 @@ services:
         condition: service_completed_successfully
     restart: unless-stopped
 
+  # Worker ПД (Глава 25, ADR 0029 пп. 18–19): анонимизация после отзыва согласия (срок 99-З —
+  # 15 дней) раз в PRIVACY_RUN_SECONDS (3600) и удаление по срокам хранения раз в сутки.
+  privacy-worker:
+    <<: *backend-app
+    command: ["python", "-m", "app.workers.privacy"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
 volumes:
   postgres_data:
   minio_data:

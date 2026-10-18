@@ -1,8 +1,8 @@
 // Ввод и показ пароля сотрудника (ADR 0026 п. 4–5): поле с кнопкой «Сгенерировать» и одноразовый показ
 // пароля для передачи сотруднику — после ухода с экрана его больше не увидеть.
 import { useState } from 'react'
-import { Button, TextField } from '@ev-servicedesk/web-shared'
-import { PASSWORD_MAX, PASSWORD_MIN, generatePassword } from './password.ts'
+import { Button, PASSWORD_MAX, PASSWORD_MIN, TextField } from '@ev-servicedesk/web-shared'
+import { generatePassword } from './password.ts'
 
 export function PasswordInput({
   label,

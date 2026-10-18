@@ -35,7 +35,7 @@ INVALID_TOKEN_CODES = frozenset({"UNREGISTERED", "INVALID_ARGUMENT", "SENDER_ID_
 class Outcome(StrEnum):
     SENT = "sent"  # FCM принял сообщение — «доставлено» (ADR 0019 п. 10)
     RETRY = "retry"  # временная ошибка: 429, 5xx, сеть, авторизация
-    INVALID_TOKEN = "invalid_token"  # токен мёртв — отозвать
+    INVALID_TOKEN = "invalid_token"  # noqa: S105 — исход «токен мёртв — отозвать», не секрет
     FAILED = "failed"  # окончательная ошибка без вины токена
 
 
@@ -102,9 +102,11 @@ class EmulatedFcmSender:
         return bool(self.latency_max_seconds or self.invalid_ratio or self.retry_ratio)
 
     def send(self, message: PushMessage) -> PushResult:
+        # Эмуляция FCM для нагрузки (ADR 0028 п. 11): случайность не криптографическая.
         if self.latency_max_seconds:
-            time.sleep(random.uniform(self.latency_min_seconds, self.latency_max_seconds))
-        roll = random.random()
+            low, high = self.latency_min_seconds, self.latency_max_seconds
+            time.sleep(random.uniform(low, high))  # noqa: S311
+        roll = random.random()  # noqa: S311
         if roll < self.invalid_ratio:
             return PushResult(Outcome.INVALID_TOKEN, "UNREGISTERED")
         if roll < self.invalid_ratio + self.retry_ratio:

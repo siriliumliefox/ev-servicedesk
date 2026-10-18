@@ -121,6 +121,31 @@ def test_vehicle_identity_is_immutable(conn: Connection, column: str, value_sql:
     )
 
 
+ANONYMIZED_VIN = "00000000000000000"
+
+
+def test_vin_anonymized_only_on_deleted_vehicle(conn: Connection) -> None:
+    """ADR 0029 п. 18: нулевой VIN — только у удалённого авто; иной VIN по-прежнему неизменяем."""
+    vehicle = make_vehicle(conn)
+    assert_violation(
+        conn,
+        "vehicle_identity_immutable",
+        "UPDATE vehicle SET vin = :vin WHERE id = :v",
+        vin=ANONYMIZED_VIN,
+        v=vehicle,
+    )
+    conn.execute(
+        text("UPDATE vehicle SET vin = :vin, deleted_at = now() WHERE id = :v"),
+        {"vin": ANONYMIZED_VIN, "v": vehicle},
+    )
+    assert_violation(
+        conn,
+        "vehicle_anonymized_final",
+        "UPDATE vehicle SET deleted_at = NULL WHERE id = :v",
+        v=vehicle,
+    )
+
+
 # --- Пробег ---------------------------------------------------------------------------
 
 

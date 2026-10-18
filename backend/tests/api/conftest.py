@@ -4,8 +4,11 @@
 SAVEPOINT (join_transaction_mode="create_savepoint").
 """
 
+import hashlib
+import hmac
 import re
 import threading
+import time
 import uuid
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager
@@ -38,6 +41,7 @@ from tests.support.contract import API, assert_contract, operation_for
 from tests.support.storage import FakeObjectStorage
 
 POLICY = "2026-10"
+TELEGRAM_BOT_TOKEN = "123456:test-bot-token"  # подпись Login Widget в тестах (ADR 0029 п. 16)
 STAFF_PASSWORD = "Staff-pass-123"
 # Каналы pub/sub не зависят от номера БД Redis: параллельные прогоны на одном сервере
 # разделяются префиксом каналов, своим у каждого прогона.
@@ -53,6 +57,7 @@ def api_settings(**overrides: Any) -> Settings:
         "sms_provider": "fake",
         "redis_url": redis_test_url(),  # подписка WebSocket (lifespan) — на тестовом Redis
         "redis_channel_prefix": RUN_CHANNEL_PREFIX,
+        "telegram_bot_token": TELEGRAM_BOT_TOKEN,
     }
     return Settings(_env_file=None, **(values | overrides))
 
@@ -227,6 +232,18 @@ def make_client_user(db: Session) -> Callable[..., AppUser]:
 
 def bearer(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
+
+
+def telegram_widget(
+    telegram_id: str, bot_token: str = TELEGRAM_BOT_TOKEN, auth_date: int | None = None, **extra
+) -> dict[str, Any]:
+    """Тело linkTelegram, подписанное как Telegram Login Widget (поле id = telegram_id)."""
+    fields = {"id": telegram_id, "auth_date": auth_date or int(time.time()), **extra}
+    check = "\n".join(f"{k}={fields[k]}" for k in sorted(fields))
+    secret = hashlib.sha256(bot_token.encode()).digest()
+    signature = hmac.new(secret, check.encode(), hashlib.sha256).hexdigest()
+    body = {k: v for k, v in fields.items() if k != "id"}
+    return {"telegram_id": telegram_id, **body, "hash": signature}
 
 
 # ---------- Авто, персонал и тикеты (Главы 11–12) ----------

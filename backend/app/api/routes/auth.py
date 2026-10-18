@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, Response, status
 
 from app.api.deps import (
     ALL_ROLES,
+    AccessClaimsDep,
     CurrentUser,
     DbDep,
     RedisDep,
@@ -25,12 +26,13 @@ from app.api.schemas.auth import (
     RequestCodeResponse,
     StaffLoginRequest,
     StaffLoginResponse,
+    StaffPasswordChangeRequest,
     TelegramLinkRequest,
     UserPublic,
     VerifyCodeRequest,
     VerifyCodeResponse,
 )
-from app.domain.auth import codes, service, tokens
+from app.domain.auth import service, sessions, staff, telegram, tokens
 from app.models.enums import UserRole
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
@@ -55,9 +57,14 @@ def _sms_limiter() -> anyio.CapacityLimiter:
 
 @router.post("/phone/request-code", operation_id="requestPhoneCode")
 async def request_phone_code(
-    body: PhoneRequestCode, redis: RedisDep, sms: SmsDep, settings: SettingsDep, ip: ClientIp
+    body: PhoneRequestCode,
+    db: DbDep,
+    redis: RedisDep,
+    sms: SmsDep,
+    settings: SettingsDep,
+    ip: ClientIp,
 ) -> RequestCodeResponse:
-    send = partial(codes.request_code, redis, sms, settings, body.phone, ip)
+    send = partial(service.request_phone_code, db, redis, sms, settings, body.phone, ip)
     ttl = await anyio.to_thread.run_sync(send, limiter=_sms_limiter())
     return RequestCodeResponse(ttl_seconds=ttl)
 
@@ -88,8 +95,12 @@ def refresh_token(body: RefreshRequest, db: DbDep, settings: SettingsDep) -> Aut
     response_class=Response,
     **rbac(*ALL_ROLES),
 )
-def logout(body: RefreshRequest, user: CurrentUser, db: DbDep) -> Response:
+def logout(
+    body: RefreshRequest, user: CurrentUser, claims: AccessClaimsDep, db: DbDep, redis: RedisDep
+) -> Response:
+    """Выход: refresh-токен (если свой) и предъявленный access-токен (ADR 0029 п. 12)."""
     tokens.revoke(db, body.refresh_token, user.id)
+    sessions.revoke_token(redis, claims)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -109,10 +120,30 @@ def withdraw_pd_consent(user: CurrentUser, db: DbDep) -> Response:
 def staff_login(
     body: StaffLoginRequest, db: DbDep, redis: RedisDep, settings: SettingsDep, ip: ClientIp
 ) -> StaffLoginResponse:
-    result = service.staff_login(db, redis, settings, body.phone, body.password, ip)
+    result = staff.login(db, redis, settings, body.phone, body.password, ip)
     return StaffLoginResponse(**vars(result.tokens), user=UserPublic.model_validate(result.user))
 
 
+@router.post(
+    "/staff/password", operation_id="changeStaffPassword", **rbac(UserRole.ENGINEER, UserRole.ADMIN)
+)
+def change_staff_password(
+    body: StaffPasswordChangeRequest,
+    user: CurrentUser,
+    db: DbDep,
+    redis: RedisDep,
+    settings: SettingsDep,
+    ip: ClientIp,
+) -> AuthTokens:
+    pair = staff.change_password(
+        db, redis, settings, user, body.current_password, body.new_password, ip
+    )
+    return AuthTokens(**vars(pair))
+
+
 @router.post("/telegram/link", operation_id="linkTelegram", **rbac(UserRole.CLIENT))
-def link_telegram(body: TelegramLinkRequest, user: CurrentUser, db: DbDep) -> UserPublic:
-    return UserPublic.model_validate(service.link_telegram(db, user, body.telegram_id))
+def link_telegram(
+    body: TelegramLinkRequest, user: CurrentUser, db: DbDep, settings: SettingsDep
+) -> UserPublic:
+    telegram_id = telegram.verify_widget(settings, body.widget_fields(), body.hash)
+    return UserPublic.model_validate(service.link_telegram(db, user, telegram_id))

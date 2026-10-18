@@ -53,12 +53,16 @@ def lock_user(db: Session, user_id: int) -> None:
 
 
 def revoke_all(db: Session, user_id: int) -> None:
+    """Все сессии пользователя: refresh-токены и выданные access-токены (`sessions_revoked_at`,
+    ADR 0029 п. 12) — одной транзакцией вызывающего."""
+    now = datetime.now(UTC)
     lock_user(db, user_id)
     db.execute(
         update(RefreshToken)
         .where(RefreshToken.user_id == user_id, RefreshToken.revoked_at.is_(None))
-        .values(revoked_at=datetime.now(UTC))
+        .values(revoked_at=now)
     )
+    db.execute(update(AppUser).where(AppUser.id == user_id).values(sessions_revoked_at=now))
 
 
 def rotate(db: Session, refresh_token: str, settings: Settings) -> TokenPair:

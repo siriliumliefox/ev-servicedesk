@@ -6,11 +6,11 @@ from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Значения-заглушки из .env.example: в staging/production с ними приложение не стартует.
-DEFAULT_JWT_SECRET = "change-me-in-every-real-environment"
-DEFAULT_SMS_CODE_SECRET = "change-me-sms-code-secret"
+DEFAULT_JWT_SECRET = "change-me-in-every-real-environment"  # noqa: S105 — заглушка; вне local/test запрещена
+DEFAULT_SMS_CODE_SECRET = "change-me-sms-code-secret"  # noqa: S105 — заглушка; вне local/test запрещена
 # Учётные данные MinIO из docker-compose.yml (только local): известны всем, кто видит репозиторий.
 DEFAULT_S3_ACCESS_KEY = "ev_local"
-DEFAULT_S3_SECRET_KEY = "ev_local_only"
+DEFAULT_S3_SECRET_KEY = "ev_local_only"  # noqa: S105 — ключ MinIO разработки; вне local/test запрещён
 SAFE_ENVIRONMENTS = {"local", "test"}
 
 
@@ -52,8 +52,11 @@ class Settings(BaseSettings):
     sms_requests_per_phone_hour: int = Field(5, ge=1)
     sms_requests_per_ip_hour: int = Field(30, ge=1)
     verify_failures_per_phone_day: int = Field(20, ge=1)
-    staff_login_failures_per_phone_15min: int = Field(5, ge=1)
+    # Вход сотрудника (ADR 0029 п. 11): неудачи по паре «номер + IP» — злоумышленник со своего
+    # адреса не запирает сотрудника; общий потолок на номер — против распределённого подбора.
+    staff_login_failures_per_phone_ip_15min: int = Field(5, ge=1)
     staff_login_failures_per_ip_15min: int = Field(20, ge=1)
+    staff_login_failures_per_phone_hour: int = Field(300, ge=1)
     # Попытки POST /vehicles: 409 отвечает «VIN уже зарегистрирован» — защита от перебора VIN
     # (ПД, ADR 0005, ADR 0014).
     vehicle_create_per_user_hour: int = Field(10, ge=1)
@@ -123,6 +126,10 @@ class Settings(BaseSettings):
     # Содержимое JSON-ключа сервисного аккаунта Firebase (не путь к файлу); вводит владелец.
     fcm_service_account_json: str = ""
     fcm_timeout_seconds: float = Field(10, gt=0, le=60)
+    # Привязка Telegram (ADR 0029 п. 16): подпись Telegram Login Widget проверяется токеном бота;
+    # без токена привязка недоступна (503). Бота и токен создаёт владелец (глава 27).
+    telegram_bot_token: str = ""
+    telegram_auth_max_age_seconds: int = Field(24 * 3600, ge=60, le=7 * 24 * 3600)
     # Worker: опрос очереди, если сигнал Redis потерян; размер пачки; повторы (ADR 0019 п. 9).
     notifications_poll_seconds: float = Field(5, gt=0, le=300)
     notifications_batch_size: int = Field(100, ge=1, le=1000)
@@ -145,6 +152,8 @@ class Settings(BaseSettings):
 
     # --- Worker аналитики (Глава 16, ADR 0020 п. 2): интервал обновления витрины ---
     analytics_refresh_seconds: float = Field(300, ge=10, le=86400)
+    # Worker ПД (ADR 0029 п. 18): проход очереди анонимизации; срок 99-З — 15 дней.
+    privacy_run_seconds: float = Field(3600, ge=10, le=86400)
 
     @model_validator(mode="after")
     def _default_channel_prefix(self) -> "Settings":

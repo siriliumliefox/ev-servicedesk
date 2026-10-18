@@ -26,6 +26,7 @@ from redis.exceptions import RedisError
 
 from app.core.config import Settings, get_settings
 from app.core.db import SessionScope, get_session_scope
+from app.core.logging import configure_logging
 from app.core.time import BUSINESS_TZ
 from app.domain.notifications.dispatch import drain
 from app.domain.notifications.outbox import Outbox, outbox_channel
@@ -168,7 +169,7 @@ class NotificationsWorker:
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    configure_logging()
     settings = get_settings()
     worker = NotificationsWorker(
         settings,

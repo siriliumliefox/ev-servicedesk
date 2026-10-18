@@ -1,0 +1,29 @@
+# Обновления зависимостей (Глава 25, ADR 0029 п. 9, OWASP A03): раз в неделю, PR в develop.
+# Безопасность проверяет job `dependency-audit` в ci.yml на каждом PR; dependabot предлагает
+# обновления заранее. Мажорные обновления — отдельным решением (тесты и контракт, ADR 0007).
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /backend
+    target-branch: develop
+    schedule: { interval: weekly, day: monday }
+    open-pull-requests-limit: 5
+    groups:
+      backend-minor: { update-types: [minor, patch] }
+  - package-ecosystem: npm
+    directory: /
+    target-branch: develop
+    schedule: { interval: weekly, day: monday }
+    open-pull-requests-limit: 5
+    groups:
+      web-minor: { update-types: [minor, patch] }
+  - package-ecosystem: pub
+    directory: /mobile
+    target-branch: develop
+    schedule: { interval: weekly, day: monday }
+    open-pull-requests-limit: 5
+  - package-ecosystem: github-actions
+    directory: /
+    target-branch: develop
+    schedule: { interval: weekly, day: monday }
+    open-pull-requests-limit: 5

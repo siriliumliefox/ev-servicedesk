@@ -15,7 +15,7 @@ export interface paths {
         put?: never;
         /**
          * Запросить SMS-код для входа/регистрации по телефону
-         * @description Отправляет SMS с одноразовым кодом на указанный номер (код 4–8 цифр, по умолчанию 4; TTL — ttl_seconds). 429 RATE_LIMITED — пауза между запросами и лимиты на номер и адрес (заголовок Retry-After); 422 PHONE_NOT_SUPPORTED — SMS на номер не доставляется; 503 SMS_UNAVAILABLE (через default) — провайдер недоступен. Коды ошибок уточнены в 1.2.0.
+         * @description Отправляет SMS с одноразовым кодом на указанный номер (код 4–8 цифр, по умолчанию 4; TTL — ttl_seconds). 429 RATE_LIMITED — пауза между запросами и лимиты на номер и адрес (заголовок Retry-After); 422 PHONE_NOT_SUPPORTED — SMS на номер не доставляется; 503 SMS_UNAVAILABLE (через default) — провайдер недоступен. Коды ошибок уточнены в 1.2.0. Номер заблокированного клиента и номер сотрудника получают тот же ответ 200, но код не создаётся и SMS не отправляется: ответ не раскрывает, чей номер (1.12.0, ADR 0029 п. 15).
          */
         post: operations["requestPhoneCode"];
         delete?: never;
@@ -75,7 +75,7 @@ export interface paths {
         put?: never;
         /**
          * Отозвать refresh-токен (выход с устройства)
-         * @description Инвалидирует refresh-токен текущего устройства.
+         * @description Инвалидирует refresh-токен текущего устройства и предъявленный access-токен: он больше не принимается ни REST, ни WebSocket (1.12.0, ADR 0029 п. 12). Отзыв согласия, блокировка, сброс и смена пароля так же сразу отзывают все выданные access-токены пользователя.
          */
         post: operations["logout"];
         delete?: never;
@@ -115,9 +115,29 @@ export interface paths {
         put?: never;
         /**
          * Логин по паролю для Инженера/Администратора
-         * @description Отдельный флоу от клиентского SMS-логина. Учётные записи engineer/admin создаёт администратор (createStaffUser; первый — CLI образа, ADR 0021 п. 7), клиент этим эндпоинтом не пользуется. Заблокированный сотрудник — 401, как неверный пароль (уточнено в 1.7.1). 429 — превышен лимит неудачных попыток входа по номеру или адресу (N-06), заголовок Retry-After. Добавлено в 1.2.0.
+         * @description Отдельный флоу от клиентского SMS-логина. Учётные записи engineer/admin создаёт администратор (createStaffUser; первый — CLI образа, ADR 0021 п. 7), клиент этим эндпоинтом не пользуется. Заблокированный сотрудник — 401, как неверный пароль (уточнено в 1.7.1). 429 — превышен лимит неудачных попыток входа (N-06), заголовок Retry-After: 5 за 15 мин для пары «номер + адрес», 20 за 15 мин с адреса, 300 в час на номер (1.12.0, ADR 0029 п. 11 — неудачи с чужого адреса не запирают сотрудника). Добавлено в 1.2.0.
          */
         post: operations["staffLogin"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/staff/password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Сменить свой пароль (инженер, администратор)
+         * @description Сотрудник меняет свой пароль: текущий и новый. Новый пароль — 12–128 символов и стойкий (оценка zxcvbn ≥ 3 из 4, без цифр своего номера), иначе 422 VALIDATION_ERROR; совпадает с текущим — 422. Неверный текущий пароль — 400 PASSWORD_INVALID, попытка входит в лимит неудачных входов (429). Все прочие сессии и access-токены отзываются; ответ — новая пара токенов для текущей сессии. Добавлено в 1.12.0 (глава 25, ADR 0029 п. 14, RBAC-06).
+         */
+        post: operations["changeStaffPassword"];
         delete?: never;
         options?: never;
         head?: never;
@@ -135,7 +155,7 @@ export interface paths {
         put?: never;
         /**
          * Привязать Telegram к текущему аккаунту
-         * @description Сохраняет telegram_id для уже авторизованного пользователя. Сервер принимает telegram_id длиной до 50 символов без управляющих символов (иначе 422); 409 TELEGRAM_ALREADY_LINKED — привязан к другому аккаунту. Уточнено в 1.2.0.
+         * @description Привязывает Telegram к авторизованному клиенту по данным Telegram Login Widget: telegram_id — поле id виджета, остальные поля передаются как получены. Сервер требует auth_date и hash и проверяет подпись токеном бота (HMAC-SHA256), auth_date — не старше 24 ч; без подписи или с неверной — 422 (TELEGRAM_AUTH_INVALID / VALIDATION_ERROR), telegram_id — только цифры, до 50 символов. Привязка не настроена (нет бота) — 503 TELEGRAM_UNAVAILABLE (через default). 409 TELEGRAM_ALREADY_LINKED — привязан к другому аккаунту. Уточнено в 1.2.0; доказательство владения — 1.12.0 (ADR 0029 п. 16).
          */
         post: operations["linkTelegram"];
         delete?: never;
@@ -985,7 +1005,7 @@ export interface paths {
         put?: never;
         /**
          * Создать учётную запись инженера/администратора
-         * @description Клиенты регистрируются сами (verifyPhoneCode). Персонал создаёт только admin; пароль хранится как password_hash (N-08, ADR 0005). 409 PHONE_ALREADY_REGISTERED — телефон уже занят (клиентом или сотрудником). Первый администратор среды — CLI образа `python -m app.cli create-admin` (ADR 0021 п. 7). Уточнено в 1.7.1.
+         * @description Клиенты регистрируются сами (verifyPhoneCode). Персонал создаёт только admin; пароль хранится как password_hash (N-08, ADR 0005). 409 PHONE_ALREADY_REGISTERED — телефон уже занят (клиентом или сотрудником). Первый администратор среды — CLI образа `python -m app.cli create-admin` (ADR 0021 п. 7). Уточнено в 1.7.1. Пароль — стойкий (zxcvbn ≥ 3 из 4, без цифр номера), иначе 422 VALIDATION_ERROR (1.12.0, ADR 0029 п. 13).
          */
         post: operations["createStaffUser"];
         delete?: never;
@@ -1033,7 +1053,7 @@ export interface paths {
         put?: never;
         /**
          * Сбросить пароль сотрудника
-         * @description Администратор задаёт сотруднику (engineer/admin, в том числе заблокированному) новый пароль — глоссарий «Учётная запись сотрудника». Пароль хранится как argon2id; все refresh-токены сотрудника отзываются (сессии заканчиваются), выданный access-токен доживает свой срок. У клиента пароля нет — 409 PASSWORD_NOT_ALLOWED; несуществующий или анонимизированный пользователь — 404 USER_NOT_FOUND. Добавлено в 1.11.0 (глава 22, ADR 0026).
+         * @description Администратор задаёт сотруднику (engineer/admin, в том числе заблокированному) новый пароль — глоссарий «Учётная запись сотрудника». Пароль хранится как argon2id; все refresh- и access-токены сотрудника отзываются сразу, блокировка входа номера после неудачных попыток снимается (1.12.0, ADR 0029 пп. 11–12); пароль — стойкий, как в createStaffUser, иначе 422. У клиента пароля нет — 409 PASSWORD_NOT_ALLOWED; несуществующий или анонимизированный пользователь — 404 USER_NOT_FOUND. Добавлено в 1.11.0 (глава 22, ADR 0026).
          */
         post: operations["resetUserPassword"];
         delete?: never;
@@ -1151,8 +1171,24 @@ export interface components {
             /** Format: password */
             password: string;
         };
+        /** @description Данные Telegram Login Widget. auth_date и hash необязательны в схеме (совместимость 1.x), но обязательны для сервера (1.12.0, ADR 0029 п. 16). */
         TelegramLinkRequest: {
+            /** @description Поле id виджета */
             telegram_id: string;
+            /** @description Unix-время авторизации в Telegram */
+            auth_date?: number;
+            /** @description Подпись виджета (hex HMAC-SHA256) */
+            hash?: string;
+            first_name?: string;
+            last_name?: string;
+            username?: string;
+            photo_url?: string;
+        };
+        StaffPasswordChangeRequest: {
+            /** Format: password */
+            current_password: string;
+            /** Format: password */
+            new_password: string;
         };
         AuthTokens: {
             access_token: string;
@@ -1980,6 +2016,36 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthorized"];
+            422: components["responses"]["ValidationError"];
+            429: components["responses"]["RateLimited"];
+            default: components["responses"]["ServerError"];
+        };
+    };
+    changeStaffPassword: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StaffPasswordChangeRequest"];
+            };
+        };
+        responses: {
+            /** @description Пароль изменён, прочие сессии завершены */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthTokens"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             422: components["responses"]["ValidationError"];
             429: components["responses"]["RateLimited"];
             default: components["responses"]["ServerError"];

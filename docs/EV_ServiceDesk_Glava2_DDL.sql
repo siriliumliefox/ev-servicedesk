@@ -968,5 +968,43 @@ CREATE INDEX ix_notification_published ON notification (created_at DESC, id DESC
 
 UPDATE alembic_version SET version_num='0015' WHERE alembic_version.version_num = '0014';
 
+-- Running upgrade 0015 -> 0016
+
+CREATE OR REPLACE FUNCTION vehicle_guard() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    IF (NEW.vin IS DISTINCT FROM OLD.vin
+            AND NOT (NEW.vin = '00000000000000000' AND NEW.deleted_at IS NOT NULL))
+       OR NEW.user_id IS DISTINCT FROM OLD.user_id
+       OR NEW.vehicle_model_id IS DISTINCT FROM OLD.vehicle_model_id THEN
+        RAISE EXCEPTION 'vehicle vin, user_id and vehicle_model_id are immutable'
+            USING ERRCODE = 'check_violation', CONSTRAINT = 'vehicle_identity_immutable';
+    END IF;
+    IF OLD.vin = '00000000000000000' AND NEW.deleted_at IS NULL THEN
+        RAISE EXCEPTION 'anonymized vehicle cannot be restored'
+            USING ERRCODE = 'check_violation', CONSTRAINT = 'vehicle_anonymized_final';
+    END IF;
+    IF NEW.mileage < OLD.mileage AND NOT EXISTS (
+        SELECT 1 FROM vehicle_mileage_correction c
+        WHERE c.vehicle_id = NEW.id
+          AND c.old_mileage = OLD.mileage
+          AND c.new_mileage = NEW.mileage
+          AND c.created_at = now()
+    ) THEN
+        RAISE EXCEPTION 'vehicle mileage cannot decrease without an admin correction'
+            USING ERRCODE = 'check_violation', CONSTRAINT = 'vehicle_mileage_monotonic';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+UPDATE alembic_version SET version_num='0016' WHERE alembic_version.version_num = '0015';
+
+-- Running upgrade 0016 -> 0017
+
+ALTER TABLE app_user ADD COLUMN sessions_revoked_at TIMESTAMP WITH TIME ZONE;
+
+UPDATE alembic_version SET version_num='0017' WHERE alembic_version.version_num = '0016';
+
 COMMIT;
 

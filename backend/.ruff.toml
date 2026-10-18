@@ -2,8 +2,13 @@ line-length = 100
 target-version = "py312"
 
 [lint]
-select = ["E", "F", "I", "UP"]
+# S — правила bandit (Глава 25, ADR 0029 п. 9): исключения — noqa с объяснением.
+select = ["E", "F", "I", "UP", "S"]
 
 [lint.per-file-ignores]
-# Миграции генерируются autogenerate: длинные строки op.create_table не переносим.
-"alembic/versions/*" = ["E501"]
+# Миграции генерируются autogenerate: длинные строки op.create_table не переносим. SQL миграций —
+# константы модуля (имена таблиц, тексты функций), пользовательского ввода нет.
+"alembic/versions/*" = ["E501", "S608"]
+# Тесты: assert, фиктивные пароли и токены, SQL из констант, псевдослучайные данные,
+# urlopen по presigned URL тестового S3 — по назначению.
+"tests/*" = ["S101", "S105", "S106", "S107", "S310", "S311", "S608"]

@@ -158,6 +158,28 @@ def test_blocked_while_idle_closes_4401(client, ticket_id, engineer, as_staff, m
         assert close_code(ws) == 4401
 
 
+def test_logout_while_idle_closes_4401(client, ticket_id, engineer, monkeypatch):
+    """Выход отзывает access-токен — подписка закрывается и без событий (ADR 0029 п. 12)."""
+    monkeypatch.setattr(ticket_events, "LISTEN_TIMEOUT_SECONDS", 0.2)
+    headers, token, _ = engineer
+    with connect(client, ticket_id) as ws:
+        auth(ws, token)
+        r = client.post(f"{API}/auth/logout", json={"refresh_token": "x"}, headers=headers)
+        assert r.status_code == 204
+        assert close_code(ws) == 4401
+
+
+def test_revoked_token_cannot_connect(client, ticket_id, engineer):
+    headers, token, _ = engineer
+    assert (
+        client.post(f"{API}/auth/logout", json={"refresh_token": "x"}, headers=headers).status_code
+        == 204
+    )
+    with connect(client, ticket_id) as ws:
+        ws.send_json({"type": "auth", "access_token": token})
+        assert close_code(ws) == 4401
+
+
 def test_token_expiry_closes_4401(client, ticket_id, settings, engineer, real_redis):
     user = engineer[2]
     issued = datetime.now(UTC) - timedelta(seconds=settings.access_token_ttl_seconds - 2)

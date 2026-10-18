@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.core.security import create_access_token
 from app.core.time import today_in_business_tz
 from app.domain.notifications.push import Outcome, PushResult
 from app.models import (
@@ -24,7 +25,7 @@ from app.models import (
     PushToken,
 )
 from app.models.enums import UserRole
-from tests.api.conftest import API, Headers, model_id, register
+from tests.api.conftest import API, Headers, bearer, model_id, register
 from tests.api.notifications_support import feed, publish
 from tests.api.ticket_support import error_code
 
@@ -521,14 +522,16 @@ def test_withdrawn_user_excluded_from_new_publications(client, admin, make_owner
     assert preview(client, admin, type="news", message="x") == {"recipients": 0, "devices": 0}
 
 
-def test_push_token_requires_active_consent(client, make_owner, db):
-    """После отзыва согласия access-токен ещё действует, но новый push-токен не регистрируется
-    (ревью главы 17: правило записи = правило аудита active_push_token_of_ineligible_user)."""
+def test_push_token_requires_active_consent(client, make_owner, db, settings):
+    """Без действующего согласия новый push-токен не регистрируется (ревью главы 17: правило
+    записи = правило аудита active_push_token_of_ineligible_user). Отзыв согласия отзывает и
+    выданные access-токены (ADR 0029 п. 12), поэтому проверка — токеном, выпущенным позже."""
     owner = make_owner(None, token=False)
+    me = client.get(f"{API}/me", headers=owner.headers).json()["id"]
     assert client.delete(f"{API}/auth/pd-consent", headers=owner.headers).status_code == 202
-    r = client.post(
-        f"{API}/push-tokens", json={"token": "fcm-x:" + "y" * 40}, headers=owner.headers
-    )
+    assert client.get(f"{API}/me", headers=owner.headers).status_code == 401
+    later = bearer(create_access_token(me, "client", settings))
+    r = client.post(f"{API}/push-tokens", json={"token": "fcm-x:" + "y" * 40}, headers=later)
     assert r.status_code == 422
     assert r.json()["error"]["code"] == "PD_CONSENT_REQUIRED"
     assert db.scalar(select(func.count()).select_from(PushToken)) == 0

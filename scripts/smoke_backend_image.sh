@@ -171,7 +171,7 @@ check "Swagger: все операции Auth, Users, Vehicle, Aggregates, Ticket
   "$(curl -fsS "$BASE/openapi.json" | python3 -c '
 import json, sys
 need = {"requestPhoneCode", "verifyPhoneCode", "refreshToken", "logout", "withdrawPdConsent",
-        "staffLogin", "linkTelegram", "getCurrentUser",
+        "staffLogin", "changeStaffPassword", "linkTelegram", "getCurrentUser",
         "listUsers", "createStaffUser", "getUser", "updateUser",
         "searchVehicleModels", "listVehicles", "createVehicle", "getVehicle", "deleteVehicle",
         "updateVehicleMileage", "correctVehicleMileage", "listMaintenanceRecords",
@@ -193,6 +193,10 @@ need = {"requestPhoneCode", "verifyPhoneCode", "refreshToken", "logout", "withdr
         "getTicketResolutionStats", "listProblemModels", "getMaintenanceConversionStats"}
 ops = {o["operationId"] for p in json.load(sys.stdin)["paths"].values() for o in p.values()}
 print("ok" if need <= ops else sorted(need - ops))')" ok
+# Миграции — до запроса кода: request-code читает app_user (номер заблокирован или служебный —
+# без SMS, глава 25, ADR 0029 п. 15).
+docker exec "$NAME" alembic upgrade head >/dev/null 2>&1 && r=ok || r=failed
+check "миграции образа применяются (alembic upgrade head)" "$r" ok
 check "POST /v1/auth/phone/request-code → 200" \
   "$(status -X POST "$BASE/v1/auth/phone/request-code" -H 'Content-Type: application/json' \
       -d "{\"phone\":\"$PHONE\"}")" 200
@@ -283,12 +287,12 @@ fi
 # (docs/ANALYTICS_CONTROL.md). Каталог тестов — только в разовых контейнерах загрузки и сверки.
 CONTROL=(docker run --rm --network "$NET" "${APP_ENV[@]}" -e CONTROL_ADMIN_PASSWORD
          -v "$ROOT/backend/tests:/app/tests:ro" "$IMAGE" python -m tests.support.analytics_control)
-docker exec "$NAME" alembic upgrade head >/dev/null 2>&1 && r=ok || r=failed
-check "миграции образа применяются (alembic upgrade head)" "$r" ok
 "${CONTROL[@]}" load >/dev/null 2>&1 && r=ok || r=failed
 check "контрольный набор аналитики загружен" "$r" ok
 docker exec "$NAME" python -m app.workers.analytics --once >/dev/null 2>&1 && r=ok || r=failed
 check "worker аналитики: витрина обновлена (--once)" "$r" ok
+docker exec "$NAME" python -m app.workers.privacy --once >/dev/null 2>&1 && r=ok || r=failed
+check "worker ПД: проход анонимизации и сроков хранения (--once)" "$r" ok
 control=$("${CONTROL[@]}" verify --base "http://$NAME:8000" 2>&1) && r=ok || r=failed
 redact <<<"$control" | grep -E '^(PASS|FAIL|      )' || true
 check "показатели аналитики совпадают с ручным расчётом (14 запросов)" \

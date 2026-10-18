@@ -24,9 +24,9 @@ import {
   type ButtonVariant,
   type Ticket,
   type UserPublic,
+  passwordProblem,
 } from '@ev-servicedesk/web-shared'
 import { useAdmin } from '../repo.ts'
-import { passwordProblem } from './password.ts'
 import { PasswordInput, PasswordReveal } from './PasswordParts.tsx'
 import { UserStatus } from './Users.tsx'
 

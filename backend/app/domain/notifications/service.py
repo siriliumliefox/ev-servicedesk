@@ -25,7 +25,7 @@ from sqlalchemy import (
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
 
-from app.core.db import constraint_name, get_by_id, is_db_id
+from app.core.db import constraint_name, get_by_id, is_db_id, is_db_text
 from app.core.errors import ApiError, field_error
 from app.core.time import today_in_business_tz
 from app.domain.auth.tokens import lock_user
@@ -44,6 +44,7 @@ from app.models import (
     VehicleModel,
 )
 from app.models.enums import NotificationType, UserRole
+from app.models.notifications import PUSH_TOKEN_MAX_LENGTH
 
 PUBLISHED_TYPES = (NotificationType.FIRMWARE, NotificationType.NEWS, NotificationType.PROMO)
 
@@ -103,7 +104,13 @@ def register_token(db: Session, user: AppUser, token: str) -> None:
 
 
 def revoke_token(db: Session, user: AppUser, token: str) -> None:
-    """DELETE /push-tokens/{token}: только свой активный токен, иначе 404."""
+    """DELETE /push-tokens/{token}: только свой активный токен, иначе 404.
+
+    Токен, которого не может быть в столбце, — 404 без запроса к БД (ZAP-1, глава 25).
+    """
+    not_found = ApiError(404, "PUSH_TOKEN_NOT_FOUND", "Токен не найден")
+    if not is_db_text(token, PUSH_TOKEN_MAX_LENGTH):
+        raise not_found
     revoked = db.execute(
         update(PushToken)
         .where(
@@ -114,7 +121,7 @@ def revoke_token(db: Session, user: AppUser, token: str) -> None:
         .values(revoked_at=func.now())
     ).rowcount
     if not revoked:
-        raise ApiError(404, "PUSH_TOKEN_NOT_FOUND", "Токен не найден")
+        raise not_found
     db.commit()
 
 

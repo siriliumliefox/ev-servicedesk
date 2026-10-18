@@ -10,6 +10,9 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_sms_provider
+from app.core.config import get_settings
+from app.core.security import create_access_token
+from app.domain.auth.codes import code_key
 from app.domain.auth.sms import SmsError
 from app.models import AppUser, PdConsent, RefreshToken
 from app.models.enums import UserRole
@@ -17,11 +20,14 @@ from tests.api.conftest import (
     API,
     POLICY,
     STAFF_PASSWORD,
+    api_settings,
     bearer,
     code_from,
+    telegram_widget,
 )
 
 PHONE = "+375291112233"
+OTHER = "+375291112244"
 
 
 def test_register_verify_access_refresh_logout(client, sms, db: Session):
@@ -156,9 +162,30 @@ def test_new_policy_version_replaces_consent(client, sms, db: Session, make_clie
     assert len(rows) == 2 and [c.policy_version for c in active] == ["2027-01"]
 
 
-def test_disabled_client_cannot_login(client, sms, make_client_user):
-    make_client_user(PHONE, active=False)
+@pytest.mark.parametrize("kind", ["blocked-client", "staff", "blocked-staff"])
+def test_no_sms_for_blocked_client_or_staff(
+    client, sms, real_redis, make_client_user, make_staff, kind
+):
+    """#103 (ADR 0029 п. 15): ответ как обычно, но код не создаётся и платное SMS не уходит."""
+    if kind == "blocked-client":
+        make_client_user(PHONE, active=False)
+    else:
+        make_staff(PHONE, active=kind == "staff")
+    r = client.post(f"{API}/auth/phone/request-code", json={"phone": PHONE})
+    assert r.status_code == 200 and r.json() == {"ttl_seconds": 120}
+    assert sms.sent_count == 0 and not real_redis.exists(code_key(PHONE))
+    # Тот же ответ, что и у свободного номера: состояние номера не раскрывается.
+    assert client.post(f"{API}/auth/phone/request-code", json={"phone": OTHER}).json() == r.json()
+    r = client.post(f"{API}/auth/phone/verify-code", json={"phone": PHONE, "code": "0000"})
+    assert r.status_code == 400 and r.json()["error"]["code"] == "CODE_EXPIRED"
+
+
+def test_disabled_client_cannot_login(client, sms, make_client_user, db: Session):
+    """Вторая линия: заблокирован после выпуска кода — вход по коду отклоняется."""
+    user = make_client_user(PHONE)
     client.post(f"{API}/auth/phone/request-code", json={"phone": PHONE})
+    user.is_active = False
+    db.commit()
     r = client.post(
         f"{API}/auth/phone/verify-code", json={"phone": PHONE, "code": code_from(sms, PHONE)}
     )
@@ -166,8 +193,9 @@ def test_disabled_client_cannot_login(client, sms, make_client_user):
 
 
 def test_staff_cannot_use_sms_login(client, sms, make_staff):
-    make_staff(PHONE)
+    """Вторая линия: номер стал служебным после выпуска кода — входа по SMS нет."""
     client.post(f"{API}/auth/phone/request-code", json={"phone": PHONE})
+    make_staff(PHONE)
     r = client.post(
         f"{API}/auth/phone/verify-code",
         json={"phone": PHONE, "code": code_from(sms, PHONE), "pd_policy_version": POLICY},
@@ -248,7 +276,7 @@ def test_unknown_refresh_token_401(client):
     assert r.status_code == 401
 
 
-def test_withdraw_pd_consent(client, login_client, db: Session):
+def test_withdraw_pd_consent(client, login_client, db: Session, settings):
     session = login_client(PHONE)
     headers = bearer(session["access_token"])
     r = client.delete(f"{API}/auth/pd-consent", headers=headers)
@@ -258,25 +286,61 @@ def test_withdraw_pd_consent(client, login_client, db: Session):
     # Все refresh-токены отозваны.
     r = client.post(f"{API}/auth/refresh", json={"refresh_token": session["refresh_token"]})
     assert r.status_code == 401
-    r = client.delete(f"{API}/auth/pd-consent", headers=headers)
+    # И выданный access-токен (ADR 0029 п. 12).
+    assert client.delete(f"{API}/auth/pd-consent", headers=headers).status_code == 401
+    later = bearer(create_access_token(session["user"]["id"], "client", settings))
+    r = client.delete(f"{API}/auth/pd-consent", headers=later)
     assert r.status_code == 409 and r.json()["error"]["code"] == "PD_CONSENT_NOT_ACTIVE"
 
 
 def test_telegram_link(client, login_client):
     a = login_client(PHONE)
     b = login_client("+375291112244")
+    widget = telegram_widget("100", first_name="Иван", username="ivan_ev")
+    r = client.post(f"{API}/auth/telegram/link", json=widget, headers=bearer(a["access_token"]))
+    assert r.status_code == 200 and r.json()["telegram_id"] == "100"
     r = client.post(
-        f"{API}/auth/telegram/link",
-        json={"telegram_id": "tg-100"},
-        headers=bearer(a["access_token"]),
-    )
-    assert r.status_code == 200 and r.json()["telegram_id"] == "tg-100"
-    r = client.post(
-        f"{API}/auth/telegram/link",
-        json={"telegram_id": "tg-100"},
-        headers=bearer(b["access_token"]),
+        f"{API}/auth/telegram/link", json=telegram_widget("100"), headers=bearer(b["access_token"])
     )
     assert r.status_code == 409 and r.json()["error"]["code"] == "TELEGRAM_ALREADY_LINKED"
+
+
+def _forged(body: dict) -> dict:
+    return {**body, "telegram_id": "777"}  # чужой id под подписью своего виджета
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"telegram_id": "100"},  # без подписи (как в 1.11.0) — владение не доказано
+        telegram_widget("100", bot_token="999:other-bot"),  # подпись чужого бота
+        _forged(telegram_widget("100")),
+        {**telegram_widget("100", username="ivan"), "username": "admin"},  # подмена поля
+        telegram_widget("100", auth_date=int(datetime.now(UTC).timestamp()) - 2 * 86400),
+        telegram_widget("tg-100"),  # id виджета — только цифры
+    ],
+    ids=["unsigned", "other-bot", "foreign-id", "tampered-field", "stale", "not-numeric"],
+)
+def test_telegram_link_requires_valid_widget_signature(client, login_client, db: Session, body):
+    """ADR 0029 п. 16: занять чужой Telegram без подписи виджета нельзя."""
+    session = login_client(PHONE)
+    r = client.post(f"{API}/auth/telegram/link", json=body, headers=bearer(session["access_token"]))
+    assert r.status_code == 422, r.text
+    user = db.get(AppUser, session["user"]["id"])
+    db.refresh(user)
+    assert user.telegram_id is None
+
+
+def test_telegram_link_unavailable_without_bot(app, client, login_client):
+    settings = api_settings(telegram_bot_token="")
+    app.dependency_overrides[get_settings] = lambda: settings
+    session = login_client(PHONE)
+    r = client.post(
+        f"{API}/auth/telegram/link",
+        json=telegram_widget("100"),
+        headers=bearer(session["access_token"]),
+    )
+    assert r.status_code == 503 and r.json()["error"]["code"] == "TELEGRAM_UNAVAILABLE"
 
 
 class _FailingSms:

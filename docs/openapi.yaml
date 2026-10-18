@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: EV-ServiceDesk API
-  version: "1.11.0"
+  version: "1.12.0"
   description: >
     API дипломного проекта «EV-ServiceDesk» (ООО «ЕТСавтоГомель»).
     Контракты сервисов: Auth, Vehicle, Aggregates & Maintenance, Tickets,
@@ -59,7 +59,8 @@ tags:
       инженер видят только опубликованные статьи (черновик — 404), admin — все (RBAC-05).
       Узлы дерева: вопрос (от 1 варианта), решение (без вариантов, is_escalation=false),
       эскалация (is_escalation=true, «Создать обращение» — createTicket с source_article_id и
-      source_node_id). Content — Markdown (CommonMark) без HTML.
+      source_node_id). Content — Markdown (CommonMark) без HTML: HTML-теги, комментарии и
+      объявления сервер отклоняет — 422 VALIDATION_ERROR по полю content (1.12.0, ADR 0029 п. 10).
   - name: Notifications
     description: >
       Уведомления клиента: прошивки, напоминания о ТО, новости и акции (ADR 0019). Аудитория
@@ -71,7 +72,8 @@ tags:
       сотрудники создаются через createStaffUser (первый администратор среды — CLI образа
       `python -m app.cli create-admin`), клиенты регистрируются сами. Блокировка
       (is_active=false) — глоссарий «Блокировка пользователя». Реализовано в 1.7.1. Сброс пароля
-      сотрудника администратором (resetUserPassword) — 1.11.0 (глава 22, ADR 0026).
+      сотрудника администратором (resetUserPassword) — 1.11.0 (глава 22, ADR 0026); смена пароля
+      самим сотрудником (changeStaffPassword) — 1.12.0 (глава 25, ADR 0029).
   - name: Analytics
     description: >
       Дашборд администратора (A-05, A-06; ADR 0020). Показатели считаются по витрине фактов,
@@ -96,6 +98,8 @@ paths:
         TTL — ttl_seconds). 429 RATE_LIMITED — пауза между запросами и лимиты на номер и
         адрес (заголовок Retry-After); 422 PHONE_NOT_SUPPORTED — SMS на номер не доставляется;
         503 SMS_UNAVAILABLE (через default) — провайдер недоступен. Коды ошибок уточнены в 1.2.0.
+        Номер заблокированного клиента и номер сотрудника получают тот же ответ 200, но код не
+        создаётся и SMS не отправляется: ответ не раскрывает, чей номер (1.12.0, ADR 0029 п. 15).
       security: []
       requestBody:
         required: true
@@ -187,7 +191,10 @@ paths:
       operationId: logout
       x-required-roles: [client, engineer, admin]
       x-rbac-action: ["Регистрация/авторизация (свой аккаунт)"]
-      description: Инвалидирует refresh-токен текущего устройства.
+      description: >
+        Инвалидирует refresh-токен текущего устройства и предъявленный access-токен: он больше
+        не принимается ни REST, ни WebSocket (1.12.0, ADR 0029 п. 12). Отзыв согласия, блокировка,
+        сброс и смена пароля так же сразу отзывают все выданные access-токены пользователя.
       requestBody:
         required: true
         content:
@@ -229,8 +236,9 @@ paths:
         создаёт администратор (createStaffUser; первый — CLI образа, ADR 0021 п. 7), клиент этим
         эндпоинтом не пользуется. Заблокированный сотрудник — 401, как неверный пароль
         (уточнено в 1.7.1).
-        429 — превышен лимит неудачных попыток входа по номеру или адресу (N-06),
-        заголовок Retry-After. Добавлено в 1.2.0.
+        429 — превышен лимит неудачных попыток входа (N-06), заголовок Retry-After: 5 за 15 мин
+        для пары «номер + адрес», 20 за 15 мин с адреса, 300 в час на номер (1.12.0, ADR 0029
+        п. 11 — неудачи с чужого адреса не запирают сотрудника). Добавлено в 1.2.0.
       security: []
       requestBody:
         required: true
@@ -253,15 +261,50 @@ paths:
         '422': { $ref: '#/components/responses/ValidationError' }
         '429': { $ref: '#/components/responses/RateLimited' }
 
+  /auth/staff/password:
+    post:
+      tags: [Auth]
+      summary: Сменить свой пароль (инженер, администратор)
+      operationId: changeStaffPassword
+      description: >
+        Сотрудник меняет свой пароль: текущий и новый. Новый пароль — 12–128 символов и стойкий
+        (оценка zxcvbn ≥ 3 из 4, без цифр своего номера), иначе 422 VALIDATION_ERROR; совпадает с
+        текущим — 422. Неверный текущий пароль — 400 PASSWORD_INVALID, попытка входит в лимит
+        неудачных входов (429). Все прочие сессии и access-токены отзываются; ответ — новая пара
+        токенов для текущей сессии. Добавлено в 1.12.0 (глава 25, ADR 0029 п. 14, RBAC-06).
+      x-required-roles: [admin, engineer]
+      x-rbac-action: ["Регистрация/авторизация (свой аккаунт)"]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/StaffPasswordChangeRequest' }
+      responses:
+        default: { $ref: '#/components/responses/ServerError' }
+        '200':
+          description: Пароль изменён, прочие сессии завершены
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthTokens' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
   /auth/telegram/link:
     post:
       tags: [Auth]
       summary: Привязать Telegram к текущему аккаунту
       operationId: linkTelegram
       description: >
-        Сохраняет telegram_id для уже авторизованного пользователя. Сервер принимает
-        telegram_id длиной до 50 символов без управляющих символов (иначе 422);
-        409 TELEGRAM_ALREADY_LINKED — привязан к другому аккаунту. Уточнено в 1.2.0.
+        Привязывает Telegram к авторизованному клиенту по данным Telegram Login Widget:
+        telegram_id — поле id виджета, остальные поля передаются как получены. Сервер требует
+        auth_date и hash и проверяет подпись токеном бота (HMAC-SHA256), auth_date — не старше
+        24 ч; без подписи или с неверной — 422 (TELEGRAM_AUTH_INVALID / VALIDATION_ERROR),
+        telegram_id — только цифры, до 50 символов. Привязка не настроена (нет бота) — 503
+        TELEGRAM_UNAVAILABLE (через default). 409 TELEGRAM_ALREADY_LINKED — привязан к другому
+        аккаунту. Уточнено в 1.2.0; доказательство владения — 1.12.0 (ADR 0029 п. 16).
       x-required-roles: [client]
       x-rbac-action: ["Регистрация/авторизация (свой аккаунт)"]
       requestBody:
@@ -1860,7 +1903,8 @@ paths:
         Клиенты регистрируются сами (verifyPhoneCode). Персонал создаёт только admin;
         пароль хранится как password_hash (N-08, ADR 0005). 409 PHONE_ALREADY_REGISTERED —
         телефон уже занят (клиентом или сотрудником). Первый администратор среды — CLI образа
-        `python -m app.cli create-admin` (ADR 0021 п. 7). Уточнено в 1.7.1.
+        `python -m app.cli create-admin` (ADR 0021 п. 7). Уточнено в 1.7.1. Пароль — стойкий
+        (zxcvbn ≥ 3 из 4, без цифр номера), иначе 422 VALIDATION_ERROR (1.12.0, ADR 0029 п. 13).
       x-required-roles: [admin]
       x-rbac-action: ["Управление пользователями и ролями"]
       requestBody:
@@ -1946,8 +1990,9 @@ paths:
       description: >
         Администратор задаёт сотруднику (engineer/admin, в том числе заблокированному) новый
         пароль — глоссарий «Учётная запись сотрудника». Пароль хранится как argon2id; все
-        refresh-токены сотрудника отзываются (сессии заканчиваются), выданный access-токен
-        доживает свой срок. У клиента пароля нет — 409 PASSWORD_NOT_ALLOWED; несуществующий или
+        refresh- и access-токены сотрудника отзываются сразу, блокировка входа номера после
+        неудачных попыток снимается (1.12.0, ADR 0029 пп. 11–12); пароль — стойкий, как в
+        createStaffUser, иначе 422. У клиента пароля нет — 409 PASSWORD_NOT_ALLOWED; несуществующий или
         анонимизированный пользователь — 404 USER_NOT_FOUND. Добавлено в 1.11.0 (глава 22,
         ADR 0026).
       x-required-roles: [admin]
@@ -2174,8 +2219,24 @@ components:
     TelegramLinkRequest:
       type: object
       required: [telegram_id]
+      description: >
+        Данные Telegram Login Widget. auth_date и hash необязательны в схеме (совместимость 1.x),
+        но обязательны для сервера (1.12.0, ADR 0029 п. 16).
       properties:
-        telegram_id: { type: string }
+        telegram_id: { type: string, description: "Поле id виджета" }
+        auth_date: { type: integer, description: "Unix-время авторизации в Telegram" }
+        hash: { type: string, description: "Подпись виджета (hex HMAC-SHA256)" }
+        first_name: { type: string }
+        last_name: { type: string }
+        username: { type: string }
+        photo_url: { type: string }
+
+    StaffPasswordChangeRequest:
+      type: object
+      required: [current_password, new_password]
+      properties:
+        current_password: { type: string, format: password, minLength: 1, maxLength: 256 }
+        new_password: { type: string, format: password, minLength: 12, maxLength: 128 }
 
     AuthTokens:
       type: object

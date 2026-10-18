@@ -31,7 +31,7 @@ from sqlalchemy.orm import Session
 from app.core import storage as storage_module
 from app.core.storage import ObjectStorage, S3ObjectStorage, StorageUnavailable, get_storage
 from app.models import TicketAttachment
-from tests.api.conftest import API, ContractClient
+from tests.api.conftest import API, ContractClient, telegram_widget
 from tests.api.ticket_support import JPEG, MP4, UPLOAD_KEY, error_code, presign, put_upload
 from tests.api.ticket_world import (
     ADMIN,
@@ -61,12 +61,12 @@ def world(client: TestClient, login_client, as_staff, make_ticket, db: Session) 
 def give_contacts(client: TestClient, world: World, db: Session) -> dict[str, tuple[str, str]]:
     """Телефон и Telegram у всех авторов: клиент привязывает Telegram сам, персоналу — в БД."""
     contacts = {}
-    for actor in (OWNER, ENGINEER, ADMIN):
-        telegram_id = f"tg-{actor}-7731"
+    for n, actor in enumerate((OWNER, ENGINEER, ADMIN)):
+        telegram_id = f"7731{n}"
         if actor == OWNER:
             r = client.post(
                 f"{API}/auth/telegram/link",
-                json={"telegram_id": telegram_id},
+                json=telegram_widget(telegram_id),
                 headers=world.headers(actor),
             )
             assert r.status_code == 200, r.text

@@ -19,6 +19,12 @@ def is_db_id(value: int) -> bool:
     return 1 <= value <= BIGINT_MAX
 
 
+def is_db_text(value: str, max_length: int) -> bool:
+    """Строка помещается в столбец: длиннее или с NUL (PostgreSQL не хранит его в text, запрос с
+    ним — ошибка драйвера и 500) такой строки нет."""
+    return len(value) <= max_length and "\x00" not in value
+
+
 def escape_like(value: str) -> str:
     """Литерал для `LIKE ... ESCAPE '\\'`: `%`, `_` и `\\` из ввода — обычные символы."""
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")

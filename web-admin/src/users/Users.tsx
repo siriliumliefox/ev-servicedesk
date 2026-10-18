@@ -19,9 +19,9 @@ import {
   useAsync,
   type UserPublic,
   type UserRole,
+  passwordProblem,
 } from '@ev-servicedesk/web-shared'
 import { useAdmin } from '../repo.ts'
-import { passwordProblem } from './password.ts'
 import { PasswordInput, PasswordReveal } from './PasswordParts.tsx'
 
 type RoleFilter = UserRole | 'all'

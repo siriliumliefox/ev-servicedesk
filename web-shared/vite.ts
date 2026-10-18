@@ -12,6 +12,23 @@ export function apiProxy(target = "http://127.0.0.1:8000"): Record<string, Proxy
 }
 
 /**
+ * Заголовки безопасности статики кабинетов (глава 25, ADR 0029 п. 8; ZAP-2): запрет встраивания во фрейм
+ * (clickjacking: подтверждения блокировки и публикации в админ-панели), `frame-ancestors` — только
+ * заголовком (в `<meta>` не действует), nosniff, без Referer, без доступа к камере и геолокации,
+ * изоляция окна и ресурсов от чужих origin. dev и preview (стенд E2E и ZAP) отдают их сами; в production
+ * — nginx главы 26 с этим же списком. COEP не ставится: `require-corp` блокировал бы presigned-вложения S3.
+ */
+export const SECURITY_HEADERS: Readonly<Record<string, string>> = {
+  "Content-Security-Policy": "frame-ancestors 'none'",
+  "X-Frame-Options": "DENY",
+  "X-Content-Type-Options": "nosniff",
+  "Referrer-Policy": "no-referrer",
+  "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+  "Cross-Origin-Opener-Policy": "same-origin",
+  "Cross-Origin-Resource-Policy": "same-origin",
+};
+
+/**
  * CSP сборки — `<meta>` в index.html: скрипты, стили и запросы — только свой origin; изображения и видео —
  * свой origin, `blob:`/`data:` и origin S3 (`mediaOrigin`: presigned GET вложений кабинета инженера).
  * В dev не ставится: HMR Vite работает через inline-скрипты. frame-ancestors в <meta> не действует —

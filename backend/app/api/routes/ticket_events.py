@@ -8,7 +8,8 @@
 пропущенное через REST. События приходят из Redis pub/sub (несколько экземпляров backend)
 через общую подписку процесса (`app.core.pubsub.PubSubHub`); на каждом событии пользователь
 и доступ к тикету проверяются заново: потерявший доступ при смене исполнителя закрывается
-4403, деактивированный — 4401. По истечении access-токена — 4401.
+4403, деактивированный — 4401. По истечении и при отзыве access-токена (выход, смена
+пароля — ADR 0029 п. 12) — 4401.
 
 Лимиты: попытки подключения с IP (`ws_connects_per_ip_minute`, Redis) и одновременные
 подключения пользователя (`ws_max_sockets_per_user`, Redis — общий для всех процессов) — сверх
@@ -51,6 +52,7 @@ from app.core.db import SessionScope
 from app.core.errors import ApiError, rate_limited, unauthorized
 from app.core.pubsub import Listener, PubSubHub, SlowSubscriberError, get_pubsub_hub
 from app.core.security import AccessClaims, InvalidTokenError, decode_access_token
+from app.domain.auth import sessions
 from app.domain.tickets import access, service
 from app.domain.tickets.events import MessageCreated, TicketEvents, TicketUpdated, parse
 
@@ -141,27 +143,31 @@ async def _authenticate(websocket: WebSocket, settings: Settings) -> AccessClaim
         raise unauthorized() from exc
 
 
-def _check_user(scope: SessionScope, user_id: int) -> None:
-    """Пользователь по-прежнему доступен (иначе 401) — проверка в паузе между событиями."""
+def _check_user(scope: SessionScope, redis: Redis, claims: AccessClaims) -> None:
+    """Сессия действует (иначе 401) — проверка в паузе между событиями."""
     with scope() as db:
-        access.subscriber(db, user_id)
+        sessions.authenticate(db, redis, claims)
 
 
-def _check_access(scope: SessionScope, user_id: int, ticket_id: int) -> None:
-    """Пользователь доступен (иначе 401) и тикет ему виден (иначе 404)."""
+def _check_access(scope: SessionScope, redis: Redis, claims: AccessClaims, ticket_id: int) -> None:
+    """Сессия действует (иначе 401) и тикет виден (иначе 404)."""
     with scope() as db:
-        access.ensure_visible(db, access.subscriber(db, user_id), ticket_id)
+        access.ensure_visible(db, sessions.authenticate(db, redis, claims), ticket_id)
 
 
 def _render(
-    scope: SessionScope, user_id: int, event: MessageCreated | TicketUpdated, presign: Presign
+    scope: SessionScope,
+    redis: Redis,
+    claims: AccessClaims,
+    event: MessageCreated | TicketUpdated,
+    presign: Presign,
 ) -> Frame | None:
     """Кадр события для получателя (правила REST); None — пропустить (сообщения нет).
 
-    Пользователь и доступ проверяются заново: недоступен — 401, тикет больше не виден — 404.
+    Сессия и доступ проверяются заново: сессия не действует — 401, тикет не виден — 404.
     """
     with scope() as db:
-        user = access.subscriber(db, user_id)
+        user = sessions.authenticate(db, redis, claims)
         if isinstance(event, TicketUpdated):
             # Видимость и загрузка — один запрос (смена исполнителя — повод события).
             ticket = access.get_ticket(db, user, event.ticket_id, *service.TICKET_OUT)
@@ -185,6 +191,7 @@ async def _forward(
     websocket: WebSocket,
     listener: Listener,
     scope: SessionScope,
+    redis: Redis,
     claims: AccessClaims,
     ticket_id: int,
     presign: Presign,
@@ -197,12 +204,12 @@ async def _forward(
             raise unauthorized("Срок действия токена истёк")
         data = await listener.get(timeout=min(remaining, LISTEN_TIMEOUT_SECONDS))
         if data is None:
-            await run_in_threadpool(_check_user, scope, claims.user_id)
+            await run_in_threadpool(_check_user, scope, redis, claims)
             continue
         event = parse(data)
         if event is None or event.ticket_id != ticket_id:
             continue
-        frame = await run_in_threadpool(_render, scope, claims.user_id, event, presign)
+        frame = await run_in_threadpool(_render, scope, redis, claims, event, presign)
         if frame is not None:
             await websocket.send_json(frame)
 
@@ -211,12 +218,15 @@ async def _relay(
     websocket: WebSocket,
     listener: Listener,
     scope: SessionScope,
+    redis: Redis,
     claims: AccessClaims,
     ticket_id: int,
     presign: Presign,
 ) -> None:
     """Доставка до закрытия: возврат — клиент отключился сам, иначе исключение доставки."""
-    forward = asyncio.create_task(_forward(websocket, listener, scope, claims, ticket_id, presign))
+    forward = asyncio.create_task(
+        _forward(websocket, listener, scope, redis, claims, ticket_id, presign)
+    )
     drain = asyncio.create_task(_drain(websocket))
     try:
         await asyncio.wait({forward, drain}, return_when=asyncio.FIRST_COMPLETED)
@@ -292,11 +302,11 @@ async def _serve(
     claims = await _authenticate(websocket, settings)
     async with _user_socket(redis, claims.user_id, settings.ws_max_sockets_per_user):
         ticket_id = _ticket_id(ticket_ref)
-        await run_in_threadpool(_check_access, scope, claims.user_id, ticket_id)
+        await run_in_threadpool(_check_access, scope, redis, claims, ticket_id)
         # Доступ проверяется до подписки: отказ не трогает Redis. Потерю доступа между
         # проверкой и подпиской ловит проверка на следующем событии и REST после `ready`.
         listener = await hub.subscribe(events.channel(ticket_id))
         try:
-            await _relay(websocket, listener, scope, claims, ticket_id, presign)
+            await _relay(websocket, listener, scope, redis, claims, ticket_id, presign)
         finally:
             hub.unsubscribe(listener)

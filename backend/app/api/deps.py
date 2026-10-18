@@ -20,8 +20,9 @@ from app.core.config import Settings, get_settings
 from app.core.db import SessionScope, get_db, get_session_scope
 from app.core.errors import forbidden, unauthorized
 from app.core.redis import get_redis
-from app.core.security import InvalidTokenError, decode_access_token
+from app.core.security import AccessClaims, InvalidTokenError, decode_access_token
 from app.core.storage import ObjectStorage, get_storage
+from app.domain.auth import sessions
 from app.domain.auth.sms import SmsProvider, get_sms_provider_for
 from app.domain.notifications.outbox import Outbox
 from app.domain.tickets.events import TicketEvents
@@ -92,27 +93,32 @@ def client_ip(connection: HTTPConnection) -> str:
     return connection.client.host if connection.client else "unknown"
 
 
-def get_current_user(
-    db: DbDep,
+def get_access_claims(
     settings: SettingsDep,
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
-) -> AppUser:
-    """Пользователь из access-токена. Роль и активность берутся из БД, не из токена."""
+) -> AccessClaims:
+    """Access-токен с верной подписью, сроком и типом; действует ли сессия — get_current_user."""
     if credentials is None or credentials.scheme.lower() != "bearer":
         raise unauthorized()
     try:
-        claims = decode_access_token(credentials.credentials, settings)
+        return decode_access_token(credentials.credentials, settings)
     except InvalidTokenError as exc:
         raise unauthorized("Недействительный или просроченный токен") from exc
-    user = db.get(AppUser, claims.user_id)
-    # Соединение — обратно в пул до следующего захода в пул потоков (зависимости RBAC, сам
-    # обработчик): иначе запрос держит его, ожидая поток, и на пике пулы блокируют друг друга
-    # (глава 24, ADR 0028 п. 18). Транзакция читающая — COMMIT ничего не пишет; объект не
-    # сбрасывается (expire_on_commit=False), обработчик возьмёт соединение заново.
-    db.commit()
-    if user is None or not user.is_available:
-        raise unauthorized("Учётная запись недоступна")
-    return user
+
+
+AccessClaimsDep = Annotated[AccessClaims, Depends(get_access_claims)]
+
+
+def get_current_user(db: DbDep, redis: RedisDep, claims: AccessClaimsDep) -> AppUser:
+    """Пользователь действующей сессии (`sessions.authenticate`): роль и активность — из БД."""
+    try:
+        return sessions.authenticate(db, redis, claims)
+    finally:
+        # Соединение — обратно в пул до следующего захода в пул потоков (зависимости RBAC, сам
+        # обработчик): иначе запрос держит его, ожидая поток, и на пике пулы блокируют друг друга
+        # (глава 24, ADR 0028 п. 18). Транзакция читающая — COMMIT ничего не пишет; объект не
+        # сбрасывается (expire_on_commit=False), обработчик возьмёт соединение заново.
+        db.commit()
 
 
 CurrentUser = Annotated[AppUser, Depends(get_current_user)]

@@ -1,6 +1,7 @@
 // Тексты ошибок API для UI — по коду `Error.code` контракта (ADR 0025 п. 6): `Error.message` сервера
 // «для логов/поддержки, не для UI напрямую». Тест сверяет, что у каждого кода, который называют
 // операции кабинета в docs/openapi.yaml, есть текст (errors.test.ts).
+import { WEAK_PASSWORD_TEXT } from "./password.ts";
 import { ApiError } from "./repository.ts";
 
 export const ERROR_TEXTS: Readonly<Record<string, string>> = {
@@ -58,12 +59,22 @@ export const ERROR_TEXTS: Readonly<Record<string, string>> = {
   ROLE_CHANGE_NOT_ALLOWED: "Клиента нельзя сделать сотрудником: создайте сотрудника с другим телефоном.",
   LAST_ADMIN: "Это последний активный администратор — его нельзя понизить или заблокировать.",
   PASSWORD_NOT_ALLOWED: "У клиента нет пароля: он входит по SMS-коду.",
+  // Смена своего пароля (глава 25, ADR 0029 п. 14).
+  PASSWORD_INVALID: "Неверный текущий пароль.",
+  SERVICE_UNAVAILABLE: "Сервис временно недоступен. Повторите попытку позже.",
   // Аналитика.
   INVALID_PERIOD: "Начало периода позже конца.",
   PERIOD_TOO_LONG: "Период — не длиннее 366 дней.",
 };
 
 const FALLBACK = "Что-то пошло не так. Повторите попытку.";
+
+/** 422 по полю, где общий «Проверьте данные» не объясняет, что не так (глава 25, ADR 0029 пп. 10, 13). */
+const FIELD_TEXTS: Readonly<Record<string, string>> = {
+  password: WEAK_PASSWORD_TEXT,
+  new_password: WEAK_PASSWORD_TEXT,
+  content: "Проверьте текст статьи: только Markdown без HTML-тегов, не длиннее 50 000 символов.",
+};
 
 export function errorTextFor(code: string): string {
   return ERROR_TEXTS[code] ?? FALLBACK;
@@ -87,7 +98,8 @@ export function apiErrorFromResponse(response: Response, body: unknown): ApiErro
   const loc = fields?.[0]?.loc;
   const field = Array.isArray(loc) && loc.length > 0 ? String(loc[loc.length - 1]) : undefined;
   const retry = Number(response.headers.get("Retry-After"));
-  return new ApiError(code, errorTextFor(code), response.status, field, Number.isFinite(retry) && retry > 0 ? retry : undefined);
+  const text = code === "VALIDATION_ERROR" && field ? (FIELD_TEXTS[field] ?? errorTextFor(code)) : errorTextFor(code);
+  return new ApiError(code, text, response.status, field, Number.isFinite(retry) && retry > 0 ? retry : undefined);
 }
 
 export function networkError(): ApiError {

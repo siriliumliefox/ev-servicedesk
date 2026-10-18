@@ -123,6 +123,28 @@ describe("ApiSession", () => {
     expect([store.get(), session.accessToken, ends]).toEqual([null, null, ["logout"]]);
   });
 
+  it("смена пароля: новая пара токенов этой сессии; неверный текущий и слабый новый — ошибки с текстом", async () => {
+    let issued = 0;
+    const { session, store } = await signedIn({
+      "POST /auth/staff/password": async (request) => {
+        const body = (await request.json()) as { current_password: string; new_password: string };
+        if (body.current_password !== "secret") return error(400, "PASSWORD_INVALID");
+        if (body.new_password === "aaaaaaaaaaaa") {
+          return error(422, "VALIDATION_ERROR", { fields: [{ loc: ["body", "new_password"] }] });
+        }
+        issued += 1;
+        return json(200, { access_token: `changed-${issued}`, refresh_token: `changed-r${issued}`, expires_in: 900 });
+      },
+    });
+    const wrong = await session.changePassword("nope", "Mileage-Battery-Gomel").catch((x: unknown) => x as ApiError);
+    expect([wrong.code, wrong.message]).toEqual(["PASSWORD_INVALID", "Неверный текущий пароль."]);
+    const weak = await session.changePassword("secret", "aaaaaaaaaaaa").catch((x: unknown) => x as ApiError);
+    expect([weak.code, weak.field]).toEqual(["VALIDATION_ERROR", "new_password"]);
+    expect(weak.message).toMatch(/слишком простой/);
+    await session.changePassword("secret", "Mileage-Battery-Gomel");
+    expect([session.accessToken, store.get()]).toEqual(["changed-1", "changed-r1"]);
+  });
+
   it("сеть недоступна — NETWORK, сессия не завершается", async () => {
     const store = memoryTokenStore();
     const failing = new ApiSession({

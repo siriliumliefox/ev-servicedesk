@@ -195,11 +195,49 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  # Уязвимые зависимости (Глава 25, ADR 0029 п. 9, OWASP A03) — на каждом PR: база уязвимостей
+  # обновляется без изменений в репозитории. Backend — pip-audit по установленному окружению
+  # (poetry.lock, включая dev); веб — npm audit пакетов сборки (без dev), High и выше; мобильное
+  # приложение и backend — osv-scanner по lock-файлам. Находки инструментов разработки (Prism,
+  # Spectral) — отчёт главы 25, S4.
+  dependency-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Poetry
+        run: pipx install poetry==2.5.1
+
+      - name: Backend — pip-audit
+        working-directory: backend
+        run: |
+          poetry config virtualenvs.in-project true
+          poetry install --no-interaction --no-root
+          poetry run pip install --quiet pip-audit==2.10.1
+          poetry run pip-audit --skip-editable --desc
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Веб — npm audit (пакеты сборки, High и выше)
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Mobile и backend — osv-scanner
+        run: >-
+          docker run --rm -v "$PWD:/src:ro"
+          ghcr.io/google/osv-scanner@sha256:f7ba4be68bac8086b1f88fd598fdca1ca67239c79ad2c2b5c78e03a82e5187c4
+          scan source --lockfile /src/mobile/pubspec.lock --lockfile /src/backend/poetry.lock
+
   # Единственная обязательная проверка. Зелёная, только если `changes`,
-  # `unicode-nfc`, `e2e-matrix` и `secret-scan` успешны, а каждая проверка сервиса — успешна или не нужна
+  # `unicode-nfc`, `e2e-matrix`, `secret-scan` и `dependency-audit` успешны, а каждая проверка сервиса — успешна или не нужна
   # (skipped). Падение, отмена или пропуск из-за упавшей зависимости — красный.
   ci-gate:
-    needs: [changes, backend, web, mobile, mobile-e2e, mobile-ui-e2e, web-e2e, docs, unicode-nfc, e2e-matrix, secret-scan]
+    needs: [changes, backend, web, mobile, mobile-e2e, mobile-ui-e2e, web-e2e, docs, unicode-nfc, e2e-matrix, secret-scan, dependency-audit]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -211,7 +249,7 @@ jobs:
           import json, os, sys
 
           needs = json.loads(os.environ["NEEDS"])
-          must_run = {"changes", "unicode-nfc", "e2e-matrix", "secret-scan"}
+          must_run = {"changes", "unicode-nfc", "e2e-matrix", "secret-scan", "dependency-audit"}
           failed = False
           for name, job in sorted(needs.items()):
               result = job["result"]

@@ -4,7 +4,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Path, Query, Response, status
 
-from app.api.deps import ALL_ROLES, CurrentUser, DbDep, rbac
+from app.api.deps import ALL_ROLES, CurrentUser, DbDep, RedisDep, rbac
 from app.api.pagination import PageDep, paginate
 from app.api.schemas.auth import (
     StaffUserCreateRequest,
@@ -13,6 +13,7 @@ from app.api.schemas.auth import (
     UserPublic,
     UserUpdateRequest,
 )
+from app.api.schemas.common import SafeOptionalText
 from app.domain.users import service
 from app.models.enums import UserRole
 
@@ -32,7 +33,7 @@ def list_users(
     page: PageDep,
     role: UserRole | None = None,
     is_active: bool | None = None,
-    search: Annotated[str | None, Query(max_length=16)] = None,
+    search: Annotated[str | None, Query(max_length=16), SafeOptionalText] = None,
 ) -> UserList:
     items, meta = paginate(db, service.list_users_stmt(role, is_active, search), page)
     return UserList(items=items, meta=meta)
@@ -66,6 +67,8 @@ def update_user(user_id: UserId, body: UserUpdateRequest, db: DbDep) -> UserPubl
     response_class=Response,
     **rbac(UserRole.ADMIN),
 )
-def reset_user_password(user_id: UserId, body: UserPasswordResetRequest, db: DbDep) -> Response:
-    service.reset_password(db, user_id, body.password)
+def reset_user_password(
+    user_id: UserId, body: UserPasswordResetRequest, db: DbDep, redis: RedisDep
+) -> Response:
+    service.reset_password(db, redis, user_id, body.password)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

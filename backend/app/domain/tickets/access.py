@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.sql.base import ExecutableOption
 
 from app.core.db import is_db_id
-from app.core.errors import ApiError, forbidden, unauthorized
+from app.core.errors import ApiError, forbidden
 from app.models import AppUser, Ticket, Vehicle
 from app.models.enums import TicketStatus, UserRole
 
@@ -113,15 +113,3 @@ def ensure_can_write_message(user: AppUser, ticket: Ticket) -> None:
 def hides_staff_contacts(viewer: AppUser, author: AppUser) -> bool:
     """Клиенту телефон и Telegram сотрудника не отдаются (ADR 0017 п. 12, минимизация ПД)."""
     return viewer.role is UserRole.CLIENT and author.role is not UserRole.CLIENT
-
-
-def subscriber(db: Session, user_id: int) -> AppUser:
-    """Пользователь токена WebSocket — как в `get_current_user`: роль и активность из БД.
-
-    Проверяется при подключении, на каждом событии и в паузах между событиями: заблокированный
-    или анонимизированный — 401.
-    """
-    user = db.get(AppUser, user_id, populate_existing=True)
-    if user is None or not user.is_available:
-        raise unauthorized("Учётная запись недоступна")
-    return user

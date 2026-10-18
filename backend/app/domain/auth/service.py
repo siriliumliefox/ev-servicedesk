@@ -1,5 +1,7 @@
-"""Сценарии Auth Service (Глава 10): вход по SMS, вход персонала, согласие ПД, Telegram."""
+"""Сценарии Auth Service (Глава 10): вход по SMS, согласие ПД, Telegram. Вход и пароль
+сотрудника — `staff.py`, подпись Telegram — `telegram.py`."""
 
+import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -10,12 +12,14 @@ from sqlalchemy.orm import Session
 
 from app.core import rate_limit
 from app.core.config import Settings
-from app.core.errors import ApiError, rate_limited, unauthorized
-from app.core.security import verify_password
+from app.core.errors import ApiError
 from app.domain.auth import codes, tokens
+from app.domain.auth.sms import SmsProvider
 from app.domain.notifications.service import revoke_all_tokens as revoke_all_push_tokens
 from app.models import AppUser, PdConsent
 from app.models.enums import STAFF_ROLES, UserRole
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -29,6 +33,28 @@ def _active_consent(db: Session, user_id: int) -> PdConsent | None:
     return db.scalars(
         select(PdConsent).where(PdConsent.user_id == user_id, PdConsent.withdrawn_at.is_(None))
     ).one_or_none()
+
+
+def request_phone_code(
+    db: Session,
+    redis: Redis,
+    sms: SmsProvider,
+    settings: Settings,
+    phone: str,
+    client_ip: str,
+) -> int:
+    """POST /auth/phone/request-code: код входа; заблокированному и сотруднику — без SMS (#103)."""
+    request = codes.reserve(redis, settings, phone, client_ip)  # 429 — до запроса к БД
+    user = db.execute(
+        select(AppUser.role, AppUser.is_active).where(AppUser.phone == phone)
+    ).one_or_none()
+    # Соединение — обратно в пул до отправки SMS: ответ A1 ждётся секунды (ADR 0028 п. 18).
+    db.commit()
+    if user is not None and not (user.role is UserRole.CLIENT and user.is_active):
+        # Тот же ответ без кода и SMS: не раскрывает, чей номер; платное SMS не тратится.
+        logger.info("Код входа не отправлен: номер недоступен для входа по SMS")
+        return settings.sms_code_ttl_seconds
+    return codes.send(redis, sms, settings, phone, request)
 
 
 def verify_phone_code(
@@ -98,37 +124,8 @@ def verify_phone_code(
     return LoginResult(tokens=pair, user=user, is_new_user=is_new)
 
 
-def staff_login(
-    db: Session, redis: Redis, settings: Settings, phone: str, password: str, client_ip: str
-) -> LoginResult:
-    """POST /auth/staff/login: пароль argon2id, лимит неудачных попыток (N-06, N-08)."""
-    # Попытка учитывается ДО проверки пароля: параллельные запросы не обходят лимит.
-    # Успешный вход возвращает попытку — счётчики считают только неудачи.
-    window = 15 * 60
-    phone_key, ip_key = f"staff-fail:{phone}", f"staff-fail-ip:{client_ip}"
-    # Оба счётчика растут до проверки любого из них, поэтому не `rate_limit.enforce`.
-    by_phone = rate_limit.hit(redis, phone_key, window)
-    by_ip = rate_limit.hit(redis, ip_key, window)
-    if by_phone.exceeded(settings.staff_login_failures_per_phone_15min):
-        raise rate_limited(by_phone.retry_after, "Слишком много неудачных попыток входа")
-    if by_ip.exceeded(settings.staff_login_failures_per_ip_15min):
-        raise rate_limited(by_ip.retry_after, "Слишком много неудачных попыток входа")
-
-    user = db.scalars(select(AppUser).where(AppUser.phone == phone)).one_or_none()
-    password_hash = user.password_hash if user is not None else None
-    ok = verify_password(password, password_hash)  # считаем всегда — время не выдаёт номер
-    if not ok or user is None or user.role not in STAFF_ROLES or not user.is_available:
-        raise unauthorized("Неверный телефон или пароль")
-
-    rate_limit.reset(redis, phone_key)
-    rate_limit.undo_hit(redis, ip_key)
-    pair = tokens.issue_pair(db, user, settings)
-    db.commit()
-    return LoginResult(tokens=pair, user=user)
-
-
 def end_all_sessions(db: Session, user_id: int) -> None:
-    """Отзыв согласия и блокировка: все refresh-токены и push-токены (без COMMIT)."""
+    """Отзыв согласия и блокировка: все сессии (refresh и access) и push-токены (без COMMIT)."""
     tokens.revoke_all(db, user_id)
     revoke_all_push_tokens(db, user_id)
 
@@ -154,7 +151,8 @@ def withdraw_pd_consent(db: Session, user: AppUser) -> None:
 
 
 def link_telegram(db: Session, user: AppUser, telegram_id: str) -> AppUser:
-    """POST /auth/telegram/link: один Telegram — один аккаунт."""
+    """POST /auth/telegram/link: один Telegram — один аккаунт; владение проверяет
+    `telegram.verify_widget` (ADR 0029 п. 16)."""
     owner = db.scalars(select(AppUser).where(AppUser.telegram_id == telegram_id)).one_or_none()
     if owner is not None and owner.id != user.id:
         raise ApiError(409, "TELEGRAM_ALREADY_LINKED", "Telegram привязан к другому аккаунту")

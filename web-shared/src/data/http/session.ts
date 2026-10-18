@@ -115,6 +115,15 @@ export class ApiSession {
     return this.refreshing;
   }
 
+  /**
+   * Смена своего пароля (ADR 0029 п. 14): сервер отзывает прочие сессии и выдаёт новую пару для этой.
+   * Неверный текущий — `PASSWORD_INVALID`, слабый новый — `VALIDATION_ERROR` по полю `new_password`.
+   */
+  async changePassword(currentPassword: string, newPassword: string): Promise<void> {
+    const body = { current_password: currentPassword, new_password: newPassword };
+    this.accept(await this.request((client) => client.POST("/auth/staff/password", { body })));
+  }
+
   async logout(): Promise<void> {
     const token = this.store.get();
     if (token) {
