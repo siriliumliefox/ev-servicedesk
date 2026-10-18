@@ -13,7 +13,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ZAP_IMAGE="${ZAP_IMAGE:-ghcr.io/zaproxy/zaproxy:stable}"
+ZAP_IMAGE="${ZAP_IMAGE:-ghcr.io/zaproxy/zaproxy@sha256:5ccfff9a411743ab2615136a2edd7416bec9ce41572fa94e935df38c14adb2b6}"  # 2.17.0
 OUT="${ZAP_OUT:-$ROOT/zap-results/$(date -u +%Y%m%dT%H%M%SZ)}"
 mkdir -p "$OUT"
 OUT="$(cd "$OUT" && pwd)"
