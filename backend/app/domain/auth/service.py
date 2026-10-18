@@ -44,12 +44,12 @@ def request_phone_code(
     client_ip: str,
 ) -> int:
     """POST /auth/phone/request-code: код входа; заблокированному и сотруднику — без SMS (#103)."""
+    request = codes.reserve(redis, settings, phone, client_ip)  # 429 — до запроса к БД
     user = db.execute(
         select(AppUser.role, AppUser.is_active).where(AppUser.phone == phone)
     ).one_or_none()
     # Соединение — обратно в пул до отправки SMS: ответ A1 ждётся секунды (ADR 0028 п. 18).
     db.commit()
-    request = codes.reserve(redis, settings, phone, client_ip)
     if user is not None and not (user.role is UserRole.CLIENT and user.is_active):
         # Тот же ответ без кода и SMS: не раскрывает, чей номер; платное SMS не тратится.
         logger.info("Код входа не отправлен: номер недоступен для входа по SMS")
