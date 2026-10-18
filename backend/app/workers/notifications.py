@@ -28,12 +28,13 @@ from app.core.config import Settings, get_settings
 from app.core.db import SessionScope, get_session_scope
 from app.core.logging import configure_logging
 from app.core.time import BUSINESS_TZ
-from app.domain.notifications.dispatch import drain
+from app.domain.notifications.dispatch import drain, queue_stats
 from app.domain.notifications.outbox import Outbox, outbox_channel
 from app.domain.notifications.push import PushSender, get_push_sender
 from app.domain.notifications.reminders import run_maintenance_reminders
 from app.domain.notifications.ticket_push import TicketPush
 from app.domain.tickets import events as ticket_events
+from app.workers import metrics
 
 logger = logging.getLogger("app.workers.notifications")
 
@@ -62,6 +63,7 @@ class NotificationsWorker:
         self.reminders_retry_at: datetime | None = None
         self.stopping = False
         self._pubsub: PubSub | None = None
+        self.metrics = metrics.WorkerMetrics("notifications")
 
     # --- шаги цикла (тесты вызывают их напрямую) ---
 
@@ -105,6 +107,15 @@ class NotificationsWorker:
         if self.reminders_due():
             self.run_reminders()
         self.dispatch()
+        self.observe_queue()
+
+    def observe_queue(self) -> None:
+        with self.scope() as db:
+            stats = queue_stats(db)
+        metrics.PUSH_QUEUE_PENDING.set(stats.pending)
+        oldest = stats.oldest_due_at
+        age = 0.0 if oldest is None else max((self.now() - oldest).total_seconds(), 0.0)
+        metrics.PUSH_QUEUE_OLDEST_AGE.set(age)
 
     # --- цикл процесса ---
 
@@ -158,7 +169,9 @@ class NotificationsWorker:
         while not self.stopping:
             try:
                 self.tick()
+                self.metrics.success()
             except Exception:  # noqa: BLE001 — сбой цикла не останавливает процесс
+                self.metrics.error()
                 logger.exception("Ошибка цикла worker уведомлений")
             self._wait()
         self._close_pubsub()
@@ -169,8 +182,8 @@ class NotificationsWorker:
 
 
 def main() -> None:
-    configure_logging()
     settings = get_settings()
+    configure_logging(log_format=settings.log_format)
     worker = NotificationsWorker(
         settings,
         get_session_scope(),
@@ -183,6 +196,7 @@ def main() -> None:
 
     signal.signal(signal.SIGTERM, _stop)
     signal.signal(signal.SIGINT, _stop)
+    worker.metrics.serve(settings.metrics_port)
     worker.run_forever()
 
 

@@ -23,6 +23,7 @@ from app.api.schemas.aggregates import (
     MaintenanceRegulationOut,
 )
 from app.api.schemas.common import SafeText
+from app.core.audit import security_event
 from app.core.db import BIGINT_MAX
 from app.domain.aggregates import service
 from app.models.enums import STAFF_ROLES, UserRole
@@ -72,11 +73,12 @@ def list_maintenance_regulations(
     **rbac(UserRole.ADMIN),
 )
 def revise_maintenance_regulation(
-    body: MaintenanceRegulationCreateRequest, db: DbDep
+    body: MaintenanceRegulationCreateRequest, admin: CurrentUser, db: DbDep
 ) -> MaintenanceRegulationOut:
     regulation = service.revise_regulation(
         db, body.vehicle_model_id, body.aggregate_type_code, body.interval_km, body.interval_months
     )
+    security_event("regulation.revised", user_id=admin.id, target=f"regulation:{regulation.id}")
     return MaintenanceRegulationOut.model_validate(regulation)
 
 
@@ -87,8 +89,11 @@ def revise_maintenance_regulation(
     response_class=Response,
     **rbac(UserRole.ADMIN),
 )
-def archive_maintenance_regulation(regulation_id: RegulationId, db: DbDep) -> Response:
+def archive_maintenance_regulation(
+    regulation_id: RegulationId, admin: CurrentUser, db: DbDep
+) -> Response:
     service.archive_regulation(db, regulation_id)
+    security_event("regulation.archived", user_id=admin.id, target=f"regulation:{regulation_id}")
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -157,4 +162,5 @@ def update_aggregate_status_thresholds(
         body.reminder_before_km,
         body.reminder_before_days,
     )
+    security_event("thresholds.updated", user_id=user.id)
     return AggregateStatusThresholdsOut.model_validate(thresholds)

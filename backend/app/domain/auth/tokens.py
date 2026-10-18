@@ -16,6 +16,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
+from app.core.audit import security_event
 from app.core.config import Settings
 from app.core.errors import unauthorized
 from app.core.security import create_access_token, hash_refresh_token, new_refresh_token
@@ -81,6 +82,7 @@ def rotate(db: Session, refresh_token: str, settings: Settings) -> TokenPair:
     if row.revoked_at is not None:
         revoke_all(db, row.user_id)
         db.commit()
+        security_event("auth.refresh_reuse", outcome="denied", user_id=row.user_id)
         raise unauthorized("Refresh-токен уже использован; все сессии завершены")
     if row.expires_at <= now:
         raise unauthorized("Refresh-токен истёк")

@@ -14,6 +14,7 @@ from app.api.schemas.auth import (
     UserUpdateRequest,
 )
 from app.api.schemas.common import SafeOptionalText
+from app.core.audit import security_event
 from app.domain.users import service
 from app.models.enums import UserRole
 
@@ -45,8 +46,9 @@ def list_users(
     status_code=status.HTTP_201_CREATED,
     **rbac(UserRole.ADMIN),
 )
-def create_staff_user(body: StaffUserCreateRequest, db: DbDep) -> UserPublic:
+def create_staff_user(body: StaffUserCreateRequest, admin: CurrentUser, db: DbDep) -> UserPublic:
     user = service.create_staff_user(db, body.phone, body.role, body.password)
+    security_event("user.created", user_id=admin.id, role=user.role.value, target_user_id=user.id)
     return UserPublic.model_validate(user)
 
 
@@ -56,8 +58,18 @@ def get_user(user_id: UserId, db: DbDep) -> UserPublic:
 
 
 @router.patch("/users/{userId}", operation_id="updateUser", **rbac(UserRole.ADMIN))
-def update_user(user_id: UserId, body: UserUpdateRequest, db: DbDep) -> UserPublic:
-    return UserPublic.model_validate(service.update_user(db, user_id, body.role, body.is_active))
+def update_user(
+    user_id: UserId, body: UserUpdateRequest, admin: CurrentUser, db: DbDep
+) -> UserPublic:
+    user = service.update_user(db, user_id, body.role, body.is_active)
+    if body.role is not None:
+        security_event(
+            "user.role_changed", user_id=admin.id, role=body.role.value, target_user_id=user_id
+        )
+    if body.is_active is not None:
+        event = "user.unblocked" if body.is_active else "user.blocked"
+        security_event(event, user_id=admin.id, target_user_id=user_id)
+    return UserPublic.model_validate(user)
 
 
 @router.post(
@@ -68,7 +80,8 @@ def update_user(user_id: UserId, body: UserUpdateRequest, db: DbDep) -> UserPubl
     **rbac(UserRole.ADMIN),
 )
 def reset_user_password(
-    user_id: UserId, body: UserPasswordResetRequest, db: DbDep, redis: RedisDep
+    user_id: UserId, body: UserPasswordResetRequest, admin: CurrentUser, db: DbDep, redis: RedisDep
 ) -> Response:
     service.reset_password(db, redis, user_id, body.password)
+    security_event("user.password_reset", user_id=admin.id, target_user_id=user_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

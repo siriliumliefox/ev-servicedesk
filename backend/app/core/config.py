@@ -33,6 +33,10 @@ class Settings(BaseSettings):
     db_max_overflow: int = Field(10, ge=0, le=100)
     db_pool_timeout_seconds: float = Field(30, gt=0, le=120)
     redis_url: str = "redis://localhost:6379/0"
+    # Журнал (глава 26, ADR 0030 п. 15): text — локально и в CI; json — staging/production (Loki).
+    log_format: Literal["text", "json"] = "text"
+    # HTTP-порт метрик worker'а (ADR 0030 п. 13); 0 — без порта. У API метрики — /metrics.
+    metrics_port: int = Field(0, ge=0, le=65535)
 
     # --- JWT (Глава 10, ADR 0013) ---
     jwt_secret: str = DEFAULT_JWT_SECRET

@@ -55,7 +55,7 @@ def _no_active_consent() -> ColumnElement[bool]:
     return ~exists().where(PdConsent.user_id == AppUser.id, PdConsent.withdrawn_at.is_(None))
 
 
-def due_stmt(limit: int = 100) -> Select[tuple[int, str | None, datetime]]:
+def due_stmt(limit: int | None = 100) -> Select[tuple[int, str | None, datetime]]:
     """Очередь анонимизации: давние отзывы — первыми."""
     withdrawn = (
         select(func.max(PdConsent.withdrawn_at))
@@ -64,7 +64,7 @@ def due_stmt(limit: int = 100) -> Select[tuple[int, str | None, datetime]]:
         .scalar_subquery()
     )
     return (
-        select(AppUser.id, AppUser.phone, withdrawn)
+        select(AppUser.id, AppUser.phone, withdrawn.label("withdrawn_at"))
         .where(
             AppUser.role == UserRole.CLIENT,
             AppUser.anonymized_at.is_(None),
@@ -78,6 +78,13 @@ def due_stmt(limit: int = 100) -> Select[tuple[int, str | None, datetime]]:
 
 def due(db: Session, limit: int = 100) -> list[Due]:
     return [Due(*row) for row in db.execute(due_stmt(limit)).all()]
+
+
+def queue_stats(db: Session) -> tuple[int, datetime | None]:
+    """Размер очереди анонимизации и самый ранний отзыв в ней (метрики, глава 26)."""
+    queue = due_stmt(limit=None).order_by(None).subquery()
+    count, oldest = db.execute(select(func.count(), func.min(queue.c.withdrawn_at))).one()
+    return count, oldest
 
 
 def anonymize(db: Session, storage: ObjectStorage, user_id: int, now: datetime) -> bool:
