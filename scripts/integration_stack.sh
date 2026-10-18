@@ -44,6 +44,7 @@ CLIENT_PHONES=(
   E2E_SYSTEM_PHONE=+375290009007    # клиент X межролевых сценариев главы 23 (ADR 0027 п. 8)
   E2E_SYSTEM_PHONE_Y=+375290009008  # клиент Y другой модели — таргетинг прошивки (ADR 0027 п. 15)
   E2E_NOTIFY_PHONE=+375290009009    # центр уведомлений: напоминание о ТО и прошивка (ADR 0027 п. 15)
+  E2E_ZAP_PHONE=+375290009010       # клиент сканирования OWASP ZAP (глава 25, ADR 0029 п. 7)
 )
 TEST_PHONES="$E2E_PHONE"
 for pair in "${CLIENT_PHONES[@]}"; do TEST_PHONES+=",${pair#*=}"; done
@@ -63,6 +64,10 @@ SMS_PROVIDER=fake
 SMS_TEST_PHONES=$TEST_PHONES
 SMS_TEST_CODE=$E2E_CODE
 EOF
+# Срок access-токена стенда (глава 25): активный проход ZAP длиннее 15 минут.
+if [ -n "${INTEGRATION_ACCESS_TOKEN_TTL:-}" ]; then
+  echo "ACCESS_TOKEN_TTL_SECONDS=$INTEGRATION_ACCESS_TOKEN_TTL" >>"$ENV_FILE"
+fi
 # Фрагмент закрытого ключа Firebase — для проверки логов на утечку (сам ключ не печатается).
 FCM_KEY_PART=""
 if [ -n "${FCM_SERVICE_ACCOUNT_FILE:-}" ]; then
