@@ -1,14 +1,14 @@
 """Миграции: полный цикл up/down/up, соответствие ORM ↔ БД, объекты вне autogenerate."""
 
 import pytest
-from sqlalchemy import CheckConstraint, Engine, create_engine, inspect, text
-from sqlalchemy.engine import URL
-from sqlalchemy.pool import NullPool
-
 from alembic import command
 from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
 from alembic.script import ScriptDirectory
+from sqlalchemy import CheckConstraint, Engine, create_engine, inspect, text
+from sqlalchemy.engine import URL
+from sqlalchemy.pool import NullPool
+
 from app.models import Base
 from app.models.enums import PG_ENUMS
 from tests.db.conftest import alembic_config

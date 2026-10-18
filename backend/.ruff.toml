@@ -12,3 +12,8 @@ select = ["E", "F", "I", "UP", "S"]
 # Тесты: assert, фиктивные пароли и токены, SQL из констант, псевдослучайные данные,
 # urlopen по presigned URL тестового S3 — по назначению.
 "tests/*" = ["S101", "S105", "S106", "S107", "S310", "S311", "S608"]
+
+[lint.isort]
+# backend/alembic — каталог миграций, а не пакет: импорты alembic — сторонняя библиотека
+# (ruff 0.17 иначе делит `from alembic import …` и `alembic.<модуль>` по разным секциям).
+known-third-party = ["alembic"]
