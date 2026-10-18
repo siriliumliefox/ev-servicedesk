@@ -53,6 +53,10 @@ services:
       PGBACKREST_REPO1_S3_ENDPOINT: ${EV_BACKUP_S3_ENDPOINT:?}
       PGBACKREST_REPO1_S3_BUCKET: ${EV_S3_BACKUP_BUCKET:?}
       PGBACKREST_REPO1_S3_REGION: ${EV_S3_REGION:-ru-1}
+    # init (tini) — PID 1: фоновый процесс асинхронной архивации pgBackRest после отсоединения
+    # переходит к PID 1; без init его подбирал бы postmaster и при ненулевом коде выхода считал бы
+    # падением backend'а — перезапуск всех соединений (найдено учением отката на стенде).
+    init: true
     shm_size: 256m
     volumes:
       - pgdata:/var/lib/postgresql/data

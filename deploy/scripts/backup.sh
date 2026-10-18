@@ -61,7 +61,11 @@ backup_all() {
 
 init() {
   if pgbr info --output=json 2>/dev/null | grep -q '"status":{"code":0'; then
-    log "stanza ev уже есть"
+    # Stanza есть — она должна быть этого кластера: после восстановления — да; на новой БД со старым
+    # репозиторием — нет (ArchiveMismatchError), архивация WAL не идёт. Бэкапы не удаляются
+    # автоматически: решение — новый путь репозитория или очистка вручную (docs/runbooks/RESTORE.md).
+    pgbr check || die "stanza ev в репозитории — другого кластера PostgreSQL: архивация WAL не идёт"
+    log "stanza ev уже есть, архивация WAL работает"
     return 0
   fi
   pgbr stanza-create
@@ -102,7 +106,7 @@ restore_check() {
   started="$(date +%s)"
   docker run --rm --network "$net" -v "$volume:/var/lib/postgresql/data" "${env_args[@]}" -u postgres "$image" \
     pgbackrest --stanza=ev --repo=1 --archive-mode=off restore
-  docker run -d --name "$name" --network "$net" -v "$volume:/var/lib/postgresql/data" "${env_args[@]}" "$image" \
+  docker run -d --init --name "$name" --network "$net" -v "$volume:/var/lib/postgresql/data" "${env_args[@]}" "$image" \
     postgres -c config_file=/etc/postgresql/postgresql.conf -c archive_mode=off >/dev/null
   local waited=0
   until docker exec "$name" pg_isready -U ev -d ev_servicedesk >/dev/null 2>&1; do

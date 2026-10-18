@@ -139,14 +139,22 @@ smoke() {
   log "smoke: PASS (health, 401, /metrics закрыт, кабинеты с CSP и HSTS)"
 }
 
-# wait_healthy <env> <release-dir> <сервис> [секунд]
+# wait_healthy <env> <release-dir> <сервис> [секунд] — healthy (или running без healthcheck); второй
+# перезапуск контейнера — сразу отказ: он падает при старте (fail closed preflight), ждать нечего —
+# простой при автооткате короче (учение отката на стенде: 208 с → ≈ 30 с).
 wait_healthy() {
-  local env="$1" dir="$2" service="$3" limit="${4:-180}" waited=0 id state
+  local env="$1" dir="$2" service="$3" limit="${4:-180}" waited=0 id state restarts
   while (( waited < limit )); do
-    id="$(dc "$env" "$dir" ps -q "$service" 2>/dev/null || true)"
+    id="$(dc "$env" "$dir" ps -aq "$service" 2>/dev/null | head -1 || true)"
     if [[ -n "$id" ]]; then
       state="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$id" 2>/dev/null || true)"
       [[ "$state" == healthy || "$state" == running ]] && return 0
+      restarts="$(docker inspect -f '{{.RestartCount}}' "$id" 2>/dev/null || echo 0)"
+      if (( restarts >= 2 )); then
+        log "$service перезапускается при старте ($restarts раза):"
+        docker logs --tail 5 "$id" 2>&1 | sed 's/^/    /' >&2
+        return 1
+      fi
     fi
     sleep 3
     waited=$((waited + 3))

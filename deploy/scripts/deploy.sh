@@ -27,7 +27,8 @@ pull_images() {
     docker login "$registry" -u "${GHCR_USER:-deploy}" --password-stdin < "$token_file" >/dev/null
   fi
   local status=0
-  dc "$env" "$dir" pull --quiet || status=$?
+  # По digest: локальный образ — тот же самый, сеть нужна только для недостающих.
+  dc "$env" "$dir" pull --quiet --policy missing || status=$?
   if [[ -s "$token_file" ]]; then docker logout "$registry" >/dev/null 2>&1 || true; fi
   rm -f "$token_file"
   return "$status"
@@ -166,7 +167,7 @@ rollback() {
 install_scripts() {
   local dir="$1" bin="$EV_ROOT/bin" file
   [[ -d "$bin" && -w "$bin" ]] || return 0
-  for file in lib.sh deploy.sh backup.sh restore.sh render.py ev-ssh; do
+  for file in lib.sh deploy.sh backup.sh restore.sh render.py nightly-load.sh ev-ssh; do
     install -m 0755 "$dir/deploy/scripts/$file" "$bin/$file.new" && mv "$bin/$file.new" "$bin/$file"
   done
 }

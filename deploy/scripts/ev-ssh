@@ -7,6 +7,7 @@
 #   rollback <env> [sha]  — откат
 #   status <env>
 #   backup <env> full|diff|verify|info|restore-check
+#   load staging          — ночной облегчённый прогон k6 (nightly-load.sh)
 set -euo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck disable=SC1091
@@ -18,6 +19,7 @@ case "${cmd[0]:-}:${#cmd[@]}" in
   receive-only:2) EV_RECEIVE_ONLY=1 exec "$BIN/deploy.sh" receive "${cmd[1]}" ;;
   rollback:2|rollback:3) exec "$BIN/deploy.sh" rollback "${cmd[1]}" "${cmd[2]:-}" ;;
   status:2) exec "$BIN/deploy.sh" status "${cmd[1]}" ;;
+  load:2) exec "$BIN/nightly-load.sh" "${cmd[1]}" ;;
   backup:3)
     case "${cmd[2]}" in
       full|diff|verify|info|restore-check) exec "$BIN/backup.sh" "${cmd[2]}" "${cmd[1]}" ;;

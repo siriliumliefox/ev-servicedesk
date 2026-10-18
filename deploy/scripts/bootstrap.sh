@@ -25,7 +25,8 @@ export DEBIAN_FRONTEND=noninteractive
 
 log "пакеты и обновления"
 apt-get update -q
-apt-get -y -q -o Dpkg::Options::=--force-confold upgrade
+# EV_BOOTSTRAP_SKIP_UPGRADE=1 — проверка в CI (infra-drill.yml): обновление образа раннера — минуты впустую.
+[[ "${EV_BOOTSTRAP_SKIP_UPGRADE:-}" == 1 ]] || apt-get -y -q -o Dpkg::Options::=--force-confold upgrade
 apt-get -y -q install ca-certificates curl gnupg ufw fail2ban unattended-upgrades chrony python3 jq rsync openssl
 
 if ! command -v docker >/dev/null || ! docker compose version >/dev/null 2>&1; then
@@ -104,7 +105,7 @@ install -d -m 0755 -o root -g root "$EV_ROOT"
 install -d -m 0755 -o deploy -g deploy "$EV_ROOT/bin"
 install -d -m 0750 -o deploy -g deploy "$EV_ROOT/$ENV"
 install -d -m 0755 -o deploy -g deploy "/var/lib/ev/$ENV/textfile"
-for file in lib.sh deploy.sh backup.sh restore.sh render.py ev-ssh; do
+for file in lib.sh deploy.sh backup.sh restore.sh render.py nightly-load.sh ev-ssh; do
   install -m 0755 -o deploy -g deploy "$SRC/$file" "$EV_ROOT/bin/$file"
 done
 printf 'EV_ALLOWED_ENV=%s\n' "$ENV" > "$EV_ROOT/bin/ev-ssh.conf"

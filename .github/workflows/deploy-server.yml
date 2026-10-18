@@ -1,0 +1,165 @@
+name: deploy-server
+
+# Выкладка или откат окружения на ВМ (глава 26, ADR 0030 пп. 2, 7, 17). Вызывается cd-staging (staging) и
+# cd-production (production, Approve владельца — защита окружения).
+#
+# deploy:   образы backend и PostgreSQL по digest (staging-<sha>), статика кабинетов — артефакты этого
+#           прогона (<app>-<окружение>-<sha>), секреты окружения → deploy/scripts/make-bundle.sh →
+#           `ssh deploy@<ВМ> deploy <окружение>` (forced command ev-ssh: миграции → up → smoke →
+#           автооткат при провале). Временный GITHUB_TOKEN — для pull из ghcr, только на время выкладки.
+# rollback: `ssh deploy@<ВМ> rollback <окружение> <sha>` — выпуск, уже лежащий на ВМ (последние 5).
+#
+# Сервер не заказан (переменная окружения SSH_HOST пуста) — job пишет «сервер не настроен» и успешен.
+# Переменные окружения GitHub: SSH_HOST, S3_MEDIA_BUCKET, S3_BACKUP_BUCKET, TELEGRAM_CHAT_ID (необязательные
+# переопределяют deploy/env/<окружение>.env). Секреты — docs/runbooks/OWNER_ACTIONS_26.md.
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        required: true
+        type: string
+      sha:
+        required: true
+        type: string
+      mode:
+        description: "deploy или rollback"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: read
+  actions: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    environment: ${{ inputs.environment }}
+    env:
+      EV_ENV: ${{ inputs.environment }}
+      EV_SHA: ${{ inputs.sha }}
+      SSH_HOST: ${{ vars.SSH_HOST }}
+    steps:
+      - name: Сервер окружения настроен?
+        id: server
+        run: |
+          [[ "$EV_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "sha — полный SHA, получено '$EV_SHA'"; exit 1; }
+          if [ -z "$SSH_HOST" ]; then
+            echo "::notice::Сервер $EV_ENV не настроен (переменная окружения SSH_HOST пуста) — выкладка пропущена (ADR 0030 п. 2)"
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.server.outputs.configured == 'true'
+        with:
+          ref: ${{ inputs.sha }}
+
+      - name: Ключ SSH деплоя и ключ хоста
+        if: steps.server.outputs.configured == 'true'
+        env:
+          SSH_DEPLOY_KEY: ${{ secrets.SSH_DEPLOY_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+        run: |
+          [ -n "$SSH_DEPLOY_KEY" ] && [ -n "$SSH_KNOWN_HOSTS" ] || { echo "нет секретов SSH_DEPLOY_KEY / SSH_KNOWN_HOSTS"; exit 1; }
+          install -d -m 0700 ~/.ssh
+          (umask 077 && printf '%s\n' "$SSH_DEPLOY_KEY" > ~/.ssh/ev_deploy && printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts)
+          printf 'Host ev\n  HostName %s\n  User deploy\n  IdentityFile ~/.ssh/ev_deploy\n  IdentitiesOnly yes\n  StrictHostKeyChecking yes\n  ServerAliveInterval 30\n' \
+            "$SSH_HOST" > ~/.ssh/config
+
+      - name: Откат на выпуск ${{ inputs.sha }}
+        if: steps.server.outputs.configured == 'true' && inputs.mode == 'rollback'
+        run: ssh ev "rollback $EV_ENV $EV_SHA"
+
+      - uses: docker/login-action@v4
+        if: steps.server.outputs.configured == 'true' && inputs.mode == 'deploy'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/download-artifact@v4
+        if: steps.server.outputs.configured == 'true' && inputs.mode == 'deploy'
+        with:
+          name: web-engineer-${{ inputs.environment }}-${{ inputs.sha }}
+          path: dist/web-engineer
+
+      - uses: actions/download-artifact@v4
+        if: steps.server.outputs.configured == 'true' && inputs.mode == 'deploy'
+        with:
+          name: web-admin-${{ inputs.environment }}-${{ inputs.sha }}
+          path: dist/web-admin
+
+      - name: Bundle и выкладка
+        if: steps.server.outputs.configured == 'true' && inputs.mode == 'deploy'
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          SMS_CODE_SECRET: ${{ secrets.SMS_CODE_SECRET }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          POSTGRES_MONITOR_PASSWORD: ${{ secrets.POSTGRES_MONITOR_PASSWORD }}
+          S3_ACCESS_KEY: ${{ secrets.S3_ACCESS_KEY }}
+          S3_SECRET_KEY: ${{ secrets.S3_SECRET_KEY }}
+          BACKUP_S3_ACCESS_KEY: ${{ secrets.BACKUP_S3_ACCESS_KEY }}
+          BACKUP_S3_SECRET_KEY: ${{ secrets.BACKUP_S3_SECRET_KEY }}
+          PGBACKREST_CIPHER_PASS: ${{ secrets.PGBACKREST_CIPHER_PASS }}
+          PGBACKREST_REPO2_SFTP_HOST: ${{ secrets.PGBACKREST_REPO2_SFTP_HOST }}
+          GRAFANA_ADMIN_PASSWORD: ${{ secrets.GRAFANA_ADMIN_PASSWORD }}
+          SMS_PROVIDER_USER: ${{ secrets.SMS_PROVIDER_USER }}
+          SMS_PROVIDER_API_KEY: ${{ secrets.SMS_PROVIDER_API_KEY }}
+          SMS_SENDER: ${{ secrets.SMS_SENDER }}
+          SMS_TEST_PHONES: ${{ secrets.SMS_TEST_PHONES }}
+          SMS_TEST_CODE: ${{ secrets.SMS_TEST_CODE }}
+          FCM_SERVICE_ACCOUNT_JSON: ${{ secrets.FCM_SERVICE_ACCOUNT_JSON }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          ALERT_TELEGRAM_BOT_TOKEN: ${{ secrets.ALERT_TELEGRAM_BOT_TOKEN }}
+          DEADMAN_URL: ${{ secrets.DEADMAN_URL }}
+          VAR_S3_MEDIA_BUCKET: ${{ vars.S3_MEDIA_BUCKET }}
+          VAR_S3_BACKUP_BUCKET: ${{ vars.S3_BACKUP_BUCKET }}
+          VAR_TELEGRAM_CHAT_ID: ${{ vars.TELEGRAM_CHAT_ID }}
+          VAR_SMS_PROVIDER: ${{ vars.SMS_PROVIDER }}
+        run: |
+          set -euo pipefail
+          repo="ghcr.io/${GITHUB_REPOSITORY,,}"
+          digest() { docker buildx imagetools inspect "$1" --format '{{json .Manifest.Digest}}' | tr -d '"'; }
+          backend_digest="$(digest "$repo/backend:staging-$EV_SHA")"
+          postgres_digest="$(digest "$repo/postgres:staging-$EV_SHA")"
+          export BACKEND_IMAGE="$repo/backend@$backend_digest" EV_POSTGRES_IMAGE="$repo/postgres@$postgres_digest"
+          export WEB_ENGINEER_DIST="$PWD/dist/web-engineer" WEB_ADMIN_DIST="$PWD/dist/web-admin"
+          # Значения окружения для render-secrets (обязательность A1/FCM) — из deploy/env.
+          set -a
+          # shellcheck disable=SC1090
+          . "deploy/env/$EV_ENV.env"
+          set +a
+          # SMS_PROVIDER=fake — staging до разрешения IP в A1 (в production fake запрещён, backend не стартует).
+          [ -n "$VAR_SMS_PROVIDER" ] && export EV_SMS_PROVIDER="$VAR_SMS_PROVIDER"
+          export EV_OVERRIDES_FILE="$RUNNER_TEMP/overrides.env"
+          {
+            [ -n "$VAR_S3_MEDIA_BUCKET" ] && echo "EV_S3_MEDIA_BUCKET=$VAR_S3_MEDIA_BUCKET"
+            [ -n "$VAR_S3_BACKUP_BUCKET" ] && echo "EV_S3_BACKUP_BUCKET=$VAR_S3_BACKUP_BUCKET"
+            [ -n "$VAR_TELEGRAM_CHAT_ID" ] && echo "EV_TELEGRAM_CHAT_ID=$VAR_TELEGRAM_CHAT_ID"
+            [ -n "$VAR_SMS_PROVIDER" ] && echo "EV_SMS_PROVIDER=$VAR_SMS_PROVIDER"
+            true
+          } > "$EV_OVERRIDES_FILE"
+          deploy/scripts/make-bundle.sh "$EV_ENV" "$RUNNER_TEMP/bundle.tar.gz"
+          ssh ev "deploy $EV_ENV" < "$RUNNER_TEMP/bundle.tar.gz"
+          rm -f "$RUNNER_TEMP/bundle.tar.gz"
+
+      - name: Проверка снаружи (DNS, TLS, заголовки)
+        if: steps.server.outputs.configured == 'true'
+        run: |
+          set -a
+          # shellcheck disable=SC1090
+          . "deploy/env/$EV_ENV.env"
+          set +a
+          curl -fsS --max-time 15 "https://$EV_API_HOST/health" | grep -q '"status":"ok"' && echo "PASS  https://$EV_API_HOST/health"
+          for host in "$EV_ENGINEER_HOST" "$EV_ADMIN_HOST"; do
+            curl -fsS --max-time 15 -D - -o /dev/null "https://$host/" | grep -qi "^strict-transport-security" && echo "PASS  https://$host/ (HSTS)"
+          done
+
+      - name: Убрать ключ
+        if: always()
+        run: rm -f ~/.ssh/ev_deploy

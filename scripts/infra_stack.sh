@@ -78,6 +78,15 @@ provider_up() {
   log "провайдер: MinIO (TLS), реестр $REGISTRY, приёмник алертов $SINK"
 }
 
+wipe_repo() {
+  # wipe_repo <env> — «новая ВМ» с новой БД: репозиторий pgBackRest стенда очищается (на ВМ этого
+  # не делает ни один скрипт — backup.sh init сообщает о чужой stanza).
+  provider_env
+  docker run --rm --network ev-provider -e "SSL_CERT_FILE=/stand-ca/ca.crt" -v "$EV_STAND/minio-certs/CAs:/stand-ca:ro" \
+    --entrypoint /bin/sh pgsty/minio:RELEASE.2026-08-04T00-00-00Z@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372 -ec \
+    "mc alias set stand https://s3.stand.test:9000 '$EV_STAND_S3_KEY' '$EV_STAND_S3_SECRET' >/dev/null; mc rm --recursive --force stand/ev-$1-backup/pgbackrest >/dev/null 2>&1 || true"
+}
+
 # --- Окружения -------------------------------------------------------------------------------
 
 ports() {
@@ -262,16 +271,25 @@ down() {
 # --- Учения ------------------------------------------------------------------------------------
 
 client_token() {
-  # Вход клиента тестовым номером (SMS не отправляется) — access-токен для запросов с данными.
-  local env="$1" https host
+  # Вход клиента тестовым номером (SMS не отправляется) — access-токен для запросов с данными. Токен
+  # кэшируется (живёт 15 мин): лимиты N-06 — 5 кодов в час на номер и 30 на IP — работают и на стенде.
+  local env="$1" https host cache="$EV_STAND/token-$1" token body
   read -r _ https _ _ _ <<< "$(ports "$env")"
   host="api.$(hosts_prefix "$env")etsautogomel.test"
+  if [[ -f "$cache" ]]; then
+    token="$(cat "$cache")"
+    [[ "$(api "$env" /v1/me "$token")" == 200 ]] && { echo "$token"; return 0; }
+  fi
   curl -sS --cacert "$EV_STAND/ca/ca.crt" --resolve "$host:$https:127.0.0.1" -X POST \
     -H 'Content-Type: application/json' -d "{\"phone\":\"$TEST_PHONE\"}" "https://$host:$https/v1/auth/phone/request-code" >/dev/null
-  curl -sS --cacert "$EV_STAND/ca/ca.crt" --resolve "$host:$https:127.0.0.1" -X POST \
+  body="$(curl -sS --cacert "$EV_STAND/ca/ca.crt" --resolve "$host:$https:127.0.0.1" -X POST \
     -H 'Content-Type: application/json' \
     -d "{\"phone\":\"$TEST_PHONE\",\"code\":\"$TEST_CODE\",\"pd_policy_version\":\"2026-10\"}" \
-    "https://$host:$https/v1/auth/phone/verify-code" | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])'
+    "https://$host:$https/v1/auth/phone/verify-code")"
+  token="$(printf '%s' "$body" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("access_token", ""))')"
+  [[ -n "$token" ]] || die "вход клиента на $env не удался: $(printf '%s' "$body" | head -c 200)"
+  (umask 077 && printf '%s' "$token" > "$cache")
+  echo "$token"
 }
 
 api() {
@@ -294,6 +312,7 @@ drill_rollback() {
   # Чистое окружение: «новая ВМ» с выпуском N.
   if [[ -L "$EV_ROOT/$env/current" ]]; then dc_env "$env" down -v --remove-orphans >/dev/null 2>&1 || true; fi
   rm -rf "${EV_ROOT:?}/$env"
+  wipe_repo "$env"
   env_setup "$env"
   t0=$(date +%s); deploy_release "$env" "$base"; t1=$(date +%s)
   report "- N включён за $((t1 - t0)) с; схема: $(psql_env "$env" 'select version_num from alembic_version')"
@@ -306,17 +325,25 @@ drill_rollback() {
   report "- откат N+1 → N за $((t1 - t0)) с без downgrade; схема осталась $(psql_env "$env" 'select version_num from alembic_version'), образ N работает: /v1/vehicles = $(api "$env" /v1/vehicles "$token") (сессия клиента сохранилась)"
   t0=$(date +%s); deploy_release "$env" "$head"; t1=$(date +%s)
   report "- снова N+1 за $((t1 - t0)) с"
-  # Сломанный выпуск: тот же образ с ошибкой конфигурации (неизвестный SMS-провайдер) — preflight не проходит.
+  # Сломанный выпуск 1: ошибка настроек, которую видят миграции (неизвестный SMS-провайдер) — выпуск
+  # не включается, работающий не тронут.
   broken="$(printf 'b%.0s' $(seq 1 40))"
   overrides="$EV_STAND/broken-overrides.env"
   printf 'EV_SMS_PROVIDER=broken-provider\n' > "$overrides"
   t0=$(date +%s)
-  if deploy_release "$env" "$head" "$overrides" "$broken"; then
-    die "сломанный выпуск включился — автооткат не проверен"
-  fi
+  if deploy_release "$env" "$head" "$overrides" "$broken"; then die "выпуск с неверными настройками включился"; fi
   t1=$(date +%s)
-  report "- сломанный выпуск ($broken): smoke не прошёл, автооткат на N+1 за $((t1 - t0)) с; сейчас: $(sed -n 's/^EV_SHA=//p' "$EV_ROOT/$env/state" 2>/dev/null || basename "$(cd "$EV_ROOT/$env/current" && pwd -P)"), /health = $(api "$env" /health)"
+  [[ "$(basename "$(cd "$EV_ROOT/$env/current" && pwd -P)")" == "$head" ]] || die "current сменился"
+  report "- сломанный выпуск 1 (неверный SMS_PROVIDER): миграции отказали, выпуск не включён за $((t1 - t0)) с, работает N+1, /health = $(api "$env" /health)"
+  # Сломанный выпуск 2: ошибка видна только при старте API (несуществующий бакет S3 — fail closed
+  # preflight): переключение, health не проходит, автооткат на N+1.
+  broken="$(printf 'c%.0s' $(seq 1 40))"
+  printf 'EV_S3_MEDIA_BUCKET=ev-staging-media-missing\n' > "$overrides"
+  t0=$(date +%s)
+  if deploy_release "$env" "$head" "$overrides" "$broken"; then die "выпуск без бакета включился"; fi
+  t1=$(date +%s)
   [[ "$(basename "$(cd "$EV_ROOT/$env/current" && pwd -P)")" == "$head" ]] || die "после автоотката current ≠ N+1"
+  report "- сломанный выпуск 2 (нет бакета S3): переключён, health не прошёл, **автооткат** на N+1 — всего $((t1 - t0)) с; /health = $(api "$env" /health), /v1/vehicles = $(api "$env" /v1/vehicles "$token")"
   report "- итог: PASS"
   log "отчёт: $REPORT"
 }
@@ -344,7 +371,10 @@ drill_dr() {
   t_disaster=$(date +%s)
   kill "$pulse" 2>/dev/null || true
   wait "$pulse" 2>/dev/null || true
-  report "- $(date -u -r "$t_disaster" +%H:%M:%SZ 2>/dev/null || date -u -d "@$t_disaster" +%H:%M:%SZ): «потеря ВМ» — контейнеры, тома и каталог окружения удалены (строк app_user/vehicle/pulse: $counts_before)"
+  # Авария, а не остановка: SIGKILL — PostgreSQL не успевает дописать и отправить текущий сегмент WAL
+  # (штатная остановка архивирует его — RPO вышел бы нечестно малым).
+  dc_env "$env" kill >/dev/null 2>&1 || true
+  report "- $(date -u -r "$t_disaster" +%H:%M:%SZ 2>/dev/null || date -u -d "@$t_disaster" +%H:%M:%SZ): «потеря ВМ» — процессы убиты (SIGKILL), контейнеры, тома и каталог окружения удалены (строк app_user/vehicle/pulse: $counts_before)"
   dc_env "$env" down -v --remove-orphans >/dev/null 2>&1
   rm -rf "${EV_ROOT:?}/$env"
   # «Новая ВМ»: каталог окружения, выпуск без включения, восстановление.

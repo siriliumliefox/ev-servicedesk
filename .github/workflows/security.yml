@@ -5,7 +5,10 @@ name: security
 # client, engineer, admin, пассивный baseline веб-кабинетов на production-сборке. Вручную и раз в неделю
 # (develop); в ci-gate не входит — проход длится десятки минут. Красный — есть находки High
 # (backend/scripts/zap_summary.py). Отчёты — артефакт zap-results; сжатая сводка — в docs/reviews/security/.
-# Образ: пусто — собрать из ветки; иначе опубликованный (ghcr.io/…@sha256:…). На сервере — глава 26.
+# Образ: пусто — собрать из ветки; иначе опубликованный (ghcr.io/…@sha256:…).
+# Сервер (глава 26, ADR 0030 п. 20, scripts/zap_server.sh): job zap-server — staging через nginx и TLS (активный
+# скан API без токена + baseline кабинетов) раз в неделю и вручную (target=staging); production — только
+# пассивный baseline (target=production). Сервер недоступен — «не настроен», job успешен.
 
 on:
   workflow_dispatch:
@@ -16,6 +19,11 @@ on:
       web:
         description: "Baseline веб-кабинетов (1/0)"
         default: "1"
+      target:
+        description: "image — стенд из образа (глава 25); staging или production — сервер через nginx (глава 26)"
+        default: "image"
+        type: choice
+        options: [image, staging, production]
   schedule:
     - cron: "0 3 * * 1"   # понедельник 03:00 UTC, ветка по умолчанию
 
@@ -25,6 +33,7 @@ permissions:
 
 jobs:
   zap:
+    if: github.event_name == 'schedule' || inputs.target == 'image'
     runs-on: ubuntu-latest
     timeout-minutes: 150
     steps:
@@ -64,4 +73,44 @@ jobs:
         with:
           name: zap-results
           path: zap-results/
+          retention-days: 30
+
+  zap-server:
+    if: github.event_name == 'schedule' || inputs.target == 'staging' || inputs.target == 'production'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      ZAP_TARGET: ${{ inputs.target || 'staging' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Сервер доступен?
+        id: server
+        run: |
+          set -a
+          # shellcheck disable=SC1090
+          . "deploy/env/$ZAP_TARGET.env"
+          set +a
+          if curl -fsS --max-time 15 "https://$EV_API_HOST/health" >/dev/null 2>&1; then
+            echo "up=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::Сервер $ZAP_TARGET ($EV_API_HOST) недоступен — скан пропущен (ADR 0030 п. 2)"
+            echo "up=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: ZAP через nginx и TLS
+        if: steps.server.outputs.up == 'true'
+        env:
+          ZAP_OUT: ${{ github.workspace }}/zap-server-results
+        run: scripts/zap_server.sh
+
+      - name: Сводка
+        if: always() && steps.server.outputs.up == 'true'
+        run: cat zap-server-results/summary.md >> "$GITHUB_STEP_SUMMARY" || true
+
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.server.outputs.up == 'true'
+        with:
+          name: zap-server-results
+          path: zap-server-results/
           retention-days: 30
