@@ -13,6 +13,7 @@ from app.api.schemas.auth import (
     UserPublic,
     UserUpdateRequest,
 )
+from app.api.schemas.common import SafeOptionalText
 from app.domain.users import service
 from app.models.enums import UserRole
 
@@ -32,7 +33,7 @@ def list_users(
     page: PageDep,
     role: UserRole | None = None,
     is_active: bool | None = None,
-    search: Annotated[str | None, Query(max_length=16)] = None,
+    search: Annotated[str | None, Query(max_length=16), SafeOptionalText] = None,
 ) -> UserList:
     items, meta = paginate(db, service.list_users_stmt(role, is_active, search), page)
     return UserList(items=items, meta=meta)

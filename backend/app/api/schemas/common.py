@@ -2,6 +2,8 @@
 
 import re
 
+from pydantic import AfterValidator
+
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 
 
@@ -10,6 +12,17 @@ def no_control_chars(value: str) -> str:
     if _CONTROL.search(value):
         raise ValueError("управляющие символы недопустимы")
     return value
+
+
+def optional_no_control_chars(value: str | None) -> str | None:
+    """Для необязательных параметров запроса (поиск, фильтры): None пропускается."""
+    return None if value is None else no_control_chars(value)
+
+
+# Параметры пути и строки запроса — те же правила, что у тел (ZAP-1, глава 25): `?search=%00`
+# давал 500 (NUL в запросе PostgreSQL) вместо 422.
+SafeText = AfterValidator(no_control_chars)
+SafeOptionalText = AfterValidator(optional_no_control_chars)
 
 
 # Многострочный текст (описания, сообщения, статьи): табуляция и переводы строк разрешены,

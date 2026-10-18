@@ -6,6 +6,7 @@ worker будится сигналом Redis (`Outbox.wake`); потерянны
 Аудитория и очередь заполняются `INSERT ... SELECT` — без выборки клиентов в память.
 """
 
+import re
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 
@@ -44,6 +45,7 @@ from app.models import (
     VehicleModel,
 )
 from app.models.enums import NotificationType, UserRole
+from app.models.notifications import PUSH_TOKEN_MAX_LENGTH
 
 PUBLISHED_TYPES = (NotificationType.FIRMWARE, NotificationType.NEWS, NotificationType.PROMO)
 
@@ -102,8 +104,18 @@ def register_token(db: Session, user: AppUser, token: str) -> None:
     raise ApiError(409, "PUSH_TOKEN_CONFLICT", "Токен регистрируется одновременно — повторите")
 
 
+_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+
+
 def revoke_token(db: Session, user: AppUser, token: str) -> None:
-    """DELETE /push-tokens/{token}: только свой активный токен, иначе 404."""
+    """DELETE /push-tokens/{token}: только свой активный токен, иначе 404.
+
+    Токен длиннее столбца или с управляющими символами не существует — 404 без запроса к БД
+    (NUL в запросе PostgreSQL давал 500; ZAP-1, глава 25).
+    """
+    not_found = ApiError(404, "PUSH_TOKEN_NOT_FOUND", "Токен не найден")
+    if len(token) > PUSH_TOKEN_MAX_LENGTH or _CONTROL.search(token):
+        raise not_found
     revoked = db.execute(
         update(PushToken)
         .where(
@@ -114,7 +126,7 @@ def revoke_token(db: Session, user: AppUser, token: str) -> None:
         .values(revoked_at=func.now())
     ).rowcount
     if not revoked:
-        raise ApiError(404, "PUSH_TOKEN_NOT_FOUND", "Токен не найден")
+        raise not_found
     db.commit()
 
 

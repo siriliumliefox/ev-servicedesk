@@ -61,9 +61,9 @@ def register_push_token(body: PushTokenRegisterRequest, user: CurrentUser, db: D
     response_class=Response,
     **rbac(UserRole.CLIENT),
 )
-def delete_push_token(
-    token: Annotated[str, Path(max_length=4096)], user: CurrentUser, db: DbDep
-) -> Response:
+def delete_push_token(token: Annotated[str, Path()], user: CurrentUser, db: DbDep) -> Response:
+    # Без ограничений схемы: у операции нет 422 в контракте — недопустимый токен (длинный, с
+    # управляющими символами) не существует, ответ — 404 (сервис; ZAP-1, глава 25).
     service.revoke_token(db, user, token)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 

@@ -17,6 +17,7 @@ from app.api.deps import (
     rbac,
 )
 from app.api.pagination import PageDep, paginate
+from app.api.schemas.common import SafeOptionalText
 from app.api.schemas.vehicles import (
     MaintenanceRecordCreateRequest,
     MaintenanceRecordList,
@@ -40,7 +41,9 @@ VehicleId = Annotated[int, Path(alias="vehicleId")]
 
 @router.get("/vehicle-models", operation_id="searchVehicleModels", **rbac(*ALL_ROLES))
 def search_vehicle_models(
-    db: DbDep, page: PageDep, search: Annotated[str | None, Query(max_length=100)] = None
+    db: DbDep,
+    page: PageDep,
+    search: Annotated[str | None, Query(max_length=100), SafeOptionalText] = None,
 ) -> VehicleModelList:
     items, meta = paginate(db, service.search_models_stmt(search), page)
     return VehicleModelList(items=items, meta=meta)
@@ -123,7 +126,7 @@ def list_maintenance_records(
     user: CurrentUser,
     db: DbDep,
     page: PageDep,
-    aggregate_type_code: Annotated[str | None, Query(max_length=50)] = None,
+    aggregate_type_code: Annotated[str | None, Query(max_length=50), SafeOptionalText] = None,
 ) -> MaintenanceRecordList:
     stmt = service.list_maintenance_stmt(db, user, vehicle_id, aggregate_type_code)
     items, meta = paginate(db, stmt, page)

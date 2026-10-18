@@ -22,6 +22,7 @@ from app.api.schemas.aggregates import (
     MaintenanceRegulationList,
     MaintenanceRegulationOut,
 )
+from app.api.schemas.common import SafeText
 from app.core.db import BIGINT_MAX
 from app.domain.aggregates import service
 from app.models.enums import STAFF_ROLES, UserRole
@@ -114,7 +115,7 @@ def list_aggregate_statuses(
 )
 def replace_aggregate_status(
     vehicle_id: VehicleId,
-    aggregate_type_code: Annotated[str, Path(alias="aggregateTypeCode", max_length=50)],
+    aggregate_type_code: Annotated[str, Path(alias="aggregateTypeCode", max_length=50), SafeText],
     body: AggregateReplaceRequest,
     user: CurrentUser,
     db: DbDep,

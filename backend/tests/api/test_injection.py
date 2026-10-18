@@ -97,3 +97,27 @@ def test_markdown_without_html_is_accepted(client, world, content):
     r = client.post(f"{API}/knowledge-articles", json=body, headers=admin)
     expected = 422 if "<b>" in content else 201  # тег и в коде — тег: «без HTML» буквально
     assert r.status_code == expected, r.text
+
+
+@pytest.mark.parametrize(
+    "bad", ["%00", "a%00b", "%1B[2J", "%7F"], ids=["nul", "inner-nul", "esc", "del"]
+)
+def test_control_chars_in_query_and_path_are_422(client, world, bad):
+    """ZAP-1 (глава 25): `?search=%00` давал 500 — NUL уходил в запрос PostgreSQL."""
+    owner, admin, vehicle_id = world
+    cases = [
+        ("GET", f"/vehicle-models?search={bad}", owner),
+        ("GET", f"/knowledge-articles?search={bad}", owner),
+        ("GET", f"/vehicles/{vehicle_id}/maintenance-records?aggregate_type_code={bad}", owner),
+        ("GET", f"/users?search={bad}", admin),
+        ("POST", f"/vehicles/{vehicle_id}/aggregate-statuses/{bad}/replace", admin),
+    ]
+    for method, path, headers in cases:
+        body = (
+            {"replaced_at": "2026-01-01", "mileage_at_replacement": 0} if method == "POST" else None
+        )
+        r = client.request(method, f"{API}{path}", json=body, headers=headers)
+        assert r.status_code == 422, (method, path, r.status_code, r.text)
+    # У deletePushToken в контракте нет 422: такого токена не существует — 404.
+    r = client.delete(f"{API}/push-tokens/{bad}", headers=owner)
+    assert r.status_code == 404 and r.json()["error"]["code"] == "PUSH_TOKEN_NOT_FOUND"
