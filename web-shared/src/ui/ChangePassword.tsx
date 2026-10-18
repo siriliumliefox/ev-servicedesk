@@ -1,11 +1,12 @@
 // Смена своего пароля сотрудником (глава 25, ADR 0029 п. 14): кнопка в шапке кабинета открывает модальный
 // <dialog> с текущим и новым паролем. Длину проверяем до запроса (как схема), стойкость — сервер (zxcvbn);
 // после смены прочие сессии сотрудника завершены — об этом сообщение.
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 import { Button, TextField } from "../components";
 import { errorText } from "../data/errors.ts";
 import { PASSWORD_MAX, PASSWORD_MIN, passwordProblem } from "../data/password.ts";
 import { ApiError } from "../data/repository.ts";
+import { ModalDialog } from "./ModalDialog.tsx";
 
 export function ChangePasswordButton({ onChange }: { onChange: (current: string, next: string) => Promise<void> }) {
   const [open, setOpen] = useState(false);
@@ -26,23 +27,12 @@ function ChangePasswordDialog({
   onChange: (current: string, next: string) => Promise<void>;
   onClose: () => void;
 }) {
-  const ref = useRef<HTMLDialogElement>(null);
   const [current, setCurrent] = useState("");
   const [next, setNext] = useState("");
   const [repeat, setRepeat] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<{ field: "current" | "next" | "repeat" | null; text: string } | null>(null);
   const [changed, setChanged] = useState(false);
-
-  useEffect(() => {
-    const dialog = ref.current;
-    if (!dialog) return;
-    if (typeof dialog.showModal === "function" && !dialog.open) dialog.showModal();
-    else dialog.setAttribute("open", "");
-    return () => {
-      if (dialog.open && typeof dialog.close === "function") dialog.close();
-    };
-  }, []);
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -55,27 +45,14 @@ function ChangePasswordDialog({
       await onChange(current, next);
       setChanged(true);
     } catch (err) {
-      const field = err instanceof ApiError && err.code === "PASSWORD_INVALID" ? "current" : err instanceof ApiError && err.field ? "next" : null;
-      setError({ field, text: errorText(err) });
+      setError({ field: errorField(err), text: errorText(err) });
     } finally {
       setBusy(false);
     }
   };
 
   return (
-    <dialog
-      ref={ref}
-      aria-labelledby="change-password-title"
-      onKeyDown={(e) => e.key === "Escape" && e.stopPropagation()}
-      onCancel={(e) => {
-        e.preventDefault();
-        onClose();
-      }}
-      className="m-auto w-[28rem] rounded-lg border border-border bg-surface p-6 text-fg shadow-lg backdrop:bg-[rgb(0_0_0/0.5)]"
-    >
-      <h2 id="change-password-title" className="text-h3">
-        Смена пароля
-      </h2>
+    <ModalDialog title="Смена пароля" onCancel={onClose}>
       {changed ? (
         <div className="mt-4 grid gap-4">
           <p role="status" className="text-body-sm">
@@ -135,6 +112,13 @@ function ChangePasswordDialog({
           </div>
         </form>
       )}
-    </dialog>
+    </ModalDialog>
   );
+}
+
+/** У какого поля показать ошибку сервера: неверный текущий — у текущего, слабый новый — у нового. */
+function errorField(err: unknown): "current" | "next" | null {
+  if (!(err instanceof ApiError)) return null;
+  if (err.code === "PASSWORD_INVALID") return "current";
+  return err.field ? "next" : null;
 }
