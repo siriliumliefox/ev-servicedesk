@@ -14,7 +14,7 @@ from argon2.exceptions import InvalidHashError, VerificationError
 from app.core.config import Settings
 
 JWT_ALGORITHM = "HS256"
-ACCESS_TOKEN_TYPE = "access"
+ACCESS_TOKEN_TYPE = "access"  # noqa: S105 — значение claim typ, не секрет
 
 _password_hasher = PasswordHasher()
 # Хэш для выравнивания времени ответа, когда пользователя нет (не раскрываем существование).

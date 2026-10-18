@@ -6,11 +6,11 @@ from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Значения-заглушки из .env.example: в staging/production с ними приложение не стартует.
-DEFAULT_JWT_SECRET = "change-me-in-every-real-environment"
-DEFAULT_SMS_CODE_SECRET = "change-me-sms-code-secret"
+DEFAULT_JWT_SECRET = "change-me-in-every-real-environment"  # noqa: S105 — заглушка; вне local/test запрещена
+DEFAULT_SMS_CODE_SECRET = "change-me-sms-code-secret"  # noqa: S105 — заглушка; вне local/test запрещена
 # Учётные данные MinIO из docker-compose.yml (только local): известны всем, кто видит репозиторий.
 DEFAULT_S3_ACCESS_KEY = "ev_local"
-DEFAULT_S3_SECRET_KEY = "ev_local_only"
+DEFAULT_S3_SECRET_KEY = "ev_local_only"  # noqa: S105 — ключ MinIO разработки; вне local/test запрещён
 SAFE_ENVIRONMENTS = {"local", "test"}
 
 

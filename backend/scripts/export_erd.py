@@ -72,7 +72,7 @@ def render() -> str:
             lines.append(f"        {_type(column)} {column.name}{key}{note}")
         lines.append("    }")
         for fk in sorted(table.foreign_key_constraints, key=lambda c: str(c.name)):
-            assert isinstance(fk, ForeignKeyConstraint)
+            assert isinstance(fk, ForeignKeyConstraint)  # noqa: S101 — сужение типа для mypy
             parent = fk.referred_table.name
             optional = any(col.nullable for col in fk.columns)
             left = "|o" if optional else "||"

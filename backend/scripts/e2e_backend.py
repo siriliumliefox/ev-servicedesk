@@ -101,7 +101,8 @@ class Jobs:
         self.prefix = shlex.split(runner)
 
     def run(self, *command: str, stdin: str | None = None) -> str:
-        result = subprocess.run(
+        # Команда — из кода сценария, префикс — из переменной окружения CI, без shell.
+        result = subprocess.run(  # noqa: S603
             [*self.prefix, *command], input=stdin, capture_output=True, text=True, timeout=300
         )
         check(
