@@ -307,11 +307,12 @@ scenarios:
       - { level: widget, ref: "web-engineer/src/ticket/maintenance.test.tsx::замена из карточки своего тикета — 3 клика" }
 
   - id: E2E-33
-    title: Доступ к чужим объектам — чужой тикет и авто недоступны (IDOR — глава 25)
+    title: Доступ к чужим объектам — чужой тикет и авто недоступны (IDOR, глава 25)
     roles: [client, engineer]
     priority: P1
     requirements: [X-01]
     tests:
       - { level: unit, ref: "backend/tests/api/test_ticket_security.py::test_object_level_matrix" }
       - { level: unit, ref: "backend/tests/api/test_aggregates.py::test_replace_access" }
-    check: chapter-25
+      - { level: unit, ref: "backend/tests/api/test_idor_matrix.py::test_vehicle_idor_matrix" }
+      - { level: unit, ref: "backend/tests/api/test_rbac_matrix.py::test_role_matrix" }
