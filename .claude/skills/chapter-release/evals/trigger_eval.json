@@ -1,0 +1,82 @@
+[
+  {
+    "query": "PR #141 по главе 26 зелёный, ci-gate прошёл. Давай закрывать главу: мерж, тег, статус — как обычно",
+    "should_trigger": true
+  },
+  {
+    "query": "доведи главу 26 до DONE, всё что после merge сделай сам (cd-staging, тег, status-PR), я ушёл",
+    "should_trigger": true
+  },
+  {
+    "query": "что осталось до DONE по главе 24? проверь по git и PR, ничего не мержи",
+    "should_trigger": true
+  },
+  {
+    "query": "смержил #117, cd-staging вроде зелёный. поставь тег baseline и сделай статус-PR",
+    "should_trigger": true
+  },
+  {
+    "query": "Глава 27 бета-пилот: прогон с клиентами прошёл, PR #150 готов. Закрываем как PARTIAL или DONE? Разберись по DoD и закрой",
+    "should_trigger": true
+  },
+  {
+    "query": "сделай сухой прогон закрытия главы 25 — хочу посмотреть, всё ли по процессу, без реального merge и тегов",
+    "should_trigger": true
+  },
+  {
+    "query": "status-PR для главы 26 так и не сделан, хотя PR главы уже в develop (1a2b3c4). Оформи PROJECT_STATUS и открой PR",
+    "should_trigger": true
+  },
+  {
+    "query": "Глава 26 смержена, но cd-staging упал на regression / android-ui-e2e. Что делать, чтобы всё-таки закрыть главу?",
+    "should_trigger": true
+  },
+  {
+    "query": "ci-gate зелёный на feature/138-production-infra, можно мержить и закрывать главу?",
+    "should_trigger": true
+  },
+  {
+    "query": "обнови статус проекта после главы 26: DONE, тег requirements-baseline-v1.18, cd-staging 39200000000 — ну и всё остальное по процессу закрытия",
+    "should_trigger": true
+  },
+  {
+    "query": "Начинаем главу 26 — production-инфраструктура. Прочитай главу в MASTER_CHECKLIST, ADR и покажи план и DoD",
+    "should_trigger": false
+  },
+  {
+    "query": "dependabot открыл ещё 5 PR (#140–#144), смержи их по очереди после зелёного ci-gate",
+    "should_trigger": false
+  },
+  {
+    "query": "cd-staging упал на push после bump flutter_lints — разберись почему и почини",
+    "should_trigger": false
+  },
+  {
+    "query": "Откати staging на коммит 9693a72 через cd-staging без пересборки образа",
+    "should_trigger": false
+  },
+  {
+    "query": "Добавь в глоссарий термин «Production-среда» и запиши решение в ADR 0030",
+    "should_trigger": false
+  },
+  {
+    "query": "проверь качество кода в PR #141 перед merge — дублирование, лишние абстракции, мёртвый код",
+    "should_trigger": false
+  },
+  {
+    "query": "Срочно hotfix: на проде 500 на /v1/tickets, ветка hotfix/150-tickets-500, PR в main",
+    "should_trigger": false
+  },
+  {
+    "query": "Почему в главе 23 поставили тег v1.0.0-rc.1, а не requirements-baseline-v1.15? Найди, что тогда решили",
+    "should_trigger": false
+  },
+  {
+    "query": "Закрой главу 3 курсовой по ИПП: допиши выводы и оформи по СТП 01-2024 БГУИР",
+    "should_trigger": false
+  },
+  {
+    "query": "Выпусти релиз v1.0.0 в main: changelog, GitHub release, тег — это глава 28",
+    "should_trigger": false
+  }
+]
