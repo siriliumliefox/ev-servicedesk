@@ -9,7 +9,7 @@
 4. `docs/openapi.yaml`, `docs/EV_ServiceDesk_Glava2_DDL.sql`, ORM, Alembic, `docs/adr/`.
 5. `docs/TZ.md`, `docs/MASTER_CHECKLIST.md` (28 глав).
 6. `docs/PROJECT_STATUS.md`, `docs/ROADMAP.md`.
-7. История Claude. Заявления прошлых AI без кода/теста/commit не считаются выполненной работой.
+7. История Claude (поиск — MemPalace, см. ниже). Заявления прошлых AI без кода/теста/commit не считаются выполненной работой.
 
 ## Структура
 | Путь | Назначение |
@@ -85,6 +85,18 @@ python3 scripts/check_unicode_nfc.py    # текст только в Unicode NFC
   `gitleaks git --pre-commit --staged`; без gitleaks коммит блокируется. Подключение (один раз на клон):
   `brew install gitleaks && git config core.hooksPath .githooks`. В CI — job `secret-scan` в `ci.yml` (gitleaks-action, каждый PR).
   `--no-verify` не использовать.
+
+## Память проекта (MemPalace)
+Локальный palace владельца: код, документы и стенограммы чатов Claude Code проекта, поиск по смыслу (в том числе по-русски).
+Доступен агентам с MCP `mempalace` (плагин Claude Code `mempalace@mempalace`); у остальных его нет — работать без него.
+- Перед ответом о прошлых решениях, главах и ловушках («почему так сделали», «что решили») — `mempalace_search`
+  с `wing: ev_servicedesk`.
+- Найденное в чатах — источник 7: подсказка, где искать, а не факт. Подтверждать кодом, git, PR; при расхождении верны 1–6.
+- Хуки плагина сохраняют только чаты; код и документы переиндексировать после крупных merge: `mempalace mine .` из корня клона.
+- Стенограммы попадают в palace дословно — секреты и ПД в чат не выводить (см. «Безопасность»).
+- `mempalace.yaml` и `entities.json` — локальные, в `.gitignore`. В `mempalace.yaml` держать `exclude_patterns: [.claude/]`:
+  майнер не читает `.git/info/exclude` и иначе индексирует копии из `.claude/worktrees/`.
+- Модель эмбеддингов — `"embedding_model": "embeddinggemma"` в `~/.config/mempalace/config.json`: дефолтная `minilm` русский текст не находит.
 
 ## Известные ловушки
 - Poetry 2.5.1 (как в CI, Dockerfile и `poetry.lock`); окружение — Python 3.12 (`poetry env use python3.12`).
