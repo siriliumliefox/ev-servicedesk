@@ -59,7 +59,8 @@ tags:
       инженер видят только опубликованные статьи (черновик — 404), admin — все (RBAC-05).
       Узлы дерева: вопрос (от 1 варианта), решение (без вариантов, is_escalation=false),
       эскалация (is_escalation=true, «Создать обращение» — createTicket с source_article_id и
-      source_node_id). Content — Markdown (CommonMark) без HTML.
+      source_node_id). Content — Markdown (CommonMark) без HTML: HTML-теги, комментарии и
+      объявления сервер отклоняет — 422 VALIDATION_ERROR по полю content (1.12.0, ADR 0029 п. 10).
   - name: Notifications
     description: >
       Уведомления клиента: прошивки, напоминания о ТО, новости и акции (ADR 0019). Аудитория

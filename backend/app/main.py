@@ -19,6 +19,7 @@ from app.api.routes import (
 )
 from app.core.config import Settings, get_settings
 from app.core.errors import install_error_handlers
+from app.core.headers import SecurityHeadersMiddleware
 from app.core.logging import AccessLogMiddleware, configure_logging
 from app.core.pubsub import PubSubHub
 from app.core.storage import get_storage, require_bucket
@@ -28,6 +29,7 @@ API_PREFIX = "/v1"  # servers в docs/openapi.yaml: http://localhost:8000/v1
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
+    production = settings.environment == "production"
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -53,8 +55,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         version="1.12.0",  # = info.version docs/openapi.yaml
         description="Backend EV-ServiceDesk. Контракт — docs/openapi.yaml (Глава 3, ADR 0007).",
         lifespan=lifespan,
+        # Swagger и схема — для разработки и staging; в production не публикуются (ADR 0029 п. 8):
+        # контракт — docs/openapi.yaml в репозитории, а не карта API для сканера.
+        **({"docs_url": None, "redoc_url": None, "openapi_url": None} if production else {}),
     )
     install_error_handlers(application)
+    application.add_middleware(SecurityHeadersMiddleware, api_prefix=API_PREFIX)
     application.add_middleware(AccessLogMiddleware)
     if settings.environment != "test":
         configure_logging()  # тесты читают логи через caplog

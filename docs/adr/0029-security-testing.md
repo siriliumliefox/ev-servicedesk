@@ -73,7 +73,8 @@
    отчёты — `docs/reviews/security/<дата>/`, сырые — артефакт workflow. В главе 26 — повтор на сервере.
 8. **Настройки (Q8, A02).** Backend добавляет `X-Content-Type-Options: nosniff`,
    `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `Cross-Origin-Resource-Policy:
-   same-origin` ко всем ответам и `Cache-Control: no-store` к ответам `/auth/*`; `/docs`, `/redoc` и
+   same-origin` ко всем ответам и `Cache-Control: no-store` к ответам `/v1` (данные пользователей
+   не кэшируются ни прокси, ни браузером); `/docs`, `/redoc` и
    `/openapi.json` отключены при `ENVIRONMENT=production`; образ работает от непривилегированного
    пользователя. HSTS, CSP заголовком и `frame-ancestors` — nginx главы 26.
 9. **Цепочка поставок (Q9, A03).** В `ci-gate`: `pip-audit` (backend), `npm audit --omit=dev

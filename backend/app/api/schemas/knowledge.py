@@ -5,6 +5,7 @@
 к Unicode NFC — как весь текст репозитория и справочники.
 """
 
+import re
 import unicodedata
 from datetime import datetime
 from typing import Annotated, Any
@@ -46,11 +47,23 @@ def search_query(value: str | None) -> str | None:
     return None if value is None else no_control_chars(no_control_chars_multiline(value))
 
 
+# HTML внутри Markdown: тег (`<script>`, `</div>`, `<img src=x onerror=…>`), комментарий, CDATA,
+# объявление. Автоссылки CommonMark (`<https://…>`, `<user@example.com>`) — не теги и разрешены.
+# Тег — «<» и сразу имя, затем пробел, «/» или «>» (как начало тега в HTML); «a < b», «x<5» — текст.
+_HTML = re.compile(r"</?[A-Za-z][A-Za-z0-9-]*(?=[\s/>])|<!--|<!\[CDATA\[|<![A-Za-z]|<\?")
+
+
 def _content(value: str) -> str:
-    """Markdown статьи хранится как есть (отступы значимы), без обрезки пробелов."""
+    """Markdown статьи хранится как есть (отступы значимы), без обрезки пробелов.
+
+    Контракт — «CommonMark без HTML» (тег Knowledge): HTML отклоняется (422, ADR 0029 п. 10).
+    Клиенты и так выводят текст безопасно — это вторая линия против XSS в будущих клиентах.
+    """
     value = _nfc(no_control_chars_multiline(value))
     if len(value) > CONTENT_MAX:
         raise ValueError(f"не больше {CONTENT_MAX} символов")
+    if _HTML.search(value):
+        raise ValueError("HTML в статье не допускается — только Markdown")
     return value
 
 

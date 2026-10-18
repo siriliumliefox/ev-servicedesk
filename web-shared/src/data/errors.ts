@@ -69,6 +69,13 @@ export const ERROR_TEXTS: Readonly<Record<string, string>> = {
 
 const FALLBACK = "Что-то пошло не так. Повторите попытку.";
 
+/** 422 по полю, где общий «Проверьте данные» не объясняет, что не так (глава 25, ADR 0029 пп. 10, 13). */
+const FIELD_TEXTS: Readonly<Record<string, string>> = {
+  password: WEAK_PASSWORD_TEXT,
+  new_password: WEAK_PASSWORD_TEXT,
+  content: "Проверьте текст статьи: только Markdown без HTML-тегов, не длиннее 50 000 символов.",
+};
+
 export function errorTextFor(code: string): string {
   return ERROR_TEXTS[code] ?? FALLBACK;
 }
@@ -91,8 +98,7 @@ export function apiErrorFromResponse(response: Response, body: unknown): ApiErro
   const loc = fields?.[0]?.loc;
   const field = Array.isArray(loc) && loc.length > 0 ? String(loc[loc.length - 1]) : undefined;
   const retry = Number(response.headers.get("Retry-After"));
-  // Слабый пароль — 422 по полю пароля (ADR 0029 п. 13): общий «Проверьте данные» не объясняет, что не так.
-  const text = code === "VALIDATION_ERROR" && field?.endsWith("password") ? WEAK_PASSWORD_TEXT : errorTextFor(code);
+  const text = code === "VALIDATION_ERROR" && field ? (FIELD_TEXTS[field] ?? errorTextFor(code)) : errorTextFor(code);
   return new ApiError(code, text, response.status, field, Number.isFinite(retry) && retry > 0 ? retry : undefined);
 }
 

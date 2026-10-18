@@ -25,6 +25,10 @@ COPY alembic ./alembic
 # Пул БД на процесс — DB_POOL_SIZE + DB_MAX_OVERFLOW: процессы × пул ≤ max_connections PostgreSQL.
 ENV WEB_CONCURRENCY=2
 
+# Процесс — без root (ADR 0029 п. 8): файлы приложения принадлежат root и только читаются.
+RUN useradd --system --uid 10001 --no-create-home --shell /usr/sbin/nologin app
+USER 10001
+
 EXPOSE 8000
 # Сначала проверка настроек и бакета в одном процессе (app.preflight): упавший при старте процесс
 # uvicorn супервизор перезапустил бы, и контейнер с неверной конфигурацией не завершился бы.

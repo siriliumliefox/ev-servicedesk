@@ -1,7 +1,8 @@
 // Проверки главы 21 (MASTER_CHECKLIST, ADR 0025 п. 14) на стеке из образа-кандидата:
 // 1) E2E: тикет в работу (перетаскиванием) → ответ из базы знаний → закрытие → у клиента в реальном времени;
 // 2) конкурентный доступ: два инженера берут один тикет — один получает его, второй — уведомление о конфликте;
-// 3) карточка авто из тикета (глава 23, ADR 0027 п. 15: E2E-07, требования E-04, N-09).
+// 3) карточка авто из тикета (глава 23, ADR 0027 п. 15: E2E-07, требования E-04, N-09);
+// XSS в чате — в сценарии 1 (глава 25, ADR 0029 п. 10).
 import { expect, test } from '@playwright/test'
 import {
   ClientSide,
@@ -48,6 +49,13 @@ test('E2E: в работу → быстрый ответ → «Решено»; �
   // Ответ клиента приходит инженеру без перезагрузки.
   await client.api('POST', `/tickets/${id}/messages`, { body: 'Пробки появились, спасибо!' }, 201)
   await expect(panel.getByText('Пробки появились, спасибо!')).toBeVisible({ timeout: 2000 })
+
+  // XSS в чате (глава 25, ADR 0029 п. 10): разметка клиента — текст, скрипт не выполняется.
+  const xss = '<img src=x onerror="window.__xss=1"><script>window.__xss=2</script>'
+  await client.api('POST', `/tickets/${id}/messages`, { body: xss }, 201)
+  await expect(panel.getByText(xss)).toBeVisible({ timeout: 2000 })
+  expect(await page.evaluate(() => (window as unknown as { __xss?: number }).__xss)).toBeUndefined()
+  await expect(panel.locator('img[src="x"], script')).toHaveCount(0)
 
   // Закрытие — с клавиатуры: «В работе» → «Решено» (через «Ожидает вендора»), с подтверждением.
   await dragWithKeyboard(page, id, 2)
