@@ -70,11 +70,18 @@ test.afterEach(() => {
  * Собирать нарушения CSP страницы (securitypolicyviolation) — с директивой и источником. Без источника — инъекция
  * самого Playwright: в WebKit скриншот трассировки прячет курсор встроенным <style>; стиль или скрипт приложения
  * указал бы на файл сборки.
+ *
+ * style-src-attr у элемента без атрибута style — не стиль страницы: WebKit 27 (Playwright 1.64) при вставке
+ * <select> проверяет по CSP страницы стили собственного теневого DOM контрола. Встроенный стиль из разметки
+ * всегда несёт атрибут style на элементе — такое нарушение ловится, как раньше.
  */
 export async function guardCsp(page: Page): Promise<void> {
   await page.addInitScript(() => {
     document.addEventListener("securitypolicyviolation", (e) => {
       if (!e.sourceFile) return;
+      if (e.violatedDirective === "style-src-attr" && e.target instanceof Element && !e.target.hasAttribute("style")) {
+        return;
+      }
       console.error(
         `CSP-VIOLATION ${e.violatedDirective} blocked=${e.blockedURI} source=${e.sourceFile}:${e.lineNumber} sample=${e.sample}`,
       );
