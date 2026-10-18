@@ -138,6 +138,22 @@
     CVSS и S1–S4, ZAP до/после, отложенное) — источник истины; приложение к пояснительной записке —
     `docs/Prilozhenie_Glava25_Security.docx` в стиле приложения главы 1.
 
+21. **Найдено в главе (дополнение 2026-10-18).**
+    - ZAP-1 (S3): управляющие символы в строке запроса (`/vehicle-models?search=%00`,
+      `/users?search=%00`) давали 500 — NUL уходил в запрос PostgreSQL. Строковые параметры запроса
+      и пути проверяются так же, как тела (`SafeText`, `SafeOptionalText` → 422); push-токен в пути —
+      404 (у `deletePushToken` нет 422 в контракте).
+    - ZAP-2 (S3): статика кабинетов без защиты от clickjacking (`frame-ancestors` в `<meta>` не
+      действует). Единый список `SECURITY_HEADERS` (`web-shared/vite.ts`) — в dev и preview (стенды E2E
+      и ZAP); nginx главы 26 отдаёт тот же список. COEP не ставится — блокировал бы вложения S3.
+    - Зависимости: starlette 0.46.2 → 1.8.0 (семь CVE: формы, Range, Host, пути), mako 1.4.2, pytest 9.
+      FastAPI закреплён на 0.136.3 — последней с плоским `app.routes`: с 0.137 вложенные роутеры —
+      `_IncludedRouter`, на обходе маршрутов держатся тесты RBAC и журнал доступа; переход — отдельной
+      задачей вместе с тестами.
+    - Smoke образа запрашивал SMS-код до миграций: `request-code` теперь читает `app_user` (п. 15) —
+      миграции перенесены до запроса кода.
+    - Тестовый клиент httpx пишет полный URL на INFO; в приложении журнал httpx — от WARNING.
+
 ## Последствия
 - Новые: `test_rbac_matrix.py`, тесты IDOR/XSS/SQLi/логов, `security.yml`, `dependabot.yml`,
   `app/workers/privacy.py` (+ сервис в compose), миграция `0016` (`vehicle_guard`), `SECURITY_25.md`,

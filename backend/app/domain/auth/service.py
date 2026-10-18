@@ -182,13 +182,13 @@ def _check_password(
     return user
 
 
-def end_all_sessions(db: Session, redis: Redis, settings: Settings, user_id: int) -> None:
+def end_all_sessions(db: Session, user_id: int) -> None:
     """Отзыв согласия и блокировка: все сессии (refresh и access) и push-токены (без COMMIT)."""
-    tokens.revoke_all(db, redis, settings, user_id)
+    tokens.revoke_all(db, user_id)
     revoke_all_push_tokens(db, user_id)
 
 
-def withdraw_pd_consent(db: Session, redis: Redis, settings: Settings, user: AppUser) -> None:
+def withdraw_pd_consent(db: Session, user: AppUser) -> None:
     """DELETE /auth/pd-consent (99-З, ст. 10): отзыв + завершение всех сессий и push-токенов.
 
     Очередь анонимизации (≤ 15 дней, глава 25) — пользователи БЕЗ действующего согласия,
@@ -204,7 +204,7 @@ def withdraw_pd_consent(db: Session, redis: Redis, settings: Settings, user: App
     if consent is None:
         raise ApiError(409, "PD_CONSENT_NOT_ACTIVE", "Действующего согласия нет")
     consent.withdrawn_at = datetime.now(UTC)
-    end_all_sessions(db, redis, settings, user.id)  # ADR 0019 п. 8
+    end_all_sessions(db, user.id)  # ADR 0019 п. 8
     db.commit()
 
 
@@ -234,7 +234,7 @@ def change_staff_password(
     tokens.lock_user(db, user.id)
     db.refresh(user)
     user.password_hash = hash_password(new_password)
-    tokens.revoke_all(db, redis, settings, user.id)  # отметка отзыва — до выпуска новой пары
+    tokens.revoke_all(db, user.id)  # раньше выпуска новой пары: она остаётся действительной
     pair = tokens.issue_pair(db, user, settings)
     db.commit()
     clear_login_failures(redis, user.phone)

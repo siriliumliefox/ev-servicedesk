@@ -53,11 +53,13 @@ def narrow_engine(db_url: URL) -> Iterator[Engine]:
     engine.dispose()
 
 
-def test_auth_dependency_returns_connection_to_pool(migrated_engine: Engine, user_id: int) -> None:
+def test_auth_dependency_returns_connection_to_pool(
+    migrated_engine: Engine, real_redis: Redis, user_id: int
+) -> None:
     settings = api_settings()
     token = create_access_token(user_id, "client", settings)
     with Session(migrated_engine, expire_on_commit=False) as db:
-        user = get_current_user(db, decode_access_token(token, settings))
+        user = get_current_user(db, real_redis, decode_access_token(token, settings))
         assert user.id == user_id and user.phone == PHONE, "объект пользователя не сброшен"
         assert not db.in_transaction(), "соединение удерживается до следующего захода в пул потоков"
 

@@ -62,7 +62,7 @@ def decode_access_token(token: str, settings: Settings) -> AccessClaims:
             algorithms=[JWT_ALGORITHM],  # фиксированный алгоритм: защита от alg=none/подмены
             audience=settings.jwt_audience,
             issuer=settings.jwt_issuer,
-            options={"require": ["sub", "exp", "iat", "typ", "role", "jti"]},
+            options={"require": ["sub", "exp", "iat", "iat_ms", "typ", "role", "jti"]},
         )
     except jwt.PyJWTError as exc:
         raise InvalidTokenError(type(exc).__name__) from exc
@@ -76,8 +76,7 @@ def decode_access_token(token: str, settings: Settings) -> AccessClaims:
         user_id=user_id,
         role=str(payload["role"]),
         expires_at=datetime.fromtimestamp(payload["exp"], UTC),
-        # Токены без iat_ms (выпущены до главы 25) — по началу секунды выпуска.
-        issued_at_ms=int(payload.get("iat_ms", int(payload["iat"]) * 1000)),
+        issued_at_ms=int(payload["iat_ms"]),
         jti=str(payload["jti"]),
     )
 

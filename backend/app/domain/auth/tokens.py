@@ -13,14 +13,12 @@ pd_consent. Так параллельная ротация и обнаружен
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from redis import Redis
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.core.errors import unauthorized
 from app.core.security import create_access_token, hash_refresh_token, new_refresh_token
-from app.domain.auth import revocation
 from app.models import AppUser, RefreshToken
 
 
@@ -54,18 +52,20 @@ def lock_user(db: Session, user_id: int) -> None:
     db.execute(select(AppUser.id).where(AppUser.id == user_id).with_for_update(key_share=True))
 
 
-def revoke_all(db: Session, redis: Redis, settings: Settings, user_id: int) -> None:
-    """Все сессии пользователя: refresh-токены в БД и выданные access-токены (ADR 0029 п. 12)."""
-    revocation.revoke_user_tokens(redis, settings, user_id)
+def revoke_all(db: Session, user_id: int) -> None:
+    """Все сессии пользователя: refresh-токены и выданные access-токены (`sessions_revoked_at`,
+    ADR 0029 п. 12) — одной транзакцией вызывающего."""
+    now = datetime.now(UTC)
     lock_user(db, user_id)
     db.execute(
         update(RefreshToken)
         .where(RefreshToken.user_id == user_id, RefreshToken.revoked_at.is_(None))
-        .values(revoked_at=datetime.now(UTC))
+        .values(revoked_at=now)
     )
+    db.execute(update(AppUser).where(AppUser.id == user_id).values(sessions_revoked_at=now))
 
 
-def rotate(db: Session, redis: Redis, refresh_token: str, settings: Settings) -> TokenPair:
+def rotate(db: Session, refresh_token: str, settings: Settings) -> TokenPair:
     """POST /auth/refresh. Строка блокируется (FOR UPDATE): параллельная ротация — одна."""
     now = datetime.now(UTC)
     token_hash = hash_refresh_token(refresh_token)
@@ -79,7 +79,7 @@ def rotate(db: Session, redis: Redis, refresh_token: str, settings: Settings) ->
     if row is None:  # удалён между поиском и блокировкой (например, вместе с пользователем)
         raise unauthorized("Недействительный refresh-токен")
     if row.revoked_at is not None:
-        revoke_all(db, redis, settings, row.user_id)
+        revoke_all(db, row.user_id)
         db.commit()
         raise unauthorized("Refresh-токен уже использован; все сессии завершены")
     if row.expires_at <= now:

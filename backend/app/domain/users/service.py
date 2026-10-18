@@ -17,7 +17,6 @@ from sqlalchemy import Select, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.core.config import Settings
 from app.core.db import constraint_name, escape_like, get_by_id
 from app.core.errors import ApiError
 from app.core.security import hash_password
@@ -84,12 +83,7 @@ def _lock_active_admins(db: Session) -> list[int]:
 
 
 def update_user(
-    db: Session,
-    redis: Redis,
-    settings: Settings,
-    user_id: int,
-    role: UserRole | None,
-    is_active: bool | None,
+    db: Session, user_id: int, role: UserRole | None, is_active: bool | None
 ) -> AppUser:
     """PATCH /users/{id}: роль engineer ↔ admin и блокировка/разблокировка."""
     user = get_user(db, user_id)
@@ -117,15 +111,13 @@ def update_user(
     user.role = new_role
     user.is_active = new_active
     if blocking:
-        end_all_sessions(db, redis, settings, user.id)
+        end_all_sessions(db, user.id)
     db.commit()
     db.refresh(user)
     return user
 
 
-def reset_password(
-    db: Session, redis: Redis, settings: Settings, user_id: int, password: str
-) -> None:
+def reset_password(db: Session, redis: Redis, user_id: int, password: str) -> None:
     """POST /users/{id}/password: новый пароль сотрудника; все его сессии (refresh и access)
     отзываются, счётчики неудачных входов номера сбрасываются (ADR 0029 пп. 11–12).
 
@@ -141,6 +133,6 @@ def reset_password(
         raise ApiError(409, "PASSWORD_NOT_ALLOWED", "У клиента нет пароля: вход по SMS-коду")
     passwords.ensure_strong(password, user.phone)
     user.password_hash = hash_password(password)
-    tokens.revoke_all(db, redis, settings, user.id)
+    tokens.revoke_all(db, user.id)
     db.commit()
     clear_login_failures(redis, user.phone)

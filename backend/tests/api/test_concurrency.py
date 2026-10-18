@@ -128,9 +128,7 @@ def test_parallel_staff_logins_cannot_exceed_failure_limit(
     assert statuses.count(401) == len(checks) and statuses.count(429) == 30 - len(checks)
 
 
-def test_reuse_detection_revokes_token_issued_by_concurrent_rotation(
-    migrated_engine: Engine, real_redis: Redis
-):
+def test_reuse_detection_revokes_token_issued_by_concurrent_rotation(migrated_engine: Engine):
     """Вор ротирует T3→T4, жертва одновременно предъявляет старый T2: T4 тоже отзывается."""
     settings = api_settings()
     now = datetime.now(UTC)
@@ -170,12 +168,12 @@ def test_reuse_detection_revokes_token_issued_by_concurrent_rotation(
                 original_commit()
 
             s.commit = paused_commit  # type: ignore[method-assign]
-            outcome["thief"] = tokens.rotate(s, real_redis, current, settings)
+            outcome["thief"] = tokens.rotate(s, current, settings)
 
     def victim() -> None:
         with Session(migrated_engine) as s:
             try:
-                tokens.rotate(s, real_redis, old, settings)
+                tokens.rotate(s, old, settings)
             except ApiError as exc:
                 outcome["victim"] = exc.status_code
 
@@ -247,7 +245,7 @@ def test_withdraw_serializes_with_verify_code(
     def withdraw() -> None:
         with Session(migrated_engine) as s:
             try:
-                service.withdraw_pd_consent(s, real_redis, settings, s.get(AppUser, user_id))
+                service.withdraw_pd_consent(s, s.get(AppUser, user_id))
                 outcome["withdraw"] = "ok"
             except ApiError as exc:
                 outcome["withdraw"] = exc.status_code

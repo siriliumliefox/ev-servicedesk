@@ -40,6 +40,8 @@ class AppUser(IdMixin, TimestampMixin, Base):
     password_hash: Mapped[str | None] = mapped_column(String(255))
     is_active: Mapped[bool] = mapped_column(server_default=text("true"), nullable=False)
     anonymized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Access-токены, выпущенные раньше, не принимаются (ADR 0029 п. 12; ставит tokens.revoke_all).
+    sessions_revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     @hybrid_property
     def is_available(self) -> bool:

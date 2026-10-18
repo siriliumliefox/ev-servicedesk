@@ -13,10 +13,12 @@ import secrets
 
 import pytest
 from redis import Redis
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.errors import ApiError
-from app.domain.auth import revocation, service
+from app.domain.auth import service, tokens
+from app.models import RefreshToken
 from app.models.enums import UserRole
 from tests.api.conftest import API, STAFF_PASSWORD, api_settings, bearer
 
@@ -83,7 +85,7 @@ def test_redis_down_fails_closed(client, make_staff, monkeypatch):
 
         raise RedisConnectionError("down")
 
-    monkeypatch.setattr(Redis, "mget", broken)
+    monkeypatch.setattr(Redis, "exists", broken)
     with client.unchecked():
         r = client.get(f"{API}/me", headers=bearer(token))
     assert r.status_code == 503 and r.json()["error"]["code"] == "SERVICE_UNAVAILABLE"
@@ -177,14 +179,27 @@ def test_strong_password_accepted(client, make_staff):
     assert staff_login(client, password=NEW_PASSWORD).status_code == 200
 
 
-def test_revocation_marks_expire(real_redis, settings, make_staff, client):
-    """Отметки отзыва не копятся: живут не дольше срока access-токена."""
-    make_staff(STAFF)
-    session = staff_login(client).json()
-    user_id = session["user"]["id"]
-    revocation.revoke_user_tokens(real_redis, settings, user_id)
-    ttl = real_redis.ttl(revocation.SINCE_PREFIX + str(user_id))
-    assert 0 < ttl <= settings.access_token_ttl_seconds + 60
+def test_revocation_mark_is_atomic_with_refresh_revocation(client, make_staff, db):
+    """Отметка отзыва — в строке пользователя той же транзакцией, что и отзыв refresh-токенов."""
+    staff = make_staff(STAFF)
+    staff_login(client)
+    tokens.revoke_all(db, staff.id)
+    db.rollback()  # откат транзакции — не остаётся ни отметки, ни отозванного refresh
+    db.refresh(staff)
+    assert staff.sessions_revoked_at is None
+    assert count_active_refresh(db, staff.id) == 1
+    tokens.revoke_all(db, staff.id)
+    db.commit()
+    db.refresh(staff)
+    assert staff.sessions_revoked_at is not None and count_active_refresh(db, staff.id) == 0
+
+
+def count_active_refresh(db, user_id: int) -> int:
+    return db.scalar(
+        select(func.count())
+        .select_from(RefreshToken)
+        .where(RefreshToken.user_id == user_id, RefreshToken.revoked_at.is_(None))
+    )
 
 
 # ---------- Смена пароля сотрудником (ADR 0029 п. 14) ----------

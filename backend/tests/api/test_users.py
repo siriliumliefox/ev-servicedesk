@@ -278,7 +278,7 @@ def test_blocked_engineer_keeps_tickets_until_reassigned(client, as_staff, as_cl
 # ---------- Гонка: последний администратор ----------
 
 
-def test_parallel_demotions_keep_one_admin(migrated_engine, real_redis, settings):
+def test_parallel_demotions_keep_one_admin(migrated_engine):
     """Два администратора одновременно понижают друг друга: один получает 409 LAST_ADMIN.
 
     Без блокировки строк всех активных администраторов оба видят «администраторов два» и
@@ -299,9 +299,7 @@ def test_parallel_demotions_keep_one_admin(migrated_engine, real_redis, settings
     def demote(target: int):
         def run():
             with Session(migrated_engine) as s:
-                return service.update_user(
-                    s, real_redis, settings, target, UserRole.ENGINEER, None
-                ).role
+                return service.update_user(s, target, UserRole.ENGINEER, None).role
 
         return run
 

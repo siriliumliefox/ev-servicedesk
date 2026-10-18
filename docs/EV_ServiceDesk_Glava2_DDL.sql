@@ -1000,5 +1000,11 @@ $$;
 
 UPDATE alembic_version SET version_num='0016' WHERE alembic_version.version_num = '0015';
 
+-- Running upgrade 0016 -> 0017
+
+ALTER TABLE app_user ADD COLUMN sessions_revoked_at TIMESTAMP WITH TIME ZONE;
+
+UPDATE alembic_version SET version_num='0017' WHERE alembic_version.version_num = '0016';
+
 COMMIT;
 

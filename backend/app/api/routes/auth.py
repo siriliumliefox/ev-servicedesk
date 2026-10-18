@@ -32,7 +32,7 @@ from app.api.schemas.auth import (
     VerifyCodeRequest,
     VerifyCodeResponse,
 )
-from app.domain.auth import revocation, service, tokens
+from app.domain.auth import service, sessions, tokens
 from app.models.enums import UserRole
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
@@ -84,10 +84,8 @@ def verify_phone_code(
 
 
 @router.post("/refresh", operation_id="refreshToken")
-def refresh_token(
-    body: RefreshRequest, db: DbDep, redis: RedisDep, settings: SettingsDep
-) -> AuthTokens:
-    return AuthTokens(**vars(tokens.rotate(db, redis, body.refresh_token, settings)))
+def refresh_token(body: RefreshRequest, db: DbDep, settings: SettingsDep) -> AuthTokens:
+    return AuthTokens(**vars(tokens.rotate(db, body.refresh_token, settings)))
 
 
 @router.post(
@@ -102,7 +100,7 @@ def logout(
 ) -> Response:
     """Выход: refresh-токен (если свой) и предъявленный access-токен (ADR 0029 п. 12)."""
     tokens.revoke(db, body.refresh_token, user.id)
-    revocation.revoke_token(redis, claims)
+    sessions.revoke_token(redis, claims)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -113,10 +111,8 @@ def logout(
     response_class=Response,
     **rbac(UserRole.CLIENT),
 )
-def withdraw_pd_consent(
-    user: CurrentUser, db: DbDep, redis: RedisDep, settings: SettingsDep
-) -> Response:
-    service.withdraw_pd_consent(db, redis, settings, user)
+def withdraw_pd_consent(user: CurrentUser, db: DbDep) -> Response:
+    service.withdraw_pd_consent(db, user)
     return Response(status_code=status.HTTP_202_ACCEPTED)
 
 
