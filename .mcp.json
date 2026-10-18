@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "dart": {
+      "type": "stdio",
+      "command": "dart",
+      "args": ["mcp-server"]
+    },
+    "context7": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp@4.1.1"]
+    }
+  }
+}
