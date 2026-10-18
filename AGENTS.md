@@ -86,6 +86,16 @@ python3 scripts/check_unicode_nfc.py    # текст только в Unicode NFC
   `brew install gitleaks && git config core.hooksPath .githooks`. В CI — job `secret-scan` в `ci.yml` (gitleaks-action, каждый PR).
   `--no-verify` не использовать.
 
+## Claude Code (проектные настройки)
+- Хук-сторож `.claude/hooks/guard.sh` (PreToolUse, подключён в `.claude/settings.json`, нужен `jq`) блокирует `--no-verify`,
+  push в `main`/`develop`, чтение `.env` и ручную правку генерируемых файлов (`schema.ts`, `tokens.css`, `tokens.g.dart`, DDL, ERD);
+  спрашивает подтверждение перед `ssh`/`scp`, `gh secret`, `scripts/set-*-secrets.sh`, `generate-secret.sh`, `rollback-staging.sh`.
+  Это страховка, а не граница безопасности (обход через `bash -c` не ловится): главная защита — gitleaks и защита веток.
+  Правила проверяет `.claude/hooks/guard.test.sh` — запускать после правки хука.
+- `.mcp.json`: `dart` (`dart mcp-server`: анализ, `pub_dev_search`, hot reload, дерево виджетов; корень Flutter-проекта — `mobile/`,
+  инструмент `roots`) и `context7` (документация библиотек, версия пакета закреплена, без ключа; запросы уходят на context7.com —
+  секреты и ПД в них не писать). Версию менять осознанно; ключ, если понадобится, вписывает владелец вне репозитория.
+
 ## Память проекта (MemPalace)
 Локальный palace владельца: код, документы и стенограммы чатов Claude Code проекта, поиск по смыслу (в том числе по-русски).
 Доступен агентам с MCP `mempalace` (плагин Claude Code `mempalace@mempalace`); у остальных его нет — работать без него.
