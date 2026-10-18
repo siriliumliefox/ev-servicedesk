@@ -95,7 +95,7 @@ jobs:
 
       # Интеграционный стек того же образа до публикации тега staging (ADR 0021 п. 1):
       # сквозной сценарий и аудит целостности. Python и poetry — для сценария на хосте.
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
