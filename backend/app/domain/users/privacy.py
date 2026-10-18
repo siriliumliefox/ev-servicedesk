@@ -17,7 +17,7 @@ ADR 0013 п. 9, ADR 0029 пп. 18–19; глоссарий «Анонимиза�
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import Select, and_, delete, exists, func, or_, select, update
+from sqlalchemy import ColumnElement, Select, and_, delete, exists, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.core.storage import ObjectStorage
@@ -51,7 +51,7 @@ class Due:
     withdrawn_at: datetime
 
 
-def _no_active_consent() -> object:
+def _no_active_consent() -> ColumnElement[bool]:
     return ~exists().where(PdConsent.user_id == AppUser.id, PdConsent.withdrawn_at.is_(None))
 
 

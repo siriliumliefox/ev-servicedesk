@@ -32,7 +32,7 @@ from app.api.schemas.auth import (
     VerifyCodeRequest,
     VerifyCodeResponse,
 )
-from app.domain.auth import service, sessions, tokens
+from app.domain.auth import service, sessions, staff, telegram, tokens
 from app.models.enums import UserRole
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
@@ -120,7 +120,7 @@ def withdraw_pd_consent(user: CurrentUser, db: DbDep) -> Response:
 def staff_login(
     body: StaffLoginRequest, db: DbDep, redis: RedisDep, settings: SettingsDep, ip: ClientIp
 ) -> StaffLoginResponse:
-    result = service.staff_login(db, redis, settings, body.phone, body.password, ip)
+    result = staff.login(db, redis, settings, body.phone, body.password, ip)
     return StaffLoginResponse(**vars(result.tokens), user=UserPublic.model_validate(result.user))
 
 
@@ -135,7 +135,7 @@ def change_staff_password(
     settings: SettingsDep,
     ip: ClientIp,
 ) -> AuthTokens:
-    pair = service.change_staff_password(
+    pair = staff.change_password(
         db, redis, settings, user, body.current_password, body.new_password, ip
     )
     return AuthTokens(**vars(pair))
@@ -145,4 +145,5 @@ def change_staff_password(
 def link_telegram(
     body: TelegramLinkRequest, user: CurrentUser, db: DbDep, settings: SettingsDep
 ) -> UserPublic:
-    return UserPublic.model_validate(service.link_telegram(db, settings, user, body.model_dump()))
+    telegram_id = telegram.verify_widget(settings, body.widget_fields(), body.hash)
+    return UserPublic.model_validate(service.link_telegram(db, user, telegram_id))

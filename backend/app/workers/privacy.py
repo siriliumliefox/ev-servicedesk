@@ -54,8 +54,8 @@ class PrivacyWorker:
         self._purged_at: datetime | None = None
         self._stopping = threading.Event()
 
-    def _notified(self, item: privacy.Due, late: bool) -> bool:
-        """SMS до обнуления телефона; True — можно анонимизировать."""
+    def _notify_before_erase(self, item: privacy.Due, late: bool) -> bool:
+        """SMS «данные удалены» до обнуления телефона; False — не дошло, ждём следующего прохода."""
         if item.phone is None or item.phone in self.settings.test_phones:
             return True
         key = f"{NOTIFIED_PREFIX}{item.user_id}"
@@ -81,7 +81,7 @@ class PrivacyWorker:
             late = now - item.withdrawn_at >= privacy.LATE
             if late:
                 logger.error("Клиент #%d в очереди анонимизации больше 14 дней", item.user_id)
-            if not self._notified(item, late):
+            if not self._notify_before_erase(item, late):
                 continue
             with self.scope() as db:
                 if privacy.anonymize(db, self.storage, item.user_id, now):

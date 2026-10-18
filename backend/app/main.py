@@ -62,8 +62,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     install_error_handlers(application)
     application.add_middleware(SecurityHeadersMiddleware, api_prefix=API_PREFIX)
     application.add_middleware(AccessLogMiddleware)
-    if settings.environment != "test":
-        configure_logging()  # тесты читают логи через caplog
+    configure_logging()
 
     @application.get("/health")
     def health() -> dict:

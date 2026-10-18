@@ -70,6 +70,11 @@ class TelegramLinkRequest(BaseModel):
     def _check_text(cls, value: str | None) -> str | None:
         return None if value is None else no_control_chars(value)
 
+    def widget_fields(self) -> dict[str, str]:
+        """Полученные поля виджета (кроме подписи) под именами Telegram: `telegram_id` — `id`."""
+        fields = self.model_dump(exclude={"telegram_id", "hash"}, exclude_none=True)
+        return {"id": self.telegram_id, **{key: str(value) for key, value in fields.items()}}
+
 
 class StaffPasswordChangeRequest(BaseModel):
     current_password: Annotated[str, Field(min_length=1, max_length=256)]

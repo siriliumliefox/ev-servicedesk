@@ -1,7 +1,6 @@
-"""Сценарии Auth Service (Глава 10): вход по SMS, вход персонала, согласие ПД, Telegram."""
+"""Сценарии Auth Service (Глава 10): вход по SMS, согласие ПД, Telegram. Вход и пароль
+сотрудника — `staff.py`, подпись Telegram — `telegram.py`."""
 
-import hashlib
-import hmac
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -13,18 +12,14 @@ from sqlalchemy.orm import Session
 
 from app.core import rate_limit
 from app.core.config import Settings
-from app.core.errors import ApiError, field_error, rate_limited, unauthorized
-from app.core.security import hash_password, verify_password
-from app.domain.auth import codes, passwords, tokens
-from app.domain.auth.sms import SmsProvider, mask_phone
+from app.core.errors import ApiError
+from app.domain.auth import codes, tokens
+from app.domain.auth.sms import SmsProvider
 from app.domain.notifications.service import revoke_all_tokens as revoke_all_push_tokens
 from app.models import AppUser, PdConsent
 from app.models.enums import STAFF_ROLES, UserRole
 
 logger = logging.getLogger(__name__)
-
-STAFF_WINDOW = 15 * 60
-HOUR = 3600
 
 
 @dataclass(frozen=True)
@@ -54,8 +49,12 @@ def request_phone_code(
     ).one_or_none()
     # Соединение — обратно в пул до отправки SMS: ответ A1 ждётся секунды (ADR 0028 п. 18).
     db.commit()
-    deliver = user is None or (user.role is UserRole.CLIENT and user.is_active)
-    return codes.request_code(redis, sms, settings, phone, client_ip, deliver=deliver)
+    request = codes.reserve(redis, settings, phone, client_ip)
+    if user is not None and not (user.role is UserRole.CLIENT and user.is_active):
+        # Тот же ответ без кода и SMS: не раскрывает, чей номер; платное SMS не тратится.
+        logger.info("Код входа не отправлен: номер недоступен для входа по SMS")
+        return settings.sms_code_ttl_seconds
+    return codes.send(redis, sms, settings, phone, request)
 
 
 def verify_phone_code(
@@ -125,63 +124,6 @@ def verify_phone_code(
     return LoginResult(tokens=pair, user=user, is_new_user=is_new)
 
 
-def staff_login(
-    db: Session, redis: Redis, settings: Settings, phone: str, password: str, client_ip: str
-) -> LoginResult:
-    """POST /auth/staff/login: пароль argon2id, лимит неудачных попыток (N-06, N-08)."""
-    user = _check_password(db, redis, settings, phone, password, client_ip)
-    pair = tokens.issue_pair(db, user, settings)
-    db.commit()
-    return LoginResult(tokens=pair, user=user)
-
-
-def _failure_keys(phone: str, client_ip: str) -> tuple[str, str, str]:
-    """Счётчики неудач (ADR 0029 п. 11): «номер + IP», IP, номер за час."""
-    return f"staff-fail:{phone}:{client_ip}", f"staff-fail-ip:{client_ip}", f"staff-fail-h:{phone}"
-
-
-def clear_login_failures(redis: Redis, phone: str | None) -> None:
-    """Сброс и смена пароля снимают блокировку входа номера со всех адресов."""
-    if phone is None:
-        return
-    pattern = f"{rate_limit.PREFIX}staff-fail:{phone}:*"
-    keys = list(redis.scan_iter(match=pattern, count=500))
-    redis.delete(rate_limit.PREFIX + f"staff-fail-h:{phone}", *keys)
-
-
-def _check_password(
-    db: Session, redis: Redis, settings: Settings, phone: str, password: str, client_ip: str
-) -> AppUser:
-    """Доступный сотрудник с этим номером и паролем, иначе 401; лимиты неудач — 429.
-
-    Попытка учитывается ДО проверки пароля: параллельные запросы не обходят лимит. Успешная
-    проверка возвращает попытку — счётчики считают только неудачи.
-    """
-    pair_key, ip_key, phone_key = _failure_keys(phone, client_ip)
-    # Все счётчики растут до проверки любого из них, поэтому не `rate_limit.enforce`.
-    by_pair = rate_limit.hit(redis, pair_key, STAFF_WINDOW)
-    by_ip = rate_limit.hit(redis, ip_key, STAFF_WINDOW)
-    by_phone = rate_limit.hit(redis, phone_key, HOUR)
-    if by_pair.exceeded(settings.staff_login_failures_per_phone_ip_15min):
-        raise rate_limited(by_pair.retry_after, "Слишком много неудачных попыток входа")
-    if by_ip.exceeded(settings.staff_login_failures_per_ip_15min):
-        raise rate_limited(by_ip.retry_after, "Слишком много неудачных попыток входа")
-    if by_phone.exceeded(settings.staff_login_failures_per_phone_hour):
-        if by_phone.count == settings.staff_login_failures_per_phone_hour + 1:
-            logger.warning("Подбор пароля сотрудника с разных адресов: %s", mask_phone(phone))
-        raise rate_limited(by_phone.retry_after, "Слишком много неудачных попыток входа")
-
-    user = db.scalars(select(AppUser).where(AppUser.phone == phone)).one_or_none()
-    password_hash = user.password_hash if user is not None else None
-    ok = verify_password(password, password_hash)  # считаем всегда — время не выдаёт номер
-    if not ok or user is None or user.role not in STAFF_ROLES or not user.is_available:
-        raise unauthorized("Неверный телефон или пароль")
-    rate_limit.reset(redis, pair_key)
-    rate_limit.undo_hit(redis, ip_key)
-    rate_limit.undo_hit(redis, phone_key)
-    return user
-
-
 def end_all_sessions(db: Session, user_id: int) -> None:
     """Отзыв согласия и блокировка: все сессии (refresh и access) и push-токены (без COMMIT)."""
     tokens.revoke_all(db, user_id)
@@ -208,70 +150,9 @@ def withdraw_pd_consent(db: Session, user: AppUser) -> None:
     db.commit()
 
 
-def change_staff_password(
-    db: Session,
-    redis: Redis,
-    settings: Settings,
-    user: AppUser,
-    current_password: str,
-    new_password: str,
-    client_ip: str,
-) -> tokens.TokenPair:
-    """POST /auth/staff/password (ADR 0029 п. 14): новая пара токенов, прочие сессии отозваны.
-
-    Неверный текущий пароль — 400 PASSWORD_INVALID; попытка входит в лимит неудачных входов
-    (п. 11), иначе смена пароля стала бы обходом лимита подбора.
-    """
-    try:
-        _check_password(db, redis, settings, user.phone or "", current_password, client_ip)
-    except ApiError as exc:
-        if exc.status_code != 401:
-            raise
-        raise ApiError(400, "PASSWORD_INVALID", "Неверный текущий пароль") from exc
-    if new_password == current_password:
-        raise field_error("new_password", "VALIDATION_ERROR", "Новый пароль совпадает с текущим")
-    passwords.ensure_strong(new_password, user.phone, field="new_password")
-    tokens.lock_user(db, user.id)
-    db.refresh(user)
-    user.password_hash = hash_password(new_password)
-    tokens.revoke_all(db, user.id)  # раньше выпуска новой пары: она остаётся действительной
-    pair = tokens.issue_pair(db, user, settings)
-    db.commit()
-    clear_login_failures(redis, user.phone)
-    return pair
-
-
-def _telegram_signature_valid(settings: Settings, fields: dict[str, str], signature: str) -> bool:
-    """Подпись Telegram Login Widget: HMAC-SHA256(строка проверки, SHA-256(токен бота))."""
-    check = "\n".join(f"{k}={fields[k]}" for k in sorted(fields))
-    secret = hashlib.sha256(settings.telegram_bot_token.encode()).digest()
-    expected = hmac.new(secret, check.encode(), hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, signature)
-
-
-def link_telegram(
-    db: Session, settings: Settings, user: AppUser, widget: dict[str, str | int | None]
-) -> AppUser:
-    """POST /auth/telegram/link: владение аккаунтом Telegram — по подписи виджета (ADR 0029
-    п. 16); один Telegram — один аккаунт. `widget` — поля запроса, `telegram_id` = `id`."""
-    if not settings.telegram_bot_token:
-        raise ApiError(503, "TELEGRAM_UNAVAILABLE", "Привязка Telegram временно недоступна")
-    if widget.get("hash") is None or widget.get("auth_date") is None:
-        raise field_error(
-            "hash", "VALIDATION_ERROR", "Нужны данные Telegram Login Widget с подписью"
-        )
-    signature = str(widget["hash"])
-    fields = {
-        ("id" if k == "telegram_id" else k): str(v)
-        for k, v in widget.items()
-        if k != "hash" and v is not None
-    }
-    age = datetime.now(UTC).timestamp() - int(widget["auth_date"] or 0)
-    if not _telegram_signature_valid(settings, fields, signature) or not (
-        -60 <= age <= settings.telegram_auth_max_age_seconds
-    ):
-        raise field_error("hash", "TELEGRAM_AUTH_INVALID", "Подпись Telegram недействительна")
-    telegram_id = fields["id"]
+def link_telegram(db: Session, user: AppUser, telegram_id: str) -> AppUser:
+    """POST /auth/telegram/link: один Telegram — один аккаунт; владение проверяет
+    `telegram.verify_widget` (ADR 0029 п. 16)."""
     owner = db.scalars(select(AppUser).where(AppUser.telegram_id == telegram_id)).one_or_none()
     if owner is not None and owner.id != user.id:
         raise ApiError(409, "TELEGRAM_ALREADY_LINKED", "Telegram привязан к другому аккаунту")

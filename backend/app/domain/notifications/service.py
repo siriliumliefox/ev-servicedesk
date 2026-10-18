@@ -6,7 +6,6 @@ worker будится сигналом Redis (`Outbox.wake`); потерянны
 Аудитория и очередь заполняются `INSERT ... SELECT` — без выборки клиентов в память.
 """
 
-import re
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 
@@ -26,7 +25,7 @@ from sqlalchemy import (
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
 
-from app.core.db import constraint_name, get_by_id, is_db_id
+from app.core.db import constraint_name, get_by_id, is_db_id, is_db_text
 from app.core.errors import ApiError, field_error
 from app.core.time import today_in_business_tz
 from app.domain.auth.tokens import lock_user
@@ -104,17 +103,13 @@ def register_token(db: Session, user: AppUser, token: str) -> None:
     raise ApiError(409, "PUSH_TOKEN_CONFLICT", "Токен регистрируется одновременно — повторите")
 
 
-_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
-
-
 def revoke_token(db: Session, user: AppUser, token: str) -> None:
     """DELETE /push-tokens/{token}: только свой активный токен, иначе 404.
 
-    Токен длиннее столбца или с управляющими символами не существует — 404 без запроса к БД
-    (NUL в запросе PostgreSQL давал 500; ZAP-1, глава 25).
+    Токен, которого не может быть в столбце, — 404 без запроса к БД (ZAP-1, глава 25).
     """
     not_found = ApiError(404, "PUSH_TOKEN_NOT_FOUND", "Токен не найден")
-    if len(token) > PUSH_TOKEN_MAX_LENGTH or _CONTROL.search(token):
+    if not is_db_text(token, PUSH_TOKEN_MAX_LENGTH):
         raise not_found
     revoked = db.execute(
         update(PushToken)

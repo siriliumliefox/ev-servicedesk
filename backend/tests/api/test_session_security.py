@@ -17,7 +17,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.errors import ApiError
-from app.domain.auth import service, tokens
+from app.domain.auth import staff, tokens
 from app.models import RefreshToken
 from app.models.enums import UserRole
 from tests.api.conftest import API, STAFF_PASSWORD, api_settings, bearer
@@ -96,7 +96,7 @@ def test_redis_down_fails_closed(client, make_staff, monkeypatch):
 
 def login_from(db, redis, settings, ip: str, password: str = "wrong-password"):
     try:
-        return service.staff_login(db, redis, settings, STAFF, password, ip)
+        return staff.login(db, redis, settings, STAFF, password, ip)
     except ApiError as exc:
         return exc.status_code
 

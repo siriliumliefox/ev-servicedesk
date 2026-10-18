@@ -21,7 +21,8 @@ from app.core.db import constraint_name, escape_like, get_by_id
 from app.core.errors import ApiError
 from app.core.security import hash_password
 from app.domain.auth import passwords, tokens
-from app.domain.auth.service import clear_login_failures, end_all_sessions
+from app.domain.auth.service import end_all_sessions
+from app.domain.auth.staff import clear_login_failures
 from app.models import AppUser
 from app.models.enums import STAFF_ROLES, UserRole
 

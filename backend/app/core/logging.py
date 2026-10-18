@@ -49,19 +49,33 @@ class PiiFilter(logging.Filter):
         return True
 
 
-def configure_logging(level: int = logging.INFO) -> None:
-    """Корневой обработчик (stdout) с `PiiFilter`; фильтр — и у обработчиков uvicorn.
+class PiiStdoutHandler(logging.StreamHandler):
+    """stdout с `PiiFilter`. Поток берётся при каждой записи: под pytest это перехваченный
+    stdout теста, а не терминал."""
 
-    Повторный вызов не добавляет обработчиков. API (create_app вне тестов) и worker'ы вызывают
-    при старте: без него INFO приложения терялись бы, а предупреждения шли бы мимо фильтра.
+    def __init__(self) -> None:
+        super().__init__()
+        self.setFormatter(logging.Formatter(FORMAT))
+        self.addFilter(PiiFilter())
+
+    @property
+    def stream(self):  # type: ignore[override]
+        return sys.stdout
+
+    @stream.setter
+    def stream(self, _value) -> None:
+        pass
+
+
+def configure_logging(level: int = logging.INFO) -> None:
+    """Корневой обработчик `PiiStdoutHandler`; `PiiFilter` — и у обработчиков uvicorn.
+
+    Повторный вызов не добавляет обработчиков. API (create_app) и worker'ы вызывают при старте:
+    без него INFO приложения терялись бы, а предупреждения шли бы мимо фильтра.
     """
     root = logging.getLogger()
-    if not any(getattr(h, "_ev_pii", False) for h in root.handlers):
-        handler = logging.StreamHandler(sys.stdout)
-        handler.setFormatter(logging.Formatter(FORMAT))
-        handler.addFilter(PiiFilter())
-        handler._ev_pii = True  # type: ignore[attr-defined]
-        root.addHandler(handler)
+    if not any(isinstance(h, PiiStdoutHandler) for h in root.handlers):
+        root.addHandler(PiiStdoutHandler())
     root.setLevel(level)
     # httpx пишет на INFO полный URL запроса (A1, FCM): URL без ПД, но и без пользы в журнале.
     logging.getLogger("httpx").setLevel(logging.WARNING)

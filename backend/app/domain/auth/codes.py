@@ -6,7 +6,6 @@
 тот код, который был проверен (compare-and-delete), — победитель среди параллельных один.
 """
 
-import logging
 from dataclasses import dataclass
 from enum import Enum
 
@@ -17,8 +16,6 @@ from app.core.config import Settings
 from app.core.errors import ApiError, rate_limited
 from app.core.security import generate_sms_code, hash_sms_code, sms_code_matches
 from app.domain.auth.sms import SmsError, SmsProvider
-
-logger = logging.getLogger(__name__)
 
 CODE_PREFIX = "auth:code:"
 SMS_TEXT = "EV-ServiceDesk: код входа {code}. Никому не сообщайте его."
@@ -81,20 +78,16 @@ class CodeResult:
     code_hash: str = ""  # HMAC проверенного кода — для compare-and-delete в consume_code
 
 
-def request_code(
-    redis: Redis,
-    sms: SmsProvider,
-    settings: Settings,
-    phone: str,
-    client_ip: str,
-    deliver: bool = True,
-) -> int:
-    """Выпускает и отправляет код; возвращает TTL в секундах. Лимиты — 429.
+@dataclass(frozen=True)
+class Reservation:
+    """Запрос кода, учтённый лимитами: ключи паузы и лимита номера — вернуть, если SMS не ушло."""
 
-    `deliver=False` (номер заблокированного клиента или сотрудника, ADR 0029 п. 15): лимиты
-    считаются как обычно и ответ тот же, но код не создаётся и SMS не уходит — ответ не
-    раскрывает, чей это номер, а платное SMS не тратится.
-    """
+    cooldown_key: str
+    phone_key: str
+
+
+def reserve(redis: Redis, settings: Settings, phone: str, client_ip: str) -> Reservation:
+    """Лимиты запроса кода (N-06): адрес, пауза между запросами, номер; сверх — 429."""
     rate_limit.enforce(
         redis,
         f"sms-ip:{client_ip}",
@@ -116,11 +109,20 @@ def request_code(
         settings.sms_requests_per_phone_hour,
         "Превышен лимит SMS на этот номер",
     )
+    return Reservation(cooldown_key, phone_key)
 
-    if not deliver:
-        logger.info("Код входа не отправлен: номер недоступен для входа по SMS")
-        return settings.sms_code_ttl_seconds
 
+def request_code(
+    redis: Redis, sms: SmsProvider, settings: Settings, phone: str, client_ip: str
+) -> int:
+    """Выпускает и отправляет код; возвращает TTL в секундах. Лимиты — 429."""
+    return send(redis, sms, settings, phone, reserve(redis, settings, phone, client_ip))
+
+
+def send(
+    redis: Redis, sms: SmsProvider, settings: Settings, phone: str, request: Reservation
+) -> int:
+    """Новый код (старый и его попытки сбрасываются) и SMS; TTL кода в секундах."""
     test_phone = phone in settings.test_phones  # ADR 0021 п. 6: код из секрета, без SMS
     code = settings.sms_test_code if test_phone else generate_sms_code(settings.sms_code_length)
     key = code_key(phone)
@@ -138,8 +140,8 @@ def request_code(
         if not exc.delivery_unknown:
             # SMS точно не ушло: код недействителен, пауза и лимит номера не тратятся.
             redis.delete(key)
-            rate_limit.reset(redis, cooldown_key)
-            rate_limit.undo_hit(redis, phone_key)
+            rate_limit.reset(redis, request.cooldown_key)
+            rate_limit.undo_hit(redis, request.phone_key)
         # Если доставка неизвестна (таймаут ответа A1), код остаётся действующим:
         # SMS могло дойти, а повтор раньше паузы создал бы платный дубль.
         if exc.invalid_recipient:
