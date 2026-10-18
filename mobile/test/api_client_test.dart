@@ -140,6 +140,19 @@ void main() {
       expect(tokens.token, 'refresh-1');
     });
 
+    test('вход потерян при обновлении хранилища — сессии нет, событие sessionEnded один раз', () async {
+      final tokens = _LostOnUpgradeStore('refresh-legacy');
+      final api = _client(_FakeServer(), tokens);
+      var ended = 0;
+      api.sessionEnded.listen((_) => ended++);
+
+      expect(await api.hasSession(), isFalse);
+      expect(tokens.token, isNull);
+      expect(ended, 1);
+      expect(await api.hasSession(), isFalse);
+      expect(ended, 1, reason: 'потеря сообщается один раз');
+    });
+
     test('без сохранённого токена — сессии нет', () async {
       final api = _client(_FakeServer(), MemoryTokenStore());
       expect(await api.hasSession(), isFalse);
@@ -205,4 +218,18 @@ void main() {
       expect(seen.headers.containsKey('Authorization'), isFalse);
     });
   });
+}
+
+/// Хранилище после прямого обновления flutter_secure_storage 9 → 11 на Android: старый токен нечитаем.
+class _LostOnUpgradeStore extends MemoryTokenStore {
+  _LostOnUpgradeStore(super.token);
+
+  bool _lost = true;
+
+  @override
+  bool takeLostOnUpgrade() {
+    final lost = _lost;
+    _lost = false;
+    return lost;
+  }
 }
