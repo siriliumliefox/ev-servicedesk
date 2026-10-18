@@ -8,6 +8,7 @@ import {
   ErrorState,
   LoadingState,
   ThemeSelect,
+  ChangePasswordButton,
   useAsync,
   useHashRoute,
   useTheme,
@@ -39,6 +40,7 @@ export default function App({
   now = systemNow,
   demo,
   onLogout,
+  onChangePassword,
 }: {
   repo: AdminRepository
   now?: () => Date
@@ -46,6 +48,8 @@ export default function App({
   demo?: PrototypeRepository
   /** Выход — только на реальном API (SessionGate). */
   onLogout?: () => void
+  /** Смена своего пароля — только на реальном API (SessionGate, ADR 0029 п. 14). */
+  onChangePassword?: (current: string, next: string) => Promise<void>
 }) {
   // ADR 0026 п. 3: «как в системе» по умолчанию, выбор — в шапке.
   const { theme, preference, setPreference, toggle } = useTheme('system')
@@ -103,6 +107,7 @@ export default function App({
             {env && <span className="text-body-sm text-fg-muted">Администратор {env.me.phone ?? `#${env.me.id}`}</span>}
             {demo && <DemoPanel repo={demo} theme={theme} onToggleTheme={toggle} onChange={bump} />}
             <ThemeSelect value={preference} onChange={setPreference} />
+            {onChangePassword && <ChangePasswordButton onChange={onChangePassword} />}
             {onLogout && (
               <Button variant="secondary" size="sm" onClick={onLogout}>
                 Выйти

@@ -185,3 +185,45 @@ def test_revocation_marks_expire(real_redis, settings, make_staff, client):
     revocation.revoke_user_tokens(real_redis, settings, user_id)
     ttl = real_redis.ttl(revocation.SINCE_PREFIX + str(user_id))
     assert 0 < ttl <= settings.access_token_ttl_seconds + 60
+
+
+# ---------- Смена пароля сотрудником (ADR 0029 п. 14) ----------
+
+
+def change(client, headers, current: str, new: str):
+    body = {"current_password": current, "new_password": new}
+    return client.post(f"{API}/auth/staff/password", json=body, headers=headers)
+
+
+def test_change_password_ends_other_sessions(client, make_staff):
+    make_staff(STAFF)
+    here, other = staff_login(client).json(), staff_login(client).json()
+    r = change(client, bearer(here["access_token"]), STAFF_PASSWORD, NEW_PASSWORD)
+    assert r.status_code == 200, r.text
+    fresh = r.json()
+    assert client.get(f"{API}/me", headers=bearer(fresh["access_token"])).status_code == 200
+    for old in (here, other):
+        assert client.get(f"{API}/me", headers=bearer(old["access_token"])).status_code == 401
+        refresh = client.post(f"{API}/auth/refresh", json={"refresh_token": old["refresh_token"]})
+        assert refresh.status_code == 401
+    assert staff_login(client).status_code == 401
+    assert staff_login(client, password=NEW_PASSWORD).status_code == 200
+
+
+def test_wrong_current_password_counts_as_failed_login(client, make_staff):
+    make_staff(STAFF)
+    headers = bearer(staff_login(client).json()["access_token"])
+    codes = [change(client, headers, "wrong-password", NEW_PASSWORD) for _ in range(6)]
+    assert [r.status_code for r in codes] == [400] * 5 + [429]
+    assert codes[0].json()["error"]["code"] == "PASSWORD_INVALID"
+    assert staff_login(client).status_code == 429, "подбор через смену пароля не обходит лимит"
+
+
+@pytest.mark.parametrize("new", ["aaaaaaaaaaaa", STAFF_PASSWORD, "375296680001xyz"])
+def test_change_rejects_weak_or_same_password(client, make_staff, new):
+    make_staff(STAFF)
+    session = staff_login(client).json()
+    r = change(client, bearer(session["access_token"]), STAFF_PASSWORD, new)
+    assert r.status_code == 422, r.text
+    assert r.json()["error"]["details"]["fields"][0]["loc"][-1] == "new_password"
+    assert client.get(f"{API}/me", headers=bearer(session["access_token"])).status_code == 200

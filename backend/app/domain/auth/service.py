@@ -1,5 +1,7 @@
 """Сценарии Auth Service (Глава 10): вход по SMS, вход персонала, согласие ПД, Telegram."""
 
+import hashlib
+import hmac
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -11,9 +13,9 @@ from sqlalchemy.orm import Session
 
 from app.core import rate_limit
 from app.core.config import Settings
-from app.core.errors import ApiError, rate_limited, unauthorized
-from app.core.security import verify_password
-from app.domain.auth import codes, tokens
+from app.core.errors import ApiError, field_error, rate_limited, unauthorized
+from app.core.security import hash_password, verify_password
+from app.domain.auth import codes, passwords, tokens
 from app.domain.auth.sms import SmsProvider, mask_phone
 from app.domain.notifications.service import revoke_all_tokens as revoke_all_push_tokens
 from app.models import AppUser, PdConsent
@@ -206,8 +208,70 @@ def withdraw_pd_consent(db: Session, redis: Redis, settings: Settings, user: App
     db.commit()
 
 
-def link_telegram(db: Session, user: AppUser, telegram_id: str) -> AppUser:
-    """POST /auth/telegram/link: один Telegram — один аккаунт."""
+def change_staff_password(
+    db: Session,
+    redis: Redis,
+    settings: Settings,
+    user: AppUser,
+    current_password: str,
+    new_password: str,
+    client_ip: str,
+) -> tokens.TokenPair:
+    """POST /auth/staff/password (ADR 0029 п. 14): новая пара токенов, прочие сессии отозваны.
+
+    Неверный текущий пароль — 400 PASSWORD_INVALID; попытка входит в лимит неудачных входов
+    (п. 11), иначе смена пароля стала бы обходом лимита подбора.
+    """
+    try:
+        _check_password(db, redis, settings, user.phone or "", current_password, client_ip)
+    except ApiError as exc:
+        if exc.status_code != 401:
+            raise
+        raise ApiError(400, "PASSWORD_INVALID", "Неверный текущий пароль") from exc
+    if new_password == current_password:
+        raise field_error("new_password", "VALIDATION_ERROR", "Новый пароль совпадает с текущим")
+    passwords.ensure_strong(new_password, user.phone, field="new_password")
+    tokens.lock_user(db, user.id)
+    db.refresh(user)
+    user.password_hash = hash_password(new_password)
+    tokens.revoke_all(db, redis, settings, user.id)  # отметка отзыва — до выпуска новой пары
+    pair = tokens.issue_pair(db, user, settings)
+    db.commit()
+    clear_login_failures(redis, user.phone)
+    return pair
+
+
+def _telegram_signature_valid(settings: Settings, fields: dict[str, str], signature: str) -> bool:
+    """Подпись Telegram Login Widget: HMAC-SHA256(строка проверки, SHA-256(токен бота))."""
+    check = "\n".join(f"{k}={fields[k]}" for k in sorted(fields))
+    secret = hashlib.sha256(settings.telegram_bot_token.encode()).digest()
+    expected = hmac.new(secret, check.encode(), hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, signature)
+
+
+def link_telegram(
+    db: Session, settings: Settings, user: AppUser, widget: dict[str, str | int | None]
+) -> AppUser:
+    """POST /auth/telegram/link: владение аккаунтом Telegram — по подписи виджета (ADR 0029
+    п. 16); один Telegram — один аккаунт. `widget` — поля запроса, `telegram_id` = `id`."""
+    if not settings.telegram_bot_token:
+        raise ApiError(503, "TELEGRAM_UNAVAILABLE", "Привязка Telegram временно недоступна")
+    if widget.get("hash") is None or widget.get("auth_date") is None:
+        raise field_error(
+            "hash", "VALIDATION_ERROR", "Нужны данные Telegram Login Widget с подписью"
+        )
+    signature = str(widget["hash"])
+    fields = {
+        ("id" if k == "telegram_id" else k): str(v)
+        for k, v in widget.items()
+        if k != "hash" and v is not None
+    }
+    age = datetime.now(UTC).timestamp() - int(widget["auth_date"] or 0)
+    if not _telegram_signature_valid(settings, fields, signature) or not (
+        -60 <= age <= settings.telegram_auth_max_age_seconds
+    ):
+        raise field_error("hash", "TELEGRAM_AUTH_INVALID", "Подпись Telegram недействительна")
+    telegram_id = fields["id"]
     owner = db.scalars(select(AppUser).where(AppUser.telegram_id == telegram_id)).one_or_none()
     if owner is not None and owner.id != user.id:
         raise ApiError(409, "TELEGRAM_ALREADY_LINKED", "Telegram привязан к другому аккаунту")

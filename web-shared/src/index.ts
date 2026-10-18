@@ -36,6 +36,8 @@ export type { HttpRepositoryOptions } from "./data/http/HttpEngineerRepository.t
 export { openTicketLive, webSocketUrl } from "./data/http/ticketLive.ts";
 export { StaffSessionGate, ThemeSelect } from "./ui/StaffSessionGate.tsx";
 export { ConfirmDialog } from "./ui/ConfirmDialog.tsx";
+export { ChangePasswordButton } from "./ui/ChangePassword.tsx";
+export { PASSWORD_MAX, PASSWORD_MIN, WEAK_PASSWORD_TEXT, passwordProblem } from "./data/password.ts";
 export { Pager } from "./ui/Pager.tsx";
 export type { PagerProps } from "./ui/Pager.tsx";
 export type { StaffSessionGateProps } from "./ui/StaffSessionGate.tsx";

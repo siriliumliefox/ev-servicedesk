@@ -10,6 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_sms_provider
+from app.core.config import get_settings
 from app.core.security import create_access_token
 from app.domain.auth.codes import code_key
 from app.domain.auth.sms import SmsError
@@ -19,8 +20,10 @@ from tests.api.conftest import (
     API,
     POLICY,
     STAFF_PASSWORD,
+    api_settings,
     bearer,
     code_from,
+    telegram_widget,
 )
 
 PHONE = "+375291112233"
@@ -293,18 +296,51 @@ def test_withdraw_pd_consent(client, login_client, db: Session, settings):
 def test_telegram_link(client, login_client):
     a = login_client(PHONE)
     b = login_client("+375291112244")
+    widget = telegram_widget("100", first_name="Иван", username="ivan_ev")
+    r = client.post(f"{API}/auth/telegram/link", json=widget, headers=bearer(a["access_token"]))
+    assert r.status_code == 200 and r.json()["telegram_id"] == "100"
     r = client.post(
-        f"{API}/auth/telegram/link",
-        json={"telegram_id": "tg-100"},
-        headers=bearer(a["access_token"]),
-    )
-    assert r.status_code == 200 and r.json()["telegram_id"] == "tg-100"
-    r = client.post(
-        f"{API}/auth/telegram/link",
-        json={"telegram_id": "tg-100"},
-        headers=bearer(b["access_token"]),
+        f"{API}/auth/telegram/link", json=telegram_widget("100"), headers=bearer(b["access_token"])
     )
     assert r.status_code == 409 and r.json()["error"]["code"] == "TELEGRAM_ALREADY_LINKED"
+
+
+def _forged(body: dict) -> dict:
+    return {**body, "telegram_id": "777"}  # чужой id под подписью своего виджета
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"telegram_id": "100"},  # без подписи (как в 1.11.0) — владение не доказано
+        telegram_widget("100", bot_token="999:other-bot"),  # подпись чужого бота
+        _forged(telegram_widget("100")),
+        {**telegram_widget("100", username="ivan"), "username": "admin"},  # подмена поля
+        telegram_widget("100", auth_date=int(datetime.now(UTC).timestamp()) - 2 * 86400),
+        telegram_widget("tg-100"),  # id виджета — только цифры
+    ],
+    ids=["unsigned", "other-bot", "foreign-id", "tampered-field", "stale", "not-numeric"],
+)
+def test_telegram_link_requires_valid_widget_signature(client, login_client, db: Session, body):
+    """ADR 0029 п. 16: занять чужой Telegram без подписи виджета нельзя."""
+    session = login_client(PHONE)
+    r = client.post(f"{API}/auth/telegram/link", json=body, headers=bearer(session["access_token"]))
+    assert r.status_code == 422, r.text
+    user = db.get(AppUser, session["user"]["id"])
+    db.refresh(user)
+    assert user.telegram_id is None
+
+
+def test_telegram_link_unavailable_without_bot(app, client, login_client):
+    settings = api_settings(telegram_bot_token="")
+    app.dependency_overrides[get_settings] = lambda: settings
+    session = login_client(PHONE)
+    r = client.post(
+        f"{API}/auth/telegram/link",
+        json=telegram_widget("100"),
+        headers=bearer(session["access_token"]),
+    )
+    assert r.status_code == 503 and r.json()["error"]["code"] == "TELEGRAM_UNAVAILABLE"
 
 
 class _FailingSms:

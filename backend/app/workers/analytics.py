@@ -15,6 +15,7 @@ from types import FrameType
 
 from app.core.config import Settings, get_settings
 from app.core.db import SessionScope, get_session_scope
+from app.core.logging import configure_logging
 from app.domain.analytics.refresh import refresh_views
 
 logger = logging.getLogger("app.workers.analytics")
@@ -57,7 +58,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Обновление витрины аналитики (ADR 0020)")
     parser.add_argument("--once", action="store_true", help="одно обновление и выход")
     args = parser.parse_args(argv)
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    configure_logging()
     worker = AnalyticsWorker(get_settings(), get_session_scope())
     if args.once:
         return 0 if worker.refresh() else 1

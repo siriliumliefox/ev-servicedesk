@@ -18,7 +18,7 @@ export function SessionGate({ session, repo }: { session: ApiSession; repo: Engi
       wrongRoleText={wrongRole}
       themeFallback="dark"
     >
-      {(logout) => <App repo={repo} onLogout={logout} />}
+      {(logout, changePassword) => <App repo={repo} onLogout={logout} onChangePassword={changePassword} />}
     </StaffSessionGate>
   )
 }

@@ -12,12 +12,19 @@ from app.core.security import create_access_token
 from app.main import create_app
 from app.models import AppUser
 from app.models.enums import UserRole
-from tests.api.conftest import API, STAFF_PASSWORD, ContractClient, api_settings, bearer
+from tests.api.conftest import (
+    API,
+    STAFF_PASSWORD,
+    ContractClient,
+    api_settings,
+    bearer,
+    telegram_widget,
+)
 
 # Тела, проходящие валидацию, — чтобы 401/403 не маскировались 422.
 BODIES = {
     "logout": {"refresh_token": "x"},
-    "linkTelegram": {"telegram_id": "tg-1"},
+    "linkTelegram": telegram_widget("1001"),
     "createVehicle": {"vin": "L6TZ0010000000001"},
     "updateVehicleMileage": {"mileage": 1},
     "correctVehicleMileage": {"expected_current_mileage": 1, "mileage": 0, "reason": "x"},
@@ -133,6 +140,8 @@ def test_protected_routes_exist(app):
         "updateUser",
         # Сброс пароля сотрудника (Глава 22)
         "resetUserPassword",
+        # Смена пароля сотрудником (Глава 25)
+        "changeStaffPassword",
     }
 
 
@@ -221,7 +230,7 @@ def test_staff_forbidden_on_client_only_routes(client, make_staff, role):
     r = client.delete(f"{API}/auth/pd-consent", headers=bearer(token))
     assert r.status_code == 403 and r.json()["error"]["code"] == "FORBIDDEN"
     r = client.post(
-        f"{API}/auth/telegram/link", json={"telegram_id": "tg-x"}, headers=bearer(token)
+        f"{API}/auth/telegram/link", json=telegram_widget("1002"), headers=bearer(token)
     )
     assert r.status_code == 403
     # Доступное всем ролям — доступно.

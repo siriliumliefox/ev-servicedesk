@@ -19,6 +19,7 @@ from app.api.routes import (
 )
 from app.core.config import Settings, get_settings
 from app.core.errors import install_error_handlers
+from app.core.logging import AccessLogMiddleware, configure_logging
 from app.core.pubsub import PubSubHub
 from app.core.storage import get_storage, require_bucket
 
@@ -49,11 +50,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     application = FastAPI(
         title="EV-ServiceDesk API",
-        version="1.11.0",  # = info.version docs/openapi.yaml
+        version="1.12.0",  # = info.version docs/openapi.yaml
         description="Backend EV-ServiceDesk. Контракт — docs/openapi.yaml (Глава 3, ADR 0007).",
         lifespan=lifespan,
     )
     install_error_handlers(application)
+    application.add_middleware(AccessLogMiddleware)
+    if settings.environment != "test":
+        configure_logging()  # тесты читают логи через caplog
 
     @application.get("/health")
     def health() -> dict:

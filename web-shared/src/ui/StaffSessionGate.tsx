@@ -36,8 +36,8 @@ export interface StaffSessionGateProps {
   wrongRoleText: (role: UserRole) => string;
   /** Тема экрана входа, пока пользователь её не выбирал. */
   themeFallback: ThemePreference;
-  /** Приложение после входа; `logout` — выход с сервера и из вкладки. */
-  children: (logout: () => void) => ReactNode;
+  /** Приложение после входа; `logout` — выход с сервера и из вкладки, `changePassword` — смена своего пароля. */
+  children: (logout: () => void, changePassword: (current: string, next: string) => Promise<void>) => ReactNode;
 }
 
 export function StaffSessionGate({ session, repo, role, title, wrongRoleText, themeFallback, children }: StaffSessionGateProps) {
@@ -92,7 +92,7 @@ export function StaffSessionGate({ session, repo, role, title, wrongRoleText, th
       />
     );
   }
-  return <>{children(() => void session.logout())}</>;
+  return <>{children(() => void session.logout(), (current, next) => session.changePassword(current, next))}</>;
 }
 
 function signInError(e: unknown, wrongRoleText: (role: UserRole) => string): string {

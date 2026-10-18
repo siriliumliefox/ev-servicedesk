@@ -6,7 +6,6 @@
 """
 
 import argparse
-import logging
 import sys
 from datetime import date
 
@@ -14,6 +13,7 @@ from redis import Redis
 
 from app.core.config import get_settings
 from app.core.db import get_session_scope
+from app.core.logging import configure_logging
 from app.domain.notifications.outbox import Outbox
 from app.domain.notifications.reminders import run_maintenance_reminders
 
@@ -22,7 +22,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Напоминания о ТО (ADR 0019)")
     parser.add_argument("--date", type=date.fromisoformat, default=None)
     args = parser.parse_args(argv)
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    configure_logging()
     settings = get_settings()
     redis = Redis.from_url(settings.redis_url, decode_responses=True)
     outbox = Outbox(redis, settings.redis_channel_prefix)

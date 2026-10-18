@@ -51,9 +51,29 @@ class StaffLoginRequest(BaseModel):
 
 
 class TelegramLinkRequest(BaseModel):
-    telegram_id: Annotated[str, Field(min_length=1, max_length=50)]
+    """Данные Telegram Login Widget (ADR 0029 п. 16): `telegram_id` — поле `id` виджета.
 
-    _check_telegram_id = field_validator("telegram_id")(no_control_chars)
+    `auth_date` и `hash` в схеме контракта необязательны (аддитивно, ADR 0007), но сервер без
+    них отвечает 422: без подписи владение аккаунтом Telegram не доказано.
+    """
+
+    telegram_id: Annotated[str, Field(min_length=1, max_length=50, pattern=r"^[0-9]+$")]
+    auth_date: Annotated[int | None, Field(ge=0)] = None
+    hash: Annotated[str | None, Field(pattern=r"^[0-9a-f]{64}$")] = None
+    first_name: Annotated[str | None, Field(max_length=256)] = None
+    last_name: Annotated[str | None, Field(max_length=256)] = None
+    username: Annotated[str | None, Field(max_length=64)] = None
+    photo_url: Annotated[str | None, Field(max_length=1024)] = None
+
+    @field_validator("first_name", "last_name", "username", "photo_url")
+    @classmethod
+    def _check_text(cls, value: str | None) -> str | None:
+        return None if value is None else no_control_chars(value)
+
+
+class StaffPasswordChangeRequest(BaseModel):
+    current_password: Annotated[str, Field(min_length=1, max_length=256)]
+    new_password: Annotated[str, Field(min_length=12, max_length=128)]
 
 
 class UserPublic(BaseModel):

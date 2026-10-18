@@ -28,4 +28,4 @@ ENV WEB_CONCURRENCY=2
 EXPOSE 8000
 # Сначала проверка настроек и бакета в одном процессе (app.preflight): упавший при старте процесс
 # uvicorn супервизор перезапустил бы, и контейнер с неверной конфигурацией не завершился бы.
-CMD ["sh", "-c", "python -m app.preflight && exec uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+CMD ["sh", "-c", "python -m app.preflight && exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --no-access-log"]

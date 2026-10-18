@@ -26,6 +26,7 @@ from app.api.schemas.auth import (
     RequestCodeResponse,
     StaffLoginRequest,
     StaffLoginResponse,
+    StaffPasswordChangeRequest,
     TelegramLinkRequest,
     UserPublic,
     VerifyCodeRequest,
@@ -127,6 +128,25 @@ def staff_login(
     return StaffLoginResponse(**vars(result.tokens), user=UserPublic.model_validate(result.user))
 
 
+@router.post(
+    "/staff/password", operation_id="changeStaffPassword", **rbac(UserRole.ENGINEER, UserRole.ADMIN)
+)
+def change_staff_password(
+    body: StaffPasswordChangeRequest,
+    user: CurrentUser,
+    db: DbDep,
+    redis: RedisDep,
+    settings: SettingsDep,
+    ip: ClientIp,
+) -> AuthTokens:
+    pair = service.change_staff_password(
+        db, redis, settings, user, body.current_password, body.new_password, ip
+    )
+    return AuthTokens(**vars(pair))
+
+
 @router.post("/telegram/link", operation_id="linkTelegram", **rbac(UserRole.CLIENT))
-def link_telegram(body: TelegramLinkRequest, user: CurrentUser, db: DbDep) -> UserPublic:
-    return UserPublic.model_validate(service.link_telegram(db, user, body.telegram_id))
+def link_telegram(
+    body: TelegramLinkRequest, user: CurrentUser, db: DbDep, settings: SettingsDep
+) -> UserPublic:
+    return UserPublic.model_validate(service.link_telegram(db, settings, user, body.model_dump()))

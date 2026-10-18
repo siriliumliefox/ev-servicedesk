@@ -126,6 +126,10 @@ class Settings(BaseSettings):
     # Содержимое JSON-ключа сервисного аккаунта Firebase (не путь к файлу); вводит владелец.
     fcm_service_account_json: str = ""
     fcm_timeout_seconds: float = Field(10, gt=0, le=60)
+    # Привязка Telegram (ADR 0029 п. 16): подпись Telegram Login Widget проверяется токеном бота;
+    # без токена привязка недоступна (503). Бота и токен создаёт владелец (глава 27).
+    telegram_bot_token: str = ""
+    telegram_auth_max_age_seconds: int = Field(24 * 3600, ge=60, le=7 * 24 * 3600)
     # Worker: опрос очереди, если сигнал Redis потерян; размер пачки; повторы (ADR 0019 п. 9).
     notifications_poll_seconds: float = Field(5, gt=0, le=300)
     notifications_batch_size: int = Field(100, ge=1, le=1000)
