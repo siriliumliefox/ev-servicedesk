@@ -58,6 +58,10 @@ system-e2e/test-results/
 load/results/
 zap-results/
 
+# MemPalace (AGENTS.md): локальная настройка palace — вне git
+mempalace.yaml
+entities.json
+
 # Локальный стенд production-инфраструктуры (глава 26, scripts/infra_stack.sh)
 .infra-stand/
 deploy/rendered/
