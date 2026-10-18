@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, Response, status
 
 from app.api.deps import (
     ALL_ROLES,
+    AccessClaimsDep,
     CurrentUser,
     DbDep,
     RedisDep,
@@ -30,7 +31,7 @@ from app.api.schemas.auth import (
     VerifyCodeRequest,
     VerifyCodeResponse,
 )
-from app.domain.auth import codes, service, tokens
+from app.domain.auth import revocation, service, tokens
 from app.models.enums import UserRole
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
@@ -55,9 +56,14 @@ def _sms_limiter() -> anyio.CapacityLimiter:
 
 @router.post("/phone/request-code", operation_id="requestPhoneCode")
 async def request_phone_code(
-    body: PhoneRequestCode, redis: RedisDep, sms: SmsDep, settings: SettingsDep, ip: ClientIp
+    body: PhoneRequestCode,
+    db: DbDep,
+    redis: RedisDep,
+    sms: SmsDep,
+    settings: SettingsDep,
+    ip: ClientIp,
 ) -> RequestCodeResponse:
-    send = partial(codes.request_code, redis, sms, settings, body.phone, ip)
+    send = partial(service.request_phone_code, db, redis, sms, settings, body.phone, ip)
     ttl = await anyio.to_thread.run_sync(send, limiter=_sms_limiter())
     return RequestCodeResponse(ttl_seconds=ttl)
 
@@ -77,8 +83,10 @@ def verify_phone_code(
 
 
 @router.post("/refresh", operation_id="refreshToken")
-def refresh_token(body: RefreshRequest, db: DbDep, settings: SettingsDep) -> AuthTokens:
-    return AuthTokens(**vars(tokens.rotate(db, body.refresh_token, settings)))
+def refresh_token(
+    body: RefreshRequest, db: DbDep, redis: RedisDep, settings: SettingsDep
+) -> AuthTokens:
+    return AuthTokens(**vars(tokens.rotate(db, redis, body.refresh_token, settings)))
 
 
 @router.post(
@@ -88,8 +96,12 @@ def refresh_token(body: RefreshRequest, db: DbDep, settings: SettingsDep) -> Aut
     response_class=Response,
     **rbac(*ALL_ROLES),
 )
-def logout(body: RefreshRequest, user: CurrentUser, db: DbDep) -> Response:
+def logout(
+    body: RefreshRequest, user: CurrentUser, claims: AccessClaimsDep, db: DbDep, redis: RedisDep
+) -> Response:
+    """Выход: refresh-токен (если свой) и предъявленный access-токен (ADR 0029 п. 12)."""
     tokens.revoke(db, body.refresh_token, user.id)
+    revocation.revoke_token(redis, claims)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -100,8 +112,10 @@ def logout(body: RefreshRequest, user: CurrentUser, db: DbDep) -> Response:
     response_class=Response,
     **rbac(UserRole.CLIENT),
 )
-def withdraw_pd_consent(user: CurrentUser, db: DbDep) -> Response:
-    service.withdraw_pd_consent(db, user)
+def withdraw_pd_consent(
+    user: CurrentUser, db: DbDep, redis: RedisDep, settings: SettingsDep
+) -> Response:
+    service.withdraw_pd_consent(db, redis, settings, user)
     return Response(status_code=status.HTTP_202_ACCEPTED)
 
 

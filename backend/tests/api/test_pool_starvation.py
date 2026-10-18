@@ -13,7 +13,6 @@ from concurrent.futures import ThreadPoolExecutor
 
 import anyio.to_thread
 import pytest
-from fastapi.security import HTTPAuthorizationCredentials
 from fastapi.testclient import TestClient
 from redis import Redis
 from sqlalchemy import Engine, create_engine, delete
@@ -24,7 +23,7 @@ from app.api.deps import get_current_user
 from app.core.config import Settings, get_settings
 from app.core.db import get_db
 from app.core.redis import get_redis
-from app.core.security import create_access_token
+from app.core.security import create_access_token, decode_access_token
 from app.main import create_app
 from app.models import AppUser
 from app.models.enums import UserRole
@@ -58,9 +57,7 @@ def test_auth_dependency_returns_connection_to_pool(migrated_engine: Engine, use
     settings = api_settings()
     token = create_access_token(user_id, "client", settings)
     with Session(migrated_engine, expire_on_commit=False) as db:
-        user = get_current_user(
-            db, settings, HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
-        )
+        user = get_current_user(db, decode_access_token(token, settings))
         assert user.id == user_id and user.phone == PHONE, "объект пользователя не сброшен"
         assert not db.in_transaction(), "соединение удерживается до следующего захода в пул потоков"
 

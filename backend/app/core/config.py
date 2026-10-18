@@ -52,8 +52,11 @@ class Settings(BaseSettings):
     sms_requests_per_phone_hour: int = Field(5, ge=1)
     sms_requests_per_ip_hour: int = Field(30, ge=1)
     verify_failures_per_phone_day: int = Field(20, ge=1)
-    staff_login_failures_per_phone_15min: int = Field(5, ge=1)
+    # Вход сотрудника (ADR 0029 п. 11): неудачи по паре «номер + IP» — злоумышленник со своего
+    # адреса не запирает сотрудника; общий потолок на номер — против распределённого подбора.
+    staff_login_failures_per_phone_ip_15min: int = Field(5, ge=1)
     staff_login_failures_per_ip_15min: int = Field(20, ge=1)
+    staff_login_failures_per_phone_hour: int = Field(300, ge=1)
     # Попытки POST /vehicles: 409 отвечает «VIN уже зарегистрирован» — защита от перебора VIN
     # (ПД, ADR 0005, ADR 0014).
     vehicle_create_per_user_hour: int = Field(10, ge=1)

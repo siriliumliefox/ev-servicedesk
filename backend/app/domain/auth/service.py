@@ -1,5 +1,6 @@
 """Сценарии Auth Service (Глава 10): вход по SMS, вход персонала, согласие ПД, Telegram."""
 
+import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -13,9 +14,15 @@ from app.core.config import Settings
 from app.core.errors import ApiError, rate_limited, unauthorized
 from app.core.security import verify_password
 from app.domain.auth import codes, tokens
+from app.domain.auth.sms import SmsProvider, mask_phone
 from app.domain.notifications.service import revoke_all_tokens as revoke_all_push_tokens
 from app.models import AppUser, PdConsent
 from app.models.enums import STAFF_ROLES, UserRole
+
+logger = logging.getLogger(__name__)
+
+STAFF_WINDOW = 15 * 60
+HOUR = 3600
 
 
 @dataclass(frozen=True)
@@ -29,6 +36,24 @@ def _active_consent(db: Session, user_id: int) -> PdConsent | None:
     return db.scalars(
         select(PdConsent).where(PdConsent.user_id == user_id, PdConsent.withdrawn_at.is_(None))
     ).one_or_none()
+
+
+def request_phone_code(
+    db: Session,
+    redis: Redis,
+    sms: SmsProvider,
+    settings: Settings,
+    phone: str,
+    client_ip: str,
+) -> int:
+    """POST /auth/phone/request-code: код входа; заблокированному и сотруднику — без SMS (#103)."""
+    user = db.execute(
+        select(AppUser.role, AppUser.is_active).where(AppUser.phone == phone)
+    ).one_or_none()
+    # Соединение — обратно в пул до отправки SMS: ответ A1 ждётся секунды (ADR 0028 п. 18).
+    db.commit()
+    deliver = user is None or (user.role is UserRole.CLIENT and user.is_active)
+    return codes.request_code(redis, sms, settings, phone, client_ip, deliver=deliver)
 
 
 def verify_phone_code(
@@ -102,38 +127,66 @@ def staff_login(
     db: Session, redis: Redis, settings: Settings, phone: str, password: str, client_ip: str
 ) -> LoginResult:
     """POST /auth/staff/login: пароль argon2id, лимит неудачных попыток (N-06, N-08)."""
-    # Попытка учитывается ДО проверки пароля: параллельные запросы не обходят лимит.
-    # Успешный вход возвращает попытку — счётчики считают только неудачи.
-    window = 15 * 60
-    phone_key, ip_key = f"staff-fail:{phone}", f"staff-fail-ip:{client_ip}"
-    # Оба счётчика растут до проверки любого из них, поэтому не `rate_limit.enforce`.
-    by_phone = rate_limit.hit(redis, phone_key, window)
-    by_ip = rate_limit.hit(redis, ip_key, window)
-    if by_phone.exceeded(settings.staff_login_failures_per_phone_15min):
-        raise rate_limited(by_phone.retry_after, "Слишком много неудачных попыток входа")
+    user = _check_password(db, redis, settings, phone, password, client_ip)
+    pair = tokens.issue_pair(db, user, settings)
+    db.commit()
+    return LoginResult(tokens=pair, user=user)
+
+
+def _failure_keys(phone: str, client_ip: str) -> tuple[str, str, str]:
+    """Счётчики неудач (ADR 0029 п. 11): «номер + IP», IP, номер за час."""
+    return f"staff-fail:{phone}:{client_ip}", f"staff-fail-ip:{client_ip}", f"staff-fail-h:{phone}"
+
+
+def clear_login_failures(redis: Redis, phone: str | None) -> None:
+    """Сброс и смена пароля снимают блокировку входа номера со всех адресов."""
+    if phone is None:
+        return
+    pattern = f"{rate_limit.PREFIX}staff-fail:{phone}:*"
+    keys = list(redis.scan_iter(match=pattern, count=500))
+    redis.delete(rate_limit.PREFIX + f"staff-fail-h:{phone}", *keys)
+
+
+def _check_password(
+    db: Session, redis: Redis, settings: Settings, phone: str, password: str, client_ip: str
+) -> AppUser:
+    """Доступный сотрудник с этим номером и паролем, иначе 401; лимиты неудач — 429.
+
+    Попытка учитывается ДО проверки пароля: параллельные запросы не обходят лимит. Успешная
+    проверка возвращает попытку — счётчики считают только неудачи.
+    """
+    pair_key, ip_key, phone_key = _failure_keys(phone, client_ip)
+    # Все счётчики растут до проверки любого из них, поэтому не `rate_limit.enforce`.
+    by_pair = rate_limit.hit(redis, pair_key, STAFF_WINDOW)
+    by_ip = rate_limit.hit(redis, ip_key, STAFF_WINDOW)
+    by_phone = rate_limit.hit(redis, phone_key, HOUR)
+    if by_pair.exceeded(settings.staff_login_failures_per_phone_ip_15min):
+        raise rate_limited(by_pair.retry_after, "Слишком много неудачных попыток входа")
     if by_ip.exceeded(settings.staff_login_failures_per_ip_15min):
         raise rate_limited(by_ip.retry_after, "Слишком много неудачных попыток входа")
+    if by_phone.exceeded(settings.staff_login_failures_per_phone_hour):
+        if by_phone.count == settings.staff_login_failures_per_phone_hour + 1:
+            logger.warning("Подбор пароля сотрудника с разных адресов: %s", mask_phone(phone))
+        raise rate_limited(by_phone.retry_after, "Слишком много неудачных попыток входа")
 
     user = db.scalars(select(AppUser).where(AppUser.phone == phone)).one_or_none()
     password_hash = user.password_hash if user is not None else None
     ok = verify_password(password, password_hash)  # считаем всегда — время не выдаёт номер
     if not ok or user is None or user.role not in STAFF_ROLES or not user.is_available:
         raise unauthorized("Неверный телефон или пароль")
-
-    rate_limit.reset(redis, phone_key)
+    rate_limit.reset(redis, pair_key)
     rate_limit.undo_hit(redis, ip_key)
-    pair = tokens.issue_pair(db, user, settings)
-    db.commit()
-    return LoginResult(tokens=pair, user=user)
+    rate_limit.undo_hit(redis, phone_key)
+    return user
 
 
-def end_all_sessions(db: Session, user_id: int) -> None:
-    """Отзыв согласия и блокировка: все refresh-токены и push-токены (без COMMIT)."""
-    tokens.revoke_all(db, user_id)
+def end_all_sessions(db: Session, redis: Redis, settings: Settings, user_id: int) -> None:
+    """Отзыв согласия и блокировка: все сессии (refresh и access) и push-токены (без COMMIT)."""
+    tokens.revoke_all(db, redis, settings, user_id)
     revoke_all_push_tokens(db, user_id)
 
 
-def withdraw_pd_consent(db: Session, user: AppUser) -> None:
+def withdraw_pd_consent(db: Session, redis: Redis, settings: Settings, user: AppUser) -> None:
     """DELETE /auth/pd-consent (99-З, ст. 10): отзыв + завершение всех сессий и push-токенов.
 
     Очередь анонимизации (≤ 15 дней, глава 25) — пользователи БЕЗ действующего согласия,
@@ -149,7 +202,7 @@ def withdraw_pd_consent(db: Session, user: AppUser) -> None:
     if consent is None:
         raise ApiError(409, "PD_CONSENT_NOT_ACTIVE", "Действующего согласия нет")
     consent.withdrawn_at = datetime.now(UTC)
-    end_all_sessions(db, user.id)  # ADR 0019 п. 8
+    end_all_sessions(db, redis, settings, user.id)  # ADR 0019 п. 8
     db.commit()
 
 

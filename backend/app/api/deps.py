@@ -20,8 +20,9 @@ from app.core.config import Settings, get_settings
 from app.core.db import SessionScope, get_db, get_session_scope
 from app.core.errors import forbidden, unauthorized
 from app.core.redis import get_redis
-from app.core.security import InvalidTokenError, decode_access_token
+from app.core.security import AccessClaims, InvalidTokenError, decode_access_token
 from app.core.storage import ObjectStorage, get_storage
+from app.domain.auth import revocation
 from app.domain.auth.sms import SmsProvider, get_sms_provider_for
 from app.domain.notifications.outbox import Outbox
 from app.domain.tickets.events import TicketEvents
@@ -92,18 +93,28 @@ def client_ip(connection: HTTPConnection) -> str:
     return connection.client.host if connection.client else "unknown"
 
 
-def get_current_user(
-    db: DbDep,
+def get_access_claims(
     settings: SettingsDep,
+    redis: RedisDep,
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
-) -> AppUser:
-    """Пользователь из access-токена. Роль и активность берутся из БД, не из токена."""
+) -> AccessClaims:
+    """Проверенный access-токен: подпись, срок, тип и отзыв (ADR 0029 п. 12)."""
     if credentials is None or credentials.scheme.lower() != "bearer":
         raise unauthorized()
     try:
         claims = decode_access_token(credentials.credentials, settings)
     except InvalidTokenError as exc:
         raise unauthorized("Недействительный или просроченный токен") from exc
+    if revocation.is_revoked(redis, claims):
+        raise unauthorized("Сессия завершена — войдите заново")
+    return claims
+
+
+AccessClaimsDep = Annotated[AccessClaims, Depends(get_access_claims)]
+
+
+def get_current_user(db: DbDep, claims: AccessClaimsDep) -> AppUser:
+    """Пользователь из access-токена. Роль и активность берутся из БД, не из токена."""
     user = db.get(AppUser, claims.user_id)
     # Соединение — обратно в пул до следующего захода в пул потоков (зависимости RBAC, сам
     # обработчик): иначе запрос держит его, ожидая поток, и на пике пулы блокируют друг друга

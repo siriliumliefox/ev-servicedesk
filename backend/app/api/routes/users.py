@@ -4,7 +4,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Path, Query, Response, status
 
-from app.api.deps import ALL_ROLES, CurrentUser, DbDep, rbac
+from app.api.deps import ALL_ROLES, CurrentUser, DbDep, RedisDep, SettingsDep, rbac
 from app.api.pagination import PageDep, paginate
 from app.api.schemas.auth import (
     StaffUserCreateRequest,
@@ -55,8 +55,11 @@ def get_user(user_id: UserId, db: DbDep) -> UserPublic:
 
 
 @router.patch("/users/{userId}", operation_id="updateUser", **rbac(UserRole.ADMIN))
-def update_user(user_id: UserId, body: UserUpdateRequest, db: DbDep) -> UserPublic:
-    return UserPublic.model_validate(service.update_user(db, user_id, body.role, body.is_active))
+def update_user(
+    user_id: UserId, body: UserUpdateRequest, db: DbDep, redis: RedisDep, settings: SettingsDep
+) -> UserPublic:
+    user = service.update_user(db, redis, settings, user_id, body.role, body.is_active)
+    return UserPublic.model_validate(user)
 
 
 @router.post(
@@ -66,6 +69,12 @@ def update_user(user_id: UserId, body: UserUpdateRequest, db: DbDep) -> UserPubl
     response_class=Response,
     **rbac(UserRole.ADMIN),
 )
-def reset_user_password(user_id: UserId, body: UserPasswordResetRequest, db: DbDep) -> Response:
-    service.reset_password(db, user_id, body.password)
+def reset_user_password(
+    user_id: UserId,
+    body: UserPasswordResetRequest,
+    db: DbDep,
+    redis: RedisDep,
+    settings: SettingsDep,
+) -> Response:
+    service.reset_password(db, redis, settings, user_id, body.password)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

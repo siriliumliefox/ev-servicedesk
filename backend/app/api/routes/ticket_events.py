@@ -8,7 +8,8 @@
 пропущенное через REST. События приходят из Redis pub/sub (несколько экземпляров backend)
 через общую подписку процесса (`app.core.pubsub.PubSubHub`); на каждом событии пользователь
 и доступ к тикету проверяются заново: потерявший доступ при смене исполнителя закрывается
-4403, деактивированный — 4401. По истечении access-токена — 4401.
+4403, деактивированный — 4401. По истечении и при отзыве access-токена (выход, смена
+пароля — ADR 0029 п. 12) — 4401.
 
 Лимиты: попытки подключения с IP (`ws_connects_per_ip_minute`, Redis) и одновременные
 подключения пользователя (`ws_max_sockets_per_user`, Redis — общий для всех процессов) — сверх
@@ -51,6 +52,7 @@ from app.core.db import SessionScope
 from app.core.errors import ApiError, rate_limited, unauthorized
 from app.core.pubsub import Listener, PubSubHub, SlowSubscriberError, get_pubsub_hub
 from app.core.security import AccessClaims, InvalidTokenError, decode_access_token
+from app.domain.auth import revocation
 from app.domain.tickets import access, service
 from app.domain.tickets.events import MessageCreated, TicketEvents, TicketUpdated, parse
 
@@ -124,7 +126,13 @@ class _AuthMessage(BaseModel, extra="forbid"):
     access_token: StrictStr = Field(min_length=1)
 
 
-async def _authenticate(websocket: WebSocket, settings: Settings) -> AccessClaims:
+def _check_token(redis: Redis, claims: AccessClaims) -> None:
+    """Access-токен не отозван (выход, смена пароля, блокировка) — иначе 401."""
+    if revocation.is_revoked(redis, claims):
+        raise unauthorized("Сессия завершена — войдите заново")
+
+
+async def _authenticate(websocket: WebSocket, settings: Settings, redis: Redis) -> AccessClaims:
     try:
         message = await asyncio.wait_for(websocket.receive(), settings.ws_auth_timeout_seconds)
     except TimeoutError as exc:
@@ -136,9 +144,11 @@ async def _authenticate(websocket: WebSocket, settings: Settings) -> AccessClaim
         raise unauthorized()
     try:
         token = _AuthMessage.model_validate_json(text).access_token
-        return decode_access_token(token, settings)
+        claims = decode_access_token(token, settings)
     except (ValidationError, InvalidTokenError) as exc:
         raise unauthorized() from exc
+    await run_in_threadpool(_check_token, redis, claims)
+    return claims
 
 
 def _check_user(scope: SessionScope, user_id: int) -> None:
@@ -185,6 +195,7 @@ async def _forward(
     websocket: WebSocket,
     listener: Listener,
     scope: SessionScope,
+    redis: Redis,
     claims: AccessClaims,
     ticket_id: int,
     presign: Presign,
@@ -196,6 +207,7 @@ async def _forward(
         if remaining <= 0:
             raise unauthorized("Срок действия токена истёк")
         data = await listener.get(timeout=min(remaining, LISTEN_TIMEOUT_SECONDS))
+        await run_in_threadpool(_check_token, redis, claims)
         if data is None:
             await run_in_threadpool(_check_user, scope, claims.user_id)
             continue
@@ -211,12 +223,15 @@ async def _relay(
     websocket: WebSocket,
     listener: Listener,
     scope: SessionScope,
+    redis: Redis,
     claims: AccessClaims,
     ticket_id: int,
     presign: Presign,
 ) -> None:
     """Доставка до закрытия: возврат — клиент отключился сам, иначе исключение доставки."""
-    forward = asyncio.create_task(_forward(websocket, listener, scope, claims, ticket_id, presign))
+    forward = asyncio.create_task(
+        _forward(websocket, listener, scope, redis, claims, ticket_id, presign)
+    )
     drain = asyncio.create_task(_drain(websocket))
     try:
         await asyncio.wait({forward, drain}, return_when=asyncio.FIRST_COMPLETED)
@@ -289,7 +304,7 @@ async def _serve(
         settings.ws_connects_per_ip_minute,
         "Слишком много попыток подключения",
     )
-    claims = await _authenticate(websocket, settings)
+    claims = await _authenticate(websocket, settings, redis)
     async with _user_socket(redis, claims.user_id, settings.ws_max_sockets_per_user):
         ticket_id = _ticket_id(ticket_ref)
         await run_in_threadpool(_check_access, scope, claims.user_id, ticket_id)
@@ -297,6 +312,6 @@ async def _serve(
         # проверкой и подпиской ловит проверка на следующем событии и REST после `ready`.
         listener = await hub.subscribe(events.channel(ticket_id))
         try:
-            await _relay(websocket, listener, scope, claims, ticket_id, presign)
+            await _relay(websocket, listener, scope, redis, claims, ticket_id, presign)
         finally:
             hub.unsubscribe(listener)

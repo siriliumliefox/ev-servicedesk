@@ -30,6 +30,8 @@ class AccessClaims:
     user_id: int
     role: str
     expires_at: datetime
+    issued_at_ms: int  # время выпуска, мс: отзыв «все токены до момента T» (ADR 0029 п. 12)
+    jti: str  # id токена: список отозванных при выходе
 
 
 def create_access_token(
@@ -43,6 +45,9 @@ def create_access_token(
         "iss": settings.jwt_issuer,
         "aud": settings.jwt_audience,
         "iat": int(now.timestamp()),
+        # iat — целые секунды; для отзыва нужна точность выше: новая пара после смены пароля
+        # выпускается в ту же секунду, что и отзыв прежних токенов.
+        "iat_ms": int(now.timestamp() * 1000),
         "exp": int((now + timedelta(seconds=settings.access_token_ttl_seconds)).timestamp()),
         "jti": uuid.uuid4().hex,
     }
@@ -57,7 +62,7 @@ def decode_access_token(token: str, settings: Settings) -> AccessClaims:
             algorithms=[JWT_ALGORITHM],  # фиксированный алгоритм: защита от alg=none/подмены
             audience=settings.jwt_audience,
             issuer=settings.jwt_issuer,
-            options={"require": ["sub", "exp", "iat", "typ", "role"]},
+            options={"require": ["sub", "exp", "iat", "typ", "role", "jti"]},
         )
     except jwt.PyJWTError as exc:
         raise InvalidTokenError(type(exc).__name__) from exc
@@ -71,6 +76,9 @@ def decode_access_token(token: str, settings: Settings) -> AccessClaims:
         user_id=user_id,
         role=str(payload["role"]),
         expires_at=datetime.fromtimestamp(payload["exp"], UTC),
+        # Токены без iat_ms (выпущены до главы 25) — по началу секунды выпуска.
+        issued_at_ms=int(payload.get("iat_ms", int(payload["iat"]) * 1000)),
+        jti=str(payload["jti"]),
     )
 
 

@@ -10,6 +10,8 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_sms_provider
+from app.core.security import create_access_token
+from app.domain.auth.codes import code_key
 from app.domain.auth.sms import SmsError
 from app.models import AppUser, PdConsent, RefreshToken
 from app.models.enums import UserRole
@@ -22,6 +24,7 @@ from tests.api.conftest import (
 )
 
 PHONE = "+375291112233"
+OTHER = "+375291112244"
 
 
 def test_register_verify_access_refresh_logout(client, sms, db: Session):
@@ -156,9 +159,30 @@ def test_new_policy_version_replaces_consent(client, sms, db: Session, make_clie
     assert len(rows) == 2 and [c.policy_version for c in active] == ["2027-01"]
 
 
-def test_disabled_client_cannot_login(client, sms, make_client_user):
-    make_client_user(PHONE, active=False)
+@pytest.mark.parametrize("kind", ["blocked-client", "staff", "blocked-staff"])
+def test_no_sms_for_blocked_client_or_staff(
+    client, sms, real_redis, make_client_user, make_staff, kind
+):
+    """#103 (ADR 0029 п. 15): ответ как обычно, но код не создаётся и платное SMS не уходит."""
+    if kind == "blocked-client":
+        make_client_user(PHONE, active=False)
+    else:
+        make_staff(PHONE, active=kind == "staff")
+    r = client.post(f"{API}/auth/phone/request-code", json={"phone": PHONE})
+    assert r.status_code == 200 and r.json() == {"ttl_seconds": 120}
+    assert sms.sent_count == 0 and not real_redis.exists(code_key(PHONE))
+    # Тот же ответ, что и у свободного номера: состояние номера не раскрывается.
+    assert client.post(f"{API}/auth/phone/request-code", json={"phone": OTHER}).json() == r.json()
+    r = client.post(f"{API}/auth/phone/verify-code", json={"phone": PHONE, "code": "0000"})
+    assert r.status_code == 400 and r.json()["error"]["code"] == "CODE_EXPIRED"
+
+
+def test_disabled_client_cannot_login(client, sms, make_client_user, db: Session):
+    """Вторая линия: заблокирован после выпуска кода — вход по коду отклоняется."""
+    user = make_client_user(PHONE)
     client.post(f"{API}/auth/phone/request-code", json={"phone": PHONE})
+    user.is_active = False
+    db.commit()
     r = client.post(
         f"{API}/auth/phone/verify-code", json={"phone": PHONE, "code": code_from(sms, PHONE)}
     )
@@ -166,8 +190,9 @@ def test_disabled_client_cannot_login(client, sms, make_client_user):
 
 
 def test_staff_cannot_use_sms_login(client, sms, make_staff):
-    make_staff(PHONE)
+    """Вторая линия: номер стал служебным после выпуска кода — входа по SMS нет."""
     client.post(f"{API}/auth/phone/request-code", json={"phone": PHONE})
+    make_staff(PHONE)
     r = client.post(
         f"{API}/auth/phone/verify-code",
         json={"phone": PHONE, "code": code_from(sms, PHONE), "pd_policy_version": POLICY},
@@ -248,7 +273,7 @@ def test_unknown_refresh_token_401(client):
     assert r.status_code == 401
 
 
-def test_withdraw_pd_consent(client, login_client, db: Session):
+def test_withdraw_pd_consent(client, login_client, db: Session, settings):
     session = login_client(PHONE)
     headers = bearer(session["access_token"])
     r = client.delete(f"{API}/auth/pd-consent", headers=headers)
@@ -258,7 +283,10 @@ def test_withdraw_pd_consent(client, login_client, db: Session):
     # Все refresh-токены отозваны.
     r = client.post(f"{API}/auth/refresh", json={"refresh_token": session["refresh_token"]})
     assert r.status_code == 401
-    r = client.delete(f"{API}/auth/pd-consent", headers=headers)
+    # И выданный access-токен (ADR 0029 п. 12).
+    assert client.delete(f"{API}/auth/pd-consent", headers=headers).status_code == 401
+    later = bearer(create_access_token(session["user"]["id"], "client", settings))
+    r = client.delete(f"{API}/auth/pd-consent", headers=later)
     assert r.status_code == 409 and r.json()["error"]["code"] == "PD_CONSENT_NOT_ACTIVE"
 
 

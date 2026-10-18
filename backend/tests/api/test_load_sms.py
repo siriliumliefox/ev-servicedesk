@@ -7,9 +7,12 @@ ASGI-приложение целиком (роутинг, пул потоков,
 
 import asyncio
 import time
+from collections.abc import AsyncIterator
 
 import httpx
 import pytest
+from sqlalchemy import Engine
+from sqlalchemy.orm import Session
 
 from app.api.deps import get_sms_provider
 from app.core.config import Settings, get_settings
@@ -39,13 +42,24 @@ def load_settings(**overrides) -> Settings:
 
 
 @pytest.fixture
-def load_app(real_redis, sms):
+def request_db(migrated_engine: Engine):
+    """Своя сессия на запрос, как в приложении: request-code читает номер (ADR 0029 п. 15)."""
+
+    async def _db() -> AsyncIterator[Session]:
+        with Session(migrated_engine) as session:
+            yield session
+
+    return _db
+
+
+@pytest.fixture
+def load_app(real_redis, sms, request_db):
     settings = load_settings()
     application = create_app(settings)
     application.dependency_overrides[get_settings] = lambda: settings
     application.dependency_overrides[get_redis] = lambda: real_redis
     application.dependency_overrides[get_sms_provider] = lambda: sms
-    application.dependency_overrides[get_db] = lambda: None  # request-code не ходит в БД
+    application.dependency_overrides[get_db] = request_db
     return application
 
 
@@ -60,7 +74,7 @@ def test_50_concurrent_sms_requests(load_app, real_redis, sms):
     print(f"\n50 запросов кода: {elapsed:.2f} с, ошибок 0")
 
 
-def test_50_concurrent_sms_requests_through_a1_rate_limit(real_redis):
+def test_50_concurrent_sms_requests_through_a1_rate_limit(real_redis, request_db):
     """Адаптер A1 при 10 rps: все 50 запросов успешны, к провайдеру — не чаще 10 в секунду."""
     stamps: list[float] = []
 
@@ -76,6 +90,7 @@ def test_50_concurrent_sms_requests_through_a1_rate_limit(real_redis):
     application.dependency_overrides[get_settings] = lambda: settings
     application.dependency_overrides[get_redis] = lambda: real_redis
     application.dependency_overrides[get_sms_provider] = lambda: provider
+    application.dependency_overrides[get_db] = request_db
 
     started = time.monotonic()
     responses = asyncio.run(fire(application))

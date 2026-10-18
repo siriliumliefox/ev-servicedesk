@@ -2703,7 +2703,19 @@ files = [
     {file = "websockets-17.1.tar.gz", hash = "sha256:acfea4c20bf54384883ea33b1240fc1db4f52e190823a4e2b334bc3e8bfca96a"},
 ]
 
+[[package]]
+name = "zxcvbn"
+version = "4.5.0"
+description = ""
+optional = false
+python-versions = "*"
+groups = ["main"]
+files = [
+    {file = "zxcvbn-4.5.0-py2.py3-none-any.whl", hash = "sha256:2b6eed621612ce6d65e6e4c7455b966acee87d0280e257956b1f06ccc66bd5ff"},
+    {file = "zxcvbn-4.5.0.tar.gz", hash = "sha256:70392c0fff39459d7f55d0211151401e79e76fcc6e2c22b61add62900359c7c1"},
+]
+
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12,<4.0"
-content-hash = "b0363c1e80e81114ea74979136802493cc767bed06de70496a36b088bf79c989"
+content-hash = "89c478a6dd6e7f1956cd0253f0ebf4b16f7bb0495699d5f213282b98b0a8b64e"

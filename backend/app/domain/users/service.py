@@ -12,15 +12,17 @@ refresh-токены и push-токены пользователя; запрос
 систему без администратора.
 """
 
+from redis import Redis
 from sqlalchemy import Select, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.config import Settings
 from app.core.db import constraint_name, escape_like, get_by_id
 from app.core.errors import ApiError
 from app.core.security import hash_password
-from app.domain.auth import tokens
-from app.domain.auth.service import end_all_sessions
+from app.domain.auth import passwords, tokens
+from app.domain.auth.service import clear_login_failures, end_all_sessions
 from app.models import AppUser
 from app.models.enums import STAFF_ROLES, UserRole
 
@@ -54,8 +56,9 @@ def create_staff_user(db: Session, phone: str, role: UserRole, password: str) ->
     """POST /users и CLI первого администратора: сотрудник с паролем argon2id (N-08).
 
     Телефон занят (клиентом или сотрудником, в том числе параллельным запросом) — 409:
-    решает UNIQUE телефона, без предварительного поиска.
+    решает UNIQUE телефона, без предварительного поиска. Слабый пароль — 422 (ADR 0029 п. 13).
     """
+    passwords.ensure_strong(password, phone)
     user = AppUser(phone=phone, role=role, password_hash=hash_password(password))
     db.add(user)
     try:
@@ -81,7 +84,12 @@ def _lock_active_admins(db: Session) -> list[int]:
 
 
 def update_user(
-    db: Session, user_id: int, role: UserRole | None, is_active: bool | None
+    db: Session,
+    redis: Redis,
+    settings: Settings,
+    user_id: int,
+    role: UserRole | None,
+    is_active: bool | None,
 ) -> AppUser:
     """PATCH /users/{id}: роль engineer ↔ admin и блокировка/разблокировка."""
     user = get_user(db, user_id)
@@ -109,14 +117,17 @@ def update_user(
     user.role = new_role
     user.is_active = new_active
     if blocking:
-        end_all_sessions(db, user.id)
+        end_all_sessions(db, redis, settings, user.id)
     db.commit()
     db.refresh(user)
     return user
 
 
-def reset_password(db: Session, user_id: int, password: str) -> None:
-    """POST /users/{id}/password: новый пароль сотрудника, все его refresh-токены отзываются.
+def reset_password(
+    db: Session, redis: Redis, settings: Settings, user_id: int, password: str
+) -> None:
+    """POST /users/{id}/password: новый пароль сотрудника; все его сессии (refresh и access)
+    отзываются, счётчики неудачных входов номера сбрасываются (ADR 0029 пп. 11–12).
 
     Анонимизированный — 404 (данных пользователя нет); клиент — 409 (пароля у него нет).
     Push-токены не трогаем: они только у клиентов.
@@ -128,6 +139,8 @@ def reset_password(db: Session, user_id: int, password: str) -> None:
         raise _not_found()
     if user.role not in STAFF_ROLES:
         raise ApiError(409, "PASSWORD_NOT_ALLOWED", "У клиента нет пароля: вход по SMS-коду")
+    passwords.ensure_strong(password, user.phone)
     user.password_hash = hash_password(password)
-    tokens.revoke_all(db, user.id)
+    tokens.revoke_all(db, redis, settings, user.id)
     db.commit()
+    clear_login_failures(redis, user.phone)

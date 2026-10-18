@@ -224,9 +224,10 @@ def test_blocking_client_ends_sessions_and_push(client, as_staff, login_client, 
 def test_blocked_client_cannot_log_in_until_unblocked(client, as_staff, make_client_user, sms):
     admin_headers, _ = as_staff(ADMIN, UserRole.ADMIN)
     user = make_client_user(CLIENT)
-    assert patch(client, admin_headers, user.id, is_active=False).status_code == 200
+    # Код выпущен до блокировки: заблокированному SMS уже не отправляется (#103).
     client.post(f"{API}/auth/phone/request-code", json={"phone": CLIENT})
     body = {"phone": CLIENT, "code": code_from(sms, CLIENT)}
+    assert patch(client, admin_headers, user.id, is_active=False).status_code == 200
     r = client.post(f"{API}/auth/phone/verify-code", json=body)
     assert r.status_code == 400 and r.json()["error"]["code"] == "ACCOUNT_DISABLED"
     # Отказ не расходует код: после разблокировки тот же код входит.
@@ -277,7 +278,7 @@ def test_blocked_engineer_keeps_tickets_until_reassigned(client, as_staff, as_cl
 # ---------- Гонка: последний администратор ----------
 
 
-def test_parallel_demotions_keep_one_admin(migrated_engine):
+def test_parallel_demotions_keep_one_admin(migrated_engine, real_redis, settings):
     """Два администратора одновременно понижают друг друга: один получает 409 LAST_ADMIN.
 
     Без блокировки строк всех активных администраторов оба видят «администраторов два» и
@@ -298,7 +299,9 @@ def test_parallel_demotions_keep_one_admin(migrated_engine):
     def demote(target: int):
         def run():
             with Session(migrated_engine) as s:
-                return service.update_user(s, target, UserRole.ENGINEER, None).role
+                return service.update_user(
+                    s, real_redis, settings, target, UserRole.ENGINEER, None
+                ).role
 
         return run
 

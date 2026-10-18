@@ -184,6 +184,7 @@ def test_forged_role_claim_ignored(client, make_client_user, settings):
             "aud": settings.jwt_audience,
             "iat": int(now.timestamp()),
             "exp": int((now + timedelta(minutes=5)).timestamp()),
+            "jti": "forged-role",
         },
         settings.jwt_secret,
         algorithm="HS256",
