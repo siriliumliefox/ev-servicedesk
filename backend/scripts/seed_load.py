@@ -317,7 +317,7 @@ def sessions(db: Session, settings: Settings) -> dict[str, Any]:
             model: release
             for model, release in db.execute(
                 text("SELECT vehicle_model_id, id FROM firmware_release WHERE version = '1.1.0'")
-            ).tuples()
+            )
         },
     }
     db.commit()
