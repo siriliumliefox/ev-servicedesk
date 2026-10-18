@@ -13,7 +13,7 @@ dependencies:
   flutter:
     sdk: flutter
   http: ^1.2.0
-  flutter_secure_storage: ^9.2.0   # refresh-токен в Keychain/Keystore (Глава 18, ADR 0022)
+  flutter_secure_storage: ^11.2.0   # refresh-токен в Keychain/Keystore (Глава 18, ADR 0022)
   shared_preferences: ^2.3.0       # метка первого запуска: очистка Keychain после переустановки
   firebase_core: ^4.0.0            # push: инициализация Firebase (Глава 15, ADR 0019)
   firebase_messaging: ^16.7.0      # push: 16.x — UIScene (iOS), иначе нажатие на push теряется (Глава 20)
