@@ -54,10 +54,15 @@ class FirebasePushChannel implements PushChannel {
       await Future<void>.delayed(const Duration(seconds: 2));
       if (await _messaging.getAPNSToken() == null) return null;
     }
+    // firebase_messaging 17: getToken/onTokenRefresh устарели в пользу register()/onRegistered, но те выдают
+    // FID для direct-send, а backend шлёт FCM HTTP v1 по registration token (message.token, ADR 0019).
+    // Переход на FID — отдельное решение вместе с backend; до него — токен, как раньше.
+    // ignore: deprecated_member_use
     return _messaging.getToken();
   }
 
   @override
+  // ignore: deprecated_member_use
   Stream<String> get tokenRefresh => _messaging.onTokenRefresh;
 
   @override
