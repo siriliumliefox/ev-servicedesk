@@ -220,7 +220,7 @@ jobs:
           poetry run pip install --quiet pip-audit==2.10.1
           poetry run pip-audit --skip-editable --desc
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
 
