@@ -4,6 +4,7 @@
 """
 
 import json
+import random
 import time
 
 import httpx
@@ -238,6 +239,8 @@ def test_fake_sender_emulates_fcm_latency_and_error_shares():
     )
     sender = get_push_sender(settings)
     assert isinstance(sender, EmulatedFcmSender)
+    # Доли ошибок — выборка из 400: без фиксированного зерна изредка выходила за ±3σ (CI главы 25).
+    random.seed(20261018)
     outcomes = []
     started = time.perf_counter()
     for i in range(400):
