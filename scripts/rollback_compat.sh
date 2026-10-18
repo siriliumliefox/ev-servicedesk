@@ -63,6 +63,12 @@ before="$(docker exec "$PG" psql -U ev -d ev -Atc 'select version_num from alemb
 run_app "$CANDIDATE" alembic upgrade head >/dev/null 2>&1 || { echo "FAIL  миграции кандидата"; exit 1; }
 after="$(docker exec "$PG" psql -U ev -d ev -Atc 'select version_num from alembic_version')"
 echo "PASS  схема предыдущего выпуска $before → кандидата $after"
+# Самопроверка стража (мутация): ROLLBACK_COMPAT_MUTATION_SQL — «несовместимая миграция» после кандидата,
+# например `ALTER TABLE app_user DROP COLUMN telegram_id` — страж обязан упасть.
+if [[ -n "${ROLLBACK_COMPAT_MUTATION_SQL:-}" ]]; then
+  docker exec "$PG" psql -U ev -d ev -v ON_ERROR_STOP=1 -qc "$ROLLBACK_COMPAT_MUTATION_SQL"
+  echo "INFO  мутация схемы: $ROLLBACK_COMPAT_MUTATION_SQL"
+fi
 
 docker run -d --name "$API" --network "$NET" "${app_env[@]}" -p "127.0.0.1:$PORT:8000" "$PREVIOUS" >/dev/null
 ok=""
