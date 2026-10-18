@@ -289,6 +289,8 @@ check "миграции образа применяются (alembic upgrade hea
 check "контрольный набор аналитики загружен" "$r" ok
 docker exec "$NAME" python -m app.workers.analytics --once >/dev/null 2>&1 && r=ok || r=failed
 check "worker аналитики: витрина обновлена (--once)" "$r" ok
+docker exec "$NAME" python -m app.workers.privacy --once >/dev/null 2>&1 && r=ok || r=failed
+check "worker ПД: проход анонимизации и сроков хранения (--once)" "$r" ok
 control=$("${CONTROL[@]}" verify --base "http://$NAME:8000" 2>&1) && r=ok || r=failed
 redact <<<"$control" | grep -E '^(PASS|FAIL|      )' || true
 check "показатели аналитики совпадают с ручным расчётом (14 запросов)" \

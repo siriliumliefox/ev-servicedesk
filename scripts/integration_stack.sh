@@ -114,7 +114,7 @@ if ! "${COMPOSE[@]}" up -d --no-build --wait --wait-timeout 180 >/dev/null 2>&1;
 fi
 echo "PASS  стек поднят: миграции применены, API здоров, worker'ы работают"
 
-for svc in notifications-worker analytics-worker; do
+for svc in notifications-worker analytics-worker privacy-worker; do
   state="$("${COMPOSE[@]}" ps --format '{{.State}}' "$svc")"
   if [ "$state" = running ]; then
     echo "PASS  $svc работает"

@@ -152,6 +152,8 @@ class Settings(BaseSettings):
 
     # --- Worker аналитики (Глава 16, ADR 0020 п. 2): интервал обновления витрины ---
     analytics_refresh_seconds: float = Field(300, ge=10, le=86400)
+    # Worker ПД (ADR 0029 п. 18): проход очереди анонимизации; срок 99-З — 15 дней.
+    privacy_run_seconds: float = Field(3600, ge=10, le=86400)
 
     @model_validator(mode="after")
     def _default_channel_prefix(self) -> "Settings":
