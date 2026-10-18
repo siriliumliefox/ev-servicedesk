@@ -1,0 +1,206 @@
+# Приложение окружения (staging / production) на ВМ (глава 26, ADR 0030 пп. 4, 7, 9, 18).
+# Проект compose — ev-<окружение>; файлы: этот, compose.monitoring.yml, на локальном стенде ещё
+# compose.local.yml. Переменные (не секреты) — env/<окружение>.env; секреты — каталог EV_SECRETS
+# (файлы *.env по сервисам, пишет deploy.sh из bundle деплоя; в git их нет).
+#
+# Образы: backend — по digest (BACKEND_IMAGE, тот, что прошёл staging и regression); PostgreSQL с
+# pgBackRest — EV_POSTGRES_IMAGE (собирается в CD; локально — из ./postgres); остальные — по digest.
+
+x-backend: &backend
+  image: ${BACKEND_IMAGE:?BACKEND_IMAGE — образ backend по digest}
+  # Секреты — как есть (format: raw): без подстановок $ и разбора кавычек (JSON ключа FCM, пароли).
+  env_file:
+    - path: ${EV_SECRETS:?EV_SECRETS — каталог секретов}/app.env
+      format: raw
+  environment: &backend-env
+    # Режим приложения; на локальном стенде «production» работает в staging (A1 и FCM недоступны).
+    ENVIRONMENT: ${EV_APP_ENVIRONMENT:?EV_APP_ENVIRONMENT — staging или production}
+    LOG_FORMAT: json
+    REDIS_URL: redis://redis:6379/0
+    S3_ENDPOINT: ${EV_S3_ENDPOINT:?}
+    S3_PUBLIC_ENDPOINT: ${EV_S3_PUBLIC_ENDPOINT:-}
+    S3_REGION: ${EV_S3_REGION:-ru-1}
+    S3_BUCKET: ${EV_S3_MEDIA_BUCKET:?}
+    SMS_PROVIDER: ${EV_SMS_PROVIDER:-a1}
+    PUSH_PROVIDER: ${EV_PUSH_PROVIDER:-fcm}
+    # Лимит A1 — 10 запросов/с на учётную запись: API 4 × 2 процесса + privacy-worker 1 (ADR 0030 п. 19).
+    SMS_PROVIDER_RPS: "4"
+    DB_POOL_SIZE: "5"
+    DB_MAX_OVERFLOW: "10"
+  restart: unless-stopped
+  logging: &logging
+    driver: json-file
+    options: { max-size: "50m", max-file: "5" }
+  networks: [app]
+  # Миграции запускает deploy.sh до переключения выпуска (сервис migrate — профиль migrate): откат на
+  # предыдущий образ не должен запускать его alembic на более новой схеме (ADR 0030 п. 16).
+  depends_on: &backend-deps
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+
+services:
+  postgres:
+    # Образ deploy/postgres — собирает CD (ghcr) или стенд (свой реестр), здесь — только по digest.
+    image: ${EV_POSTGRES_IMAGE:?EV_POSTGRES_IMAGE — образ PostgreSQL с pgBackRest по digest}
+    env_file:
+      - path: ${EV_SECRETS}/postgres.env
+        format: raw
+    environment:
+      POSTGRES_USER: ev
+      POSTGRES_DB: ev_servicedesk
+      PGBACKREST_REPO1_S3_ENDPOINT: ${EV_BACKUP_S3_ENDPOINT:?}
+      PGBACKREST_REPO1_S3_BUCKET: ${EV_S3_BACKUP_BUCKET:?}
+      PGBACKREST_REPO1_S3_REGION: ${EV_S3_REGION:-ru-1}
+    shm_size: 256m
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - pgbackrest-spool:/var/lib/pgbackrest
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ev -d ev_servicedesk"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    deploy:
+      resources:
+        limits: { cpus: "2", memory: 2g }
+    restart: unless-stopped
+    logging: *logging
+    networks: [app]
+
+  redis:
+    image: redis:7-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
+    # AOF раз в секунду: отозванные jti и лимиты переживают перезапуск (ADR 0030 п. 4).
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--maxmemory", "256mb", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 384m }
+    restart: unless-stopped
+    logging: *logging
+    networks: [app]
+
+  migrate:
+    <<: *backend
+    command: ["alembic", "upgrade", "head"]
+    profiles: ["migrate"]
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  backend:
+    <<: *backend
+    environment:
+      <<: *backend-env
+      WEB_CONCURRENCY: "2"
+      # Метрики двух процессов uvicorn — файлы в tmpfs, каталог очищает app.preflight.
+      PROMETHEUS_MULTIPROC_DIR: /tmp/prometheus
+      # X-Forwarded-For принимается только от nginx (фиксированный адрес в сети app).
+      FORWARDED_ALLOW_IPS: ${EV_NGINX_IP:?}
+    tmpfs:
+      - /tmp/prometheus:uid=10001,mode=0700
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+    deploy:
+      resources:
+        limits: { cpus: "2", memory: 2g }
+
+  notifications-worker:
+    <<: *backend
+    command: ["python", "-m", "app.workers.notifications"]
+    environment:
+      <<: *backend-env
+      METRICS_PORT: "9100"
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 512m }
+
+  analytics-worker:
+    <<: *backend
+    command: ["python", "-m", "app.workers.analytics"]
+    environment:
+      <<: *backend-env
+      METRICS_PORT: "9100"
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 512m }
+
+  privacy-worker:
+    <<: *backend
+    command: ["python", "-m", "app.workers.privacy"]
+    environment:
+      <<: *backend-env
+      METRICS_PORT: "9100"
+      SMS_PROVIDER_RPS: "1"
+    deploy:
+      resources:
+        limits: { cpus: "0.25", memory: 384m }
+
+  nginx:
+    image: nginx:1.30-alpine@sha256:970364228b1e4f932abc22d321932816782cca8a20b85a77552a7cfe9acfb3b5
+    environment:
+      NGINX_ENVSUBST_FILTER: "^EV_"
+      EV_API_HOST: ${EV_API_HOST:?}
+      EV_ENGINEER_HOST: ${EV_ENGINEER_HOST:?}
+      EV_ADMIN_HOST: ${EV_ADMIN_HOST:?}
+      EV_MEDIA_ORIGIN: ${EV_MEDIA_ORIGIN:?}
+      EV_BACKEND_UPSTREAM: backend:8000
+    ports:
+      - "${EV_BIND:-0.0.0.0}:${EV_HTTP_PORT:-80}:80"
+      - "${EV_BIND:-0.0.0.0}:${EV_HTTPS_PORT:-443}:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/templates:/etc/nginx/templates:ro
+      - ./nginx/snippets:/etc/nginx/snippets:ro
+      - ./nginx/entrypoint.d/90-ev-reload.sh:/docker-entrypoint.d/90-ev-reload.sh:ro
+      - ${EV_HOME:?}/certs:/etc/letsencrypt:ro
+      - ${EV_HOME}/acme:/var/www/acme:ro
+      - ${EV_HOME}/web:/srv/web:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 256m }
+    restart: unless-stopped
+    logging: *logging
+    networks:
+      app:
+        ipv4_address: ${EV_NGINX_IP}
+
+  # Продление сертификатов Let's Encrypt (HTTP-01 через каталог acme nginx); выпуск — certs.sh.
+  certbot:
+    image: certbot/certbot:v5.8.0@sha256:f70ad0adbb7e117f0fe42a63c553f28ea451edabc0148757b6efcd9735acaa20
+    profiles: ["letsencrypt"]
+    entrypoint: ["/bin/sh", "-c", "trap exit TERM; while :; do certbot renew --webroot -w /var/www/acme --quiet; sleep 12h & wait $${!}; done"]
+    volumes:
+      - ${EV_HOME}/certs:/etc/letsencrypt
+      - ${EV_HOME}/acme:/var/www/acme
+    restart: unless-stopped
+    logging: *logging
+    networks: [app]
+
+volumes:
+  pgdata:
+  pgbackrest-spool:
+  redis:
+
+networks:
+  app:
+    ipam:
+      config:
+        # Динамические адреса — верхняя половина подсети: фиксированный адрес nginx (EV_NGINX_IP,
+        # FORWARDED_ALLOW_IPS backend) не займёт другой контейнер.
+        - subnet: ${EV_APP_SUBNET:?}
+          ip_range: ${EV_APP_IP_RANGE:?}

@@ -1,0 +1,68 @@
+# Alertmanager окружения ${EV_ENV} (глава 26, ADR 0030 п. 14). Рендер — scripts/render.py.
+# critical — круглосуточно, повтор раз в час; warning — 08:00–22:00 по Минску (ночные ждут утра);
+# none (Watchdog) — dead-man раз в минуту: перестал приходить — healthchecks.io пишет владельцу.
+global:
+  resolve_timeout: 5m
+
+templates:
+  - /etc/alertmanager/templates/*.tmpl
+
+time_intervals:
+  - name: night
+    time_intervals:
+      - times:
+          - start_time: "22:00"
+            end_time: "24:00"
+          - start_time: "00:00"
+            end_time: "08:00"
+        location: Europe/Minsk
+
+route:
+  receiver: owner
+  group_by: [alertname, env]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    - matchers: ['severity="none"']
+      receiver: deadman
+      group_wait: 0s
+      group_interval: 1m
+      repeat_interval: 1m
+    - matchers: ['severity="critical"']
+      receiver: owner
+      repeat_interval: 1h
+    - matchers: ['severity="warning"']
+      receiver: owner
+      mute_time_intervals: [night]
+
+inhibit_rules:
+  # Сервис лёг — ошибки и задержки того же окружения не дублируются.
+  - source_matchers: ['alertname=~"ServiceDown|BackendDown"']
+    target_matchers: ['alertname=~"HighErrorRate|ErrorRateElevated|SlowReads"']
+    equal: [env]
+  - source_matchers: ['severity="critical"']
+    target_matchers: ['severity="warning"']
+    equal: [alertname, env]
+
+receivers:
+  - name: owner
+    # ev:if EV_TELEGRAM_CHAT_ID
+    telegram_configs:
+      - bot_token_file: /etc/alertmanager/secrets/telegram_token
+        chat_id: ${EV_TELEGRAM_CHAT_ID}
+        parse_mode: HTML
+        message: '{{ template "ev.telegram" . }}'
+        send_resolved: true
+    # ev:endif
+    # ev:if EV_ALERT_WEBHOOK_URL
+    webhook_configs:
+      - url: ${EV_ALERT_WEBHOOK_URL}
+        send_resolved: true
+    # ev:endif
+  - name: deadman
+    # ev:if EV_DEADMAN_URL_FILE
+    webhook_configs:
+      - url_file: ${EV_DEADMAN_URL_FILE}
+        send_resolved: false
+    # ev:endif

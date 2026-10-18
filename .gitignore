@@ -57,3 +57,7 @@ system-e2e/test-results/
 # Нагрузочное тестирование (Глава 24): сырые данные прогонов — вне git
 load/results/
 zap-results/
+
+# Локальный стенд production-инфраструктуры (глава 26, scripts/infra_stack.sh)
+.infra-stand/
+deploy/rendered/

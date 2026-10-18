@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Forced command ключа деплоя (глава 26, ADR 0030 п. 7): authorized_keys пользователя deploy —
+#   command="/opt/ev/bin/ev-ssh",no-port-forwarding,no-agent-forwarding,no-X11-forwarding,no-pty ssh-ed25519 …
+# Разрешены только команды деплоя своего окружения (EV_ALLOWED_ENV из /opt/ev/bin/ev-ssh.conf):
+#   deploy <env>          — bundle из stdin, выпуск и включение
+#   receive-only <env>    — bundle без включения (восстановление на новой ВМ)
+#   rollback <env> [sha]  — откат
+#   status <env>
+#   backup <env> full|diff|verify|info|restore-check
+set -euo pipefail
+BIN="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck disable=SC1091
+. "$BIN/ev-ssh.conf"
+read -r -a cmd <<< "${SSH_ORIGINAL_COMMAND:-}"
+[[ "${cmd[1]:-}" == "${EV_ALLOWED_ENV:?}" ]] || { echo "ev-ssh: окружение '${cmd[1]:-}' не обслуживается этой ВМ" >&2; exit 2; }
+case "${cmd[0]:-}:${#cmd[@]}" in
+  deploy:2) exec "$BIN/deploy.sh" receive "${cmd[1]}" ;;
+  receive-only:2) EV_RECEIVE_ONLY=1 exec "$BIN/deploy.sh" receive "${cmd[1]}" ;;
+  rollback:2|rollback:3) exec "$BIN/deploy.sh" rollback "${cmd[1]}" "${cmd[2]:-}" ;;
+  status:2) exec "$BIN/deploy.sh" status "${cmd[1]}" ;;
+  backup:3)
+    case "${cmd[2]}" in
+      full|diff|verify|info|restore-check) exec "$BIN/backup.sh" "${cmd[2]}" "${cmd[1]}" ;;
+    esac ;;
+esac
+echo "ev-ssh: команда запрещена: ${SSH_ORIGINAL_COMMAND:-<пусто>}" >&2
+exit 2

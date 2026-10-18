@@ -1,0 +1,157 @@
+# Мониторинг окружения (глава 26, ADR 0030 пп. 3, 12, 14, 15): на каждой ВМ один и тот же стек,
+# окружение — метка env. Prometheus, Alertmanager, Grafana слушают только 127.0.0.1 — доступ через
+# SSH-туннель (`ssh -L 3000:127.0.0.1:3000 deploy@<ВМ>`). Конфигурации с переменными окружения
+# (prometheus.yml, alertmanager.yml) deploy.sh рендерит в каталог rendered/ (scripts/render.py).
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "20m", max-file: "3" }
+
+services:
+  prometheus:
+    image: prom/prometheus:v3.13.4@sha256:87861b8cf91579109319ebc300f3f1060e6da9c05d6ae8ad15a20c879e84e32e
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=${EV_METRICS_RETENTION:-30d}
+      - --web.enable-lifecycle
+      - --web.enable-remote-write-receiver   # итоги k6 ночного прогона (ADR 0030 п. 20)
+    volumes:
+      - ./rendered/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/rules:/etc/prometheus/rules:ro
+      - prometheus:/prometheus
+    ports:
+      - "127.0.0.1:${EV_PROMETHEUS_PORT:-9090}:9090"
+    restart: unless-stopped
+    logging: *logging
+    networks: [app]
+
+  alertmanager:
+    image: prom/alertmanager:v0.34.1@sha256:e9733bafb1bdef9b00e25a21f8f99dc26a22224bf16641ad754d1649f4c3357a
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+    volumes:
+      - ./rendered/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - ./alertmanager/templates:/etc/alertmanager/templates:ro
+      - ${EV_SECRETS}/alertmanager:/etc/alertmanager/secrets:ro
+      - alertmanager:/alertmanager
+    ports:
+      - "127.0.0.1:${EV_ALERTMANAGER_PORT:-9093}:9093"
+    restart: unless-stopped
+    logging: *logging
+    networks: [app]
+
+  grafana:
+    image: grafana/grafana:13.2.4@sha256:dbbc38ea21103cefb50396340cd88afec779c7e070b0a7bf5a75b4ce46651d3f
+    env_file:
+      - path: ${EV_SECRETS}/grafana.env
+        format: raw
+    environment:
+      GF_SERVER_HTTP_PORT: "3000"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      EV_ENV: ${EV_ENV}
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana:/var/lib/grafana
+    ports:
+      - "127.0.0.1:${EV_GRAFANA_PORT:-3000}:3000"
+    restart: unless-stopped
+    logging: *logging
+    networks: [app]
+
+  loki:
+    image: grafana/loki:3.7.8@sha256:1107dd5274e0ada47e42472b7a7e71f3b2a2fe878878108f3e2f9e51528f0193
+    command: ["-config.file=/etc/loki/loki.yml", "-config.expand-env=true"]
+    environment:
+      # Хранение журналов (ADR 0030 п. 15): поток app.security — 365 дней, остальное — по окружению.
+      EV_LOG_RETENTION: ${EV_LOG_RETENTION:-720h}
+    volumes:
+      - ./loki/loki.yml:/etc/loki/loki.yml:ro
+      - loki:/loki
+    restart: unless-stopped
+    logging: *logging
+    networks: [app]
+
+  alloy:
+    image: grafana/alloy:v1.20.1@sha256:2aa2099af76c0098d4af7a4d6e48f86cb66dc1a000222ad927a1c67c6542d13f
+    command: ["run", "--server.http.listen-addr=0.0.0.0:12345", "--storage.path=/var/lib/alloy", "/etc/alloy/config.alloy"]
+    environment:
+      EV_ENV: ${EV_ENV}
+      EV_PROJECT: ${COMPOSE_PROJECT_NAME}
+    volumes:
+      - ./alloy/config.alloy:/etc/alloy/config.alloy:ro
+      # Журналы контейнеров проекта — через API Docker (только чтение сокета).
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - alloy:/var/lib/alloy
+    restart: unless-stopped
+    logging: *logging
+    networks: [app]
+
+  node-exporter:
+    image: prom/node-exporter:v1.12.1@sha256:1b4e4438faca4dd7e001dd445d161a4a2091b0fededa84093b3a8dfeae1f1be0
+    command:
+      - --path.rootfs=/host
+      - --collector.textfile.directory=/textfile   # итоги бэкапов (scripts/backup.sh)
+    pid: host
+    volumes:
+      - /:/host:ro,rslave
+      - ${EV_TEXTFILE_DIR:?}:/textfile:ro
+    restart: unless-stopped
+    logging: *logging
+    networks: [app]
+
+  cadvisor:
+    image: ghcr.io/google/cadvisor:v0.60.6@sha256:b8e7d1093144fd088f425ff003d75a4aa405de075db78dae3bc563730b1bd07a
+    command: ["--docker_only=true", "--housekeeping_interval=30s", "--store_container_labels=false", "--whitelisted_container_labels=com.docker.compose.service,com.docker.compose.project"]
+    privileged: true
+    devices: ["/dev/kmsg"]
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    restart: unless-stopped
+    logging: *logging
+    networks: [app]
+
+  postgres-exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.20.1@sha256:ac5ec343104fae0e2d84a27bb8d69b38430a11910c5382cad85d478d2bab713e
+    command: ["--collector.stat_statements"]
+    env_file:
+      - path: ${EV_SECRETS}/exporter.env
+        format: raw
+    environment:
+      DATA_SOURCE_URI: postgres:5432/ev_servicedesk?sslmode=disable
+      DATA_SOURCE_USER: ev_monitor
+    restart: unless-stopped
+    logging: *logging
+    networks: [app]
+
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.94.0@sha256:0842ef7110e62b40bbde2d5c11f38c6fbd99f7100c75e3866637c1b335a1eff7
+    environment:
+      REDIS_ADDR: redis://redis:6379
+    restart: unless-stopped
+    logging: *logging
+    networks: [app]
+
+  blackbox:
+    image: prom/blackbox-exporter:v0.29.0@sha256:9613f2884689b6fad9f1939f6a3b0388c93a022cfaededb19545b329b5c83dea
+    command: ["--config.file=/etc/blackbox/blackbox.yml"]
+    volumes:
+      - ./rendered/blackbox.yml:/etc/blackbox/blackbox.yml:ro
+    restart: unless-stopped
+    logging: *logging
+    networks: [app]
+
+volumes:
+  prometheus:
+  alertmanager:
+  grafana:
+  loki:
+  alloy:

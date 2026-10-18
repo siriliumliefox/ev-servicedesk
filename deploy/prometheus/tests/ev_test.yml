@@ -1,0 +1,197 @@
+# Юнит-тесты алертов (глава 26, ADR 0030 п. 6): `promtool test rules` — job infra в ci-gate.
+# Каждый critical-алерт срабатывает за целевое время (≤ 5 мин от начала сбоя) и не срабатывает
+# раньше `for`; warning — с задержкой. Время в тестах начинается с 0 (Unix).
+rule_files:
+  - ../rules/ev.yml
+
+evaluation_interval: 15s
+
+tests:
+  # API недоступен снаружи: проба с 1-й минуты — 0; через 2 мин `for` — алерт (≈ 3 мин от сбоя).
+  - interval: 15s
+    input_series:
+      - series: 'probe_success{job="probe_self", instance="https://api.example/health", probe="self"}'
+        values: '1x3 0x40'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: ServiceDown
+        exp_alerts: []
+      - eval_time: 3m30s
+        alertname: ServiceDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: probe_self
+              instance: https://api.example/health
+              probe: self
+            exp_annotations:
+              summary: "API  недоступен снаружи (https://api.example/health)"
+              runbook: docs/runbooks/ALERTS.md#servicedown
+
+  # Production недоступен с staging — critical; staging с production — warning через 5 мин.
+  - interval: 15s
+    input_series:
+      - series: 'probe_success{job="probe_peer", instance="https://api.ev/health", peer_env="production"}'
+        values: '0x40'
+      - series: 'probe_success{job="probe_peer", instance="https://api.staging.ev/health", peer_env="staging"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: PeerDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: probe_peer
+              instance: https://api.ev/health
+              peer_env: production
+            exp_annotations:
+              summary: "Production недоступен с  (https://api.ev/health)"
+              runbook: docs/runbooks/ALERTS.md#peerdown
+      - eval_time: 6m
+        alertname: PeerDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: probe_peer
+              instance: https://api.ev/health
+              peer_env: production
+            exp_annotations:
+              summary: "Production недоступен с  (https://api.ev/health)"
+              runbook: docs/runbooks/ALERTS.md#peerdown
+          - exp_labels:
+              severity: warning
+              job: probe_peer
+              instance: https://api.staging.ev/health
+              peer_env: staging
+            exp_annotations:
+              summary: "Окружение staging недоступно с "
+              runbook: docs/runbooks/ALERTS.md#peerdown
+
+  # 1 запрос/с, из них 10 % — 500: HighErrorRate через ≤ 5 мин; трафик проб не считается.
+  - interval: 15s
+    input_series:
+      - series: 'ev_http_requests_total{method="GET", route="/v1/me", status="200"}'
+        values: '0+13.5x40'
+      - series: 'ev_http_requests_total{method="GET", route="/v1/me", status="500"}'
+        values: '0+1.5x40'
+      - series: 'ev_http_requests_total{method="GET", route="/health", status="200"}'
+        values: '0+1000x40'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: HighErrorRate
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: HighErrorRate
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "Доля ошибок 5xx : 10% за 5 мин"
+              runbook: docs/runbooks/ALERTS.md#higherrorrate
+
+  # Без трафика нет и алерта ошибок (одиночный 500 ночью).
+  - interval: 1m
+    input_series:
+      - series: 'ev_http_requests_total{method="GET", route="/v1/me", status="500"}'
+        values: '0 1 1 1 1 1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: HighErrorRate
+        exp_alerts: []
+
+  # Worker аналитики (интервал 300 с): последний успех на 60-й с, потом тишина — алерт после 20 мин + 2 мин.
+  - interval: 1m
+    input_series:
+      - series: 'ev_worker_last_success_timestamp_seconds{worker="analytics", job="workers", instance="analytics-worker:9100"}'
+        values: '60x40'
+      - series: 'ev_worker_last_success_timestamp_seconds{worker="notifications", job="workers", instance="notifications-worker:9100"}'
+        values: '0+60x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: WorkerStale
+        exp_alerts: []
+      - eval_time: 24m
+        alertname: WorkerStale
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              worker: analytics
+              job: workers
+              instance: analytics-worker:9100
+            exp_annotations:
+              summary: "Worker analytics () без успешного цикла 23m 0s"
+              runbook: docs/runbooks/ALERTS.md#workerstale
+
+  # Очередь анонимизации: 14 дней и 1 с — сразу critical (до срока 99-З остаётся сутки).
+  - interval: 1m
+    input_series:
+      - series: 'ev_privacy_queue_oldest_age_seconds'
+        values: '1209000 1209601'
+    alert_rule_test:
+      - eval_time: 0m
+        alertname: AnonymizationOverdue
+        exp_alerts: []
+      - eval_time: 1m
+        alertname: AnonymizationOverdue
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "Клиент  ждёт анонимизации больше 14 дней (срок 99-З — 15)"
+              runbook: docs/runbooks/ALERTS.md#anonymizationoverdue
+
+  # Последний разностный бэкап в момент 0: через 26 ч — critical; полный — через 8 суток.
+  - interval: 1h
+    input_series:
+      - series: 'ev_backup_last_success_timestamp_seconds{type="diff"}'
+        values: '0x200'
+      - series: 'ev_backup_last_success_timestamp_seconds{type="full"}'
+        values: '0x200'
+    alert_rule_test:
+      - eval_time: 25h
+        alertname: BackupStale
+        exp_alerts: []
+      - eval_time: 27h
+        alertname: BackupStale
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "Последний бэкап  старше 26 ч"
+              runbook: docs/runbooks/ALERTS.md#backupstale
+      - eval_time: 193h
+        alertname: FullBackupStale
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              type: full
+            exp_annotations:
+              summary: "Полный бэкап  старше 8 суток"
+              runbook: docs/runbooks/ALERTS.md#backupstale
+
+  # Нет ни одного полного бэкапа — через 2 ч.
+  - interval: 1h
+    input_series:
+      - series: 'up{job="backend"}'
+        values: '1x5'
+    alert_rule_test:
+      - eval_time: 3h
+        alertname: BackupMissing
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              type: full
+            exp_annotations:
+              summary: "Нет ни одного успешного полного бэкапа"
+              runbook: docs/runbooks/ALERTS.md#backupstale
+
+  # Watchdog горит всегда — dead-man получает сигнал, пока цепочка жива.
+  - interval: 1m
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: Watchdog
+        exp_alerts:
+          - exp_labels:
+              severity: none
+            exp_annotations:
+              summary: Цепочка алертов работает (сигнал для dead-man-сервиса)

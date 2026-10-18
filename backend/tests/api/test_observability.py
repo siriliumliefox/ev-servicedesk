@@ -55,6 +55,7 @@ def test_multiprocess_sums_and_resets(tmp_path: Path) -> None:
     directory = tmp_path / "prom"
     directory.mkdir()
     (directory / "counter_999999.db").write_bytes(b"stale")
+    (directory / "nested").mkdir()
     code = (
         "from app.core import metrics\n"
         "metrics.reset_multiproc_dir()\n"
@@ -74,6 +75,7 @@ def test_multiprocess_sums_and_resets(tmp_path: Path) -> None:
     ).stdout
     assert 'ev_http_requests_total{method="GET",route="/v1/x",status="200"} 2.0' in out
     assert not (directory / "counter_999999.db").exists(), "файлы прошлого запуска удалены"
+    assert not (directory / "nested").exists() and directory.is_dir(), "каталог (tmpfs) остаётся"
 
 
 def test_json_format_masks_and_whitelists_fields() -> None:

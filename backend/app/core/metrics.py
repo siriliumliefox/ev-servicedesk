@@ -55,11 +55,15 @@ def render() -> tuple[bytes, str]:
 
 
 def reset_multiproc_dir() -> None:
-    """Файлы прошлого запуска контейнера дали бы счётчики умерших процессов (вызывает preflight)."""
+    """Файлы прошлого запуска контейнера дали бы счётчики умерших процессов (вызывает preflight).
+    Удаляется содержимое, не сам каталог: в контейнере он — точка монтирования tmpfs."""
     directory = os.environ.get(MULTIPROC_ENV)
     if not directory:
         return
     path = Path(directory)
-    if path.exists():
-        shutil.rmtree(path)
     path.mkdir(parents=True, exist_ok=True)
+    for entry in path.iterdir():
+        if entry.is_dir() and not entry.is_symlink():
+            shutil.rmtree(entry)
+        else:
+            entry.unlink()

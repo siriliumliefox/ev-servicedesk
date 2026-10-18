@@ -34,9 +34,9 @@ export const SECURITY_HEADERS: Readonly<Record<string, string>> = {
  * В dev не ставится: HMR Vite работает через inline-скрипты. frame-ancestors в <meta> не действует —
  * заголовок nginx.
  */
-export function contentSecurityPolicy(mediaOrigin = ""): Plugin {
+export function cspPolicy(mediaOrigin = ""): string {
   const media = ["'self'", "blob:", "data:", ...(mediaOrigin ? [mediaOrigin] : [])].join(" ");
-  const policy = [
+  return [
     "default-src 'self'",
     "script-src 'self'",
     "style-src 'self'",
@@ -48,6 +48,11 @@ export function contentSecurityPolicy(mediaOrigin = ""): Plugin {
     "base-uri 'self'",
     "form-action 'self'",
   ].join("; ");
+}
+
+/** Плагин сборки: `<meta>` с `cspPolicy(mediaOrigin)`; nginx дублирует политику заголовком (глава 26). */
+export function contentSecurityPolicy(mediaOrigin = ""): Plugin {
+  const policy = cspPolicy(mediaOrigin);
   return {
     name: "ev-csp",
     apply: "build",

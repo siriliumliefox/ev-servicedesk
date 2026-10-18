@@ -1,0 +1,27 @@
+# Пробы blackbox (глава 26, ADR 0030 п. 3). На стенде — свой УЦ (EV_PROBE_CA_FILE).
+modules:
+  https_health:
+    prober: http
+    timeout: 10s
+    http:
+      method: GET
+      valid_status_codes: [200]
+      fail_if_not_ssl: true
+      fail_if_body_not_matches_regexp: ['"status":"ok"']
+      preferred_ip_protocol: ip4
+# ev:if EV_PROBE_CA_FILE
+      tls_config:
+        ca_file: ${EV_PROBE_CA_FILE}
+# ev:endif
+  https_page:
+    prober: http
+    timeout: 10s
+    http:
+      method: GET
+      valid_status_codes: [200]
+      fail_if_not_ssl: true
+      preferred_ip_protocol: ip4
+# ev:if EV_PROBE_CA_FILE
+      tls_config:
+        ca_file: ${EV_PROBE_CA_FILE}
+# ev:endif

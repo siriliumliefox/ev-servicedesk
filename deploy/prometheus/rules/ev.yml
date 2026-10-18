@@ -1,0 +1,288 @@
+# Алерты EV-ServiceDesk (глава 26, ADR 0030 п. 14). severity: critical — круглосуточно, warning —
+# 08:00–22:00 по Минску, none — Watchdog для dead-man. Метка env — из external_labels Prometheus.
+# В аннотациях нет ПД: только сервис, маршрут, окружение и значения метрик.
+# Тесты — ../tests/ev_test.yml (`promtool test rules`, job infra в ci-gate).
+groups:
+  - name: watchdog
+    rules:
+      - alert: Watchdog
+        expr: vector(1)
+        labels:
+          severity: none
+        annotations:
+          summary: Цепочка алертов работает (сигнал для dead-man-сервиса)
+
+  - name: availability
+    rules:
+      # Проба /health снаружи через nginx и TLS каждые 15 с; 2 мин подряд — сервис недоступен.
+      - alert: ServiceDown
+        expr: probe_success{job="probe_self"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "API {{ $labels.env }} недоступен снаружи ({{ $labels.instance }})"
+          runbook: docs/runbooks/ALERTS.md#servicedown
+
+      - alert: PeerDown
+        expr: probe_success{job="probe_peer", peer_env="production"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Production недоступен с {{ $labels.env }} ({{ $labels.instance }})"
+          runbook: docs/runbooks/ALERTS.md#peerdown
+
+      - alert: PeerDown
+        expr: probe_success{job="probe_peer", peer_env!="production"} == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Окружение {{ $labels.peer_env }} недоступно с {{ $labels.env }}"
+          runbook: docs/runbooks/ALERTS.md#peerdown
+
+      - alert: BackendDown
+        expr: up{job="backend"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Backend {{ $labels.env }} не отвечает на /metrics"
+          runbook: docs/runbooks/ALERTS.md#servicedown
+
+      - alert: PostgresDown
+        expr: pg_up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "PostgreSQL {{ $labels.env }} недоступен"
+          runbook: docs/runbooks/ALERTS.md#postgresdown
+
+      - alert: RedisDown
+        expr: redis_up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Redis {{ $labels.env }} недоступен"
+          runbook: docs/runbooks/ALERTS.md#redisdown
+
+      - alert: TargetDown
+        expr: up{job=~"node|cadvisor|postgres|redis|monitoring"} == 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.job }} {{ $labels.instance }} ({{ $labels.env }}) не отдаёт метрики"
+          runbook: docs/runbooks/ALERTS.md#targetdown
+
+  - name: http
+    rules:
+      - record: ev:http_requests:rate5m
+        expr: sum(rate(ev_http_requests_total{route!~"/health|/metrics"}[5m]))
+      - record: ev:http_errors:rate5m
+        expr: sum(rate(ev_http_requests_total{route!~"/health|/metrics", status=~"5.."}[5m]))
+
+      # Доля 5xx > 5 % за 5 мин при трафике от 3 запросов в минуту (ADR 0030 п. 14).
+      - alert: HighErrorRate
+        expr: ev:http_errors:rate5m / ev:http_requests:rate5m > 0.05 and ev:http_requests:rate5m > 0.05
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Доля ошибок 5xx {{ $labels.env }}: {{ $value | humanizePercentage }} за 5 мин"
+          runbook: docs/runbooks/ALERTS.md#higherrorrate
+
+      - alert: ErrorRateElevated
+        expr: >
+          sum(rate(ev_http_requests_total{route!~"/health|/metrics", status=~"5.."}[15m]))
+            / sum(rate(ev_http_requests_total{route!~"/health|/metrics"}[15m])) > 0.01
+          and sum(rate(ev_http_requests_total{route!~"/health|/metrics"}[15m])) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Доля ошибок 5xx {{ $labels.env }} выше 1 % за 15 мин"
+          runbook: docs/runbooks/ALERTS.md#higherrorrate
+
+      # Норматив чтения ADR 0028: p95 ≤ 300 мс.
+      - alert: SlowReads
+        expr: >
+          histogram_quantile(0.95, sum by (le) (rate(ev_http_request_duration_seconds_bucket{method="GET", route!~"/health|/metrics"}[10m]))) > 0.3
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "p95 чтения {{ $labels.env }} — {{ $value | humanizeDuration }} (норматив 300 мс)"
+          runbook: docs/runbooks/ALERTS.md#slowreads
+
+  - name: workers
+    rules:
+      - alert: WorkerDown
+        expr: up{job="workers"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Worker {{ $labels.instance }} ({{ $labels.env }}) не отвечает"
+          runbook: docs/runbooks/ALERTS.md#workerstale
+
+      # Нет успешного цикла дольше трёх интервалов (уведомления — рассылка до ~2 мин, ADR 0028).
+      - alert: WorkerStale
+        expr: >
+          (time() - ev_worker_last_success_timestamp_seconds{worker="notifications"} > 600)
+          or (time() - ev_worker_last_success_timestamp_seconds{worker="analytics"} > 1200)
+          or (time() - ev_worker_last_success_timestamp_seconds{worker="privacy"} > 12600)
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Worker {{ $labels.worker }} ({{ $labels.env }}) без успешного цикла {{ $value | humanizeDuration }}"
+          runbook: docs/runbooks/ALERTS.md#workerstale
+
+      - alert: PushQueueBacklog
+        expr: ev_push_queue_oldest_age_seconds > 600
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Очередь push {{ $labels.env }}: готовая доставка ждёт {{ $value | humanizeDuration }}"
+          runbook: docs/runbooks/ALERTS.md#pushqueuebacklog
+
+      - alert: AnalyticsStale
+        expr: ev_analytics_data_age_seconds > 1800
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Витрина аналитики {{ $labels.env }} не обновлялась {{ $value | humanizeDuration }}"
+          runbook: docs/runbooks/ALERTS.md#workerstale
+
+  - name: data
+    rules:
+      # Срок 99-З — 15 дней с отзыва согласия; за сутки до него — critical.
+      - alert: AnonymizationOverdue
+        expr: ev_privacy_queue_oldest_age_seconds > 14 * 86400
+        labels:
+          severity: critical
+        annotations:
+          summary: "Клиент {{ $labels.env }} ждёт анонимизации больше 14 дней (срок 99-З — 15)"
+          runbook: docs/runbooks/ALERTS.md#anonymizationoverdue
+
+      - alert: IntegrityViolations
+        expr: ev_integrity_violations > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "Аудит целостности {{ $labels.env }}: нарушений {{ $value }}"
+          runbook: docs/runbooks/ALERTS.md#integrityviolations
+
+      - alert: IntegrityAuditStale
+        expr: ev_integrity_last_run_timestamp_seconds > 0 and time() - ev_integrity_last_run_timestamp_seconds > 26 * 3600
+        labels:
+          severity: warning
+        annotations:
+          summary: "Аудит целостности {{ $labels.env }} не выполнялся больше суток"
+          runbook: docs/runbooks/ALERTS.md#integrityviolations
+
+  - name: backups
+    rules:
+      # Бэкапы — scripts/backup.sh, итог — textfile node_exporter (ADR 0030 п. 9).
+      - alert: BackupMissing
+        expr: absent(ev_backup_last_success_timestamp_seconds{type="full"})
+        for: 2h
+        labels:
+          severity: critical
+        annotations:
+          summary: "Нет ни одного успешного полного бэкапа"
+          runbook: docs/runbooks/ALERTS.md#backupstale
+
+      - alert: BackupStale
+        expr: time() - max by (env) (ev_backup_last_success_timestamp_seconds{type=~"full|diff"}) > 26 * 3600
+        labels:
+          severity: critical
+        annotations:
+          summary: "Последний бэкап {{ $labels.env }} старше 26 ч"
+          runbook: docs/runbooks/ALERTS.md#backupstale
+
+      - alert: FullBackupStale
+        expr: time() - ev_backup_last_success_timestamp_seconds{type="full"} > 8 * 86400
+        labels:
+          severity: critical
+        annotations:
+          summary: "Полный бэкап {{ $labels.env }} старше 8 суток"
+          runbook: docs/runbooks/ALERTS.md#backupstale
+
+      # RPO ≤ 5 мин: WAL уходит в репозиторий не реже раза в минуту (archive_timeout 60 с).
+      - alert: WalArchiveStale
+        expr: pg_stat_archiver_last_archive_age > 900
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "WAL {{ $labels.env }} не архивируется {{ $value | humanizeDuration }}"
+          runbook: docs/runbooks/ALERTS.md#backupstale
+
+      - alert: WalArchiveFailing
+        expr: increase(pg_stat_archiver_failed_count[10m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Ошибки архивации WAL {{ $labels.env }}"
+          runbook: docs/runbooks/ALERTS.md#backupstale
+
+      - alert: BackupVerifyFailed
+        expr: ev_backup_last_failure_timestamp_seconds > on (env, type) group_left ev_backup_last_success_timestamp_seconds
+        labels:
+          severity: warning
+        annotations:
+          summary: "Последний запуск backup.sh {{ $labels.type }} ({{ $labels.env }}) завершился ошибкой"
+          runbook: docs/runbooks/ALERTS.md#backupstale
+
+  - name: resources
+    rules:
+      - alert: DiskAlmostFull
+        expr: node_filesystem_avail_bytes{mountpoint="/", fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{mountpoint="/", fstype!~"tmpfs|overlay"} < 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Диск {{ $labels.env }} заполнен больше чем на 95 %"
+          runbook: docs/runbooks/ALERTS.md#disk
+
+      - alert: DiskFilling
+        expr: node_filesystem_avail_bytes{mountpoint="/", fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{mountpoint="/", fstype!~"tmpfs|overlay"} < 0.15
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Диск {{ $labels.env }} заполнен больше чем на 85 %"
+          runbook: docs/runbooks/ALERTS.md#disk
+
+      - alert: MemoryHigh
+        expr: 1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes > 0.9
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Память {{ $labels.env }} занята больше чем на 90 %"
+          runbook: docs/runbooks/ALERTS.md#memory
+
+      - alert: ContainerRestarting
+        expr: changes(container_start_time_seconds{service!=""}[15m]) > 2
+        labels:
+          severity: warning
+        annotations:
+          summary: "Контейнер {{ $labels.service }} ({{ $labels.env }}) перезапускается"
+          runbook: docs/runbooks/ALERTS.md#containerrestarting
+
+      - alert: CertificateExpiring
+        expr: probe_ssl_earliest_cert_expiry - time() < 14 * 86400
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Сертификат {{ $labels.instance }} истекает через {{ $value | humanizeDuration }}"
+          runbook: docs/runbooks/ALERTS.md#certificate

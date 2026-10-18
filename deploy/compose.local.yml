@@ -1,0 +1,49 @@
+# Локальный стенд (глава 26, ADR 0030 п. 23; scripts/infra_stack.sh): то же, что на ВМ, плюс
+# - сеть ev-provider — «провайдер»: MinIO с TLS вместо S3 Timeweb, приёмник алертов alert-sink;
+# - сеть ev-edge — «интернет»: nginx окружения доступен соседнему blackbox по своим именам;
+# - УЦ стенда (EV_STAND/ca) — доверие backend (boto3), pgBackRest, blackbox.
+x-ca: &ca
+  - ${EV_STAND:?}/ca:/etc/ev-ca:ro
+x-provider-backend: &provider-backend
+  networks: [app, provider]
+  environment:
+    AWS_CA_BUNDLE: /etc/ev-ca/ca.crt
+  volumes: *ca
+
+services:
+  postgres:
+    networks: [app, provider]
+    environment:
+      PGBACKREST_REPO1_STORAGE_CA_FILE: /etc/ev-ca/ca.crt
+      PGBACKREST_REPO1_STORAGE_PORT: "9000"
+    volumes:
+      - ${EV_STAND}/ca:/etc/ev-ca:ro
+  migrate: *provider-backend
+  backend: *provider-backend
+  notifications-worker: *provider-backend
+  analytics-worker: *provider-backend
+  privacy-worker: *provider-backend
+  nginx:
+    networks:
+      app:
+        ipv4_address: ${EV_NGINX_IP}
+      edge:
+        aliases: ["${EV_API_HOST}", "${EV_ENGINEER_HOST}", "${EV_ADMIN_HOST}"]
+  blackbox:
+    networks: [app, edge]
+    volumes:
+      - ${EV_STAND}/ca:/etc/ev-ca:ro
+  alertmanager:
+    networks: [app, provider]
+  # Docker Desktop: корень ВМ без rslave.
+  node-exporter:
+    volumes:
+      - /:/host:ro
+
+networks:
+  edge:
+    external: true
+    name: ev-edge
+  provider:
+    external: true
+    name: ev-provider

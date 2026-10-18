@@ -1,0 +1,93 @@
+# Prometheus окружения ${EV_ENV} (глава 26, ADR 0030 пп. 3, 12–14). Рендер — scripts/render.py.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    env: ${EV_ENV}
+
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  - job_name: backend
+    static_configs:
+      - targets: ["backend:8000"]
+
+  # Worker'ы: свой порт метрик (METRICS_PORT), метка worker — в самих метриках.
+  - job_name: workers
+    static_configs:
+      - targets: ["notifications-worker:9100", "analytics-worker:9100", "privacy-worker:9100"]
+
+  - job_name: node
+    static_configs:
+      - targets: ["node-exporter:9100"]
+
+  - job_name: cadvisor
+    scrape_interval: 30s
+    static_configs:
+      - targets: ["cadvisor:8080"]
+    metric_relabel_configs:
+      # Только контейнеры этого проекта compose; метка service — имя сервиса.
+      - source_labels: [container_label_com_docker_compose_project]
+        regex: ${EV_PROJECT}
+        action: keep
+      - source_labels: [container_label_com_docker_compose_service]
+        target_label: service
+
+  - job_name: postgres
+    static_configs:
+      - targets: ["postgres-exporter:9187"]
+
+  - job_name: redis
+    static_configs:
+      - targets: ["redis-exporter:9121"]
+
+  - job_name: monitoring
+    static_configs:
+      - targets: ["alertmanager:9093", "loki:3100", "alloy:12345", "grafana:3000"]
+
+  # Пробы снаружи — через nginx и TLS, как у клиента: своё окружение и соседняя ВМ (ADR 0030 п. 3).
+  - job_name: probe_self
+    metrics_path: /probe
+    params:
+      module: [https_health]
+    static_configs:
+      - targets: ["${EV_SELF_HEALTH_URL}"]
+        labels: { probe: self }
+    relabel_configs: &probe-relabel
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox:9115
+
+  # ev:if EV_PEER_HEALTH_URL
+  - job_name: probe_peer
+    metrics_path: /probe
+    params:
+      module: [https_health]
+    static_configs:
+      - targets: ["${EV_PEER_HEALTH_URL}"]
+        labels: { probe: peer, peer_env: "${EV_PEER_ENV}" }
+    relabel_configs: *probe-relabel
+  # ev:endif
+
+  # Срок сертификатов кабинетов (проба главной страницы кабинета).
+  - job_name: probe_cabinets
+    metrics_path: /probe
+    params:
+      module: [https_page]
+    static_configs:
+      - targets: ["https://${EV_ENGINEER_HOST}/", "https://${EV_ADMIN_HOST}/"]
+        labels: { probe: self }
+    relabel_configs: *probe-relabel
