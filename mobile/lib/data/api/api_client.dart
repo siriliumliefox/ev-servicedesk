@@ -32,7 +32,14 @@ class ApiClient {
   String? _access;
   Future<String>? _refreshing;
 
-  Future<bool> hasSession() async => await tokens.read() != null;
+  /// Вход потерян при обновлении хранилища — как завершённая сессия: экран входа с сообщением.
+  Future<bool> hasSession() async {
+    if (tokens.takeLostOnUpgrade()) {
+      await endSession(notify: true);
+      return false;
+    }
+    return await tokens.read() != null;
+  }
 
   /// Пара токенов из verify-code: refresh — в хранилище до того, как access станет доступен запросам.
   Future<void> startSession(Map<String, Object?> authTokens) async {

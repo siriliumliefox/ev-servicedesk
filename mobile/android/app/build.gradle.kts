@@ -17,8 +17,8 @@ android {
     defaultConfig {
         // Как bundle id iOS (ADR 0022 п. 1).
         applicationId = "com.etsavtogomel.evServicedesk"
-        // flutter_secure_storage (EncryptedSharedPreferences) — не ниже 23.
-        minSdk = maxOf(flutter.minSdkVersion, 23)
+        // flutter_secure_storage 11 и Firebase BoM 35 (firebase_core 5, firebase_messaging 17) — не ниже 24.
+        minSdk = maxOf(flutter.minSdkVersion, 24)
         targetSdk = flutter.targetSdkVersion
         // Uses the version code from pubspec.yaml. When using split APKs, 1000 * ABI_VERSION
         // is added automatically by Flutter. (https://developer.android.com/studio/build/configure-apk-splits#configure-APK-versions)
