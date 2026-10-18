@@ -63,7 +63,7 @@ def explain_all(db: Session, statements: list[tuple[str, Any]]) -> dict[str, lis
         for name, count in connection.exec_driver_sql(
             "SELECT relname, reltuples FROM pg_class WHERE relkind = 'r'"
             " AND relnamespace = 'public'::regnamespace"
-        ).tuples()
+        )
     }
     # Seq Scan запрещён планировщику: есть подходящий индекс — он будет выбран, и Seq Scan в
     # плане означает «индекса нет». Без этого выбор между индексом и полным чтением ~1 % таблицы
