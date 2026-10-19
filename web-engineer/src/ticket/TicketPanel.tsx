@@ -160,6 +160,8 @@ export function TicketPanel({
               <Badge tone={STATUS_TONES[t.status]}>{TICKET_STATUS_LABELS[t.status]}</Badge>
               <SlaBadge ticket={t} now={now()} />
               <span>Создан {formatDateTime(t.created_at)}</span>
+              <span>· Клиент: {clientLabel(t)}</span>
+              {!t.client.is_active && <Badge tone="danger">Заблокирован</Badge>}
               <span>· Исполнитель: {assigneeLabel(t.assigned_engineer_id, meId)}</span>
               <span className="flex items-center gap-1" aria-live="polite">
                 <span
@@ -184,6 +186,12 @@ export function TicketPanel({
           <Button variant="secondary" size="sm" onClick={onClose}>
             Закрыть
           </Button>
+        </div>
+      )}
+
+      {t && !t.client.is_active && !live.lost && (
+        <div role="status" className="border-b border-border bg-status-red-bg px-6 py-3">
+          <p className="text-label text-status-red-fg">{BLOCKED_TEXT}</p>
         </div>
       )}
 
@@ -284,8 +292,18 @@ export function TicketPanel({
   )
 }
 
+/** #104: инженер видит, что клиент заблокирован, — ответ сохранится, но прочитать его клиент сейчас не может. */
+const BLOCKED_TEXT =
+  'Клиент заблокирован администратором: войти в приложение он не может, уведомления ему не приходят. ' +
+  'Ответ сохранится в переписке — клиент увидит его после разблокировки.'
+
+/** Клиент — владелец авто: телефон, а если ПД анонимизированы — только номер учётной записи. */
+function clientLabel(ticket: TicketDetail): string {
+  return ticket.client.phone ?? `#${ticket.client.id} (данные удалены)`
+}
+
 /**
- * Почему ответ клиенту недоступен (U-02, юзабилити-тест R1). «Взять в работу» есть только у свободного
+ * Подсказка под ответом: клиент заблокирован (#104) или почему ответ недоступен (U-02, юзабилити-тест R1). «Взять в работу» есть только у свободного
  * нерешённого тикета, поэтому у чужого и решённого подсказка не зовёт его брать — иначе ведёт в тупик.
  */
 function replyHint(ticket: TicketDetail, meId: number): string | undefined {
@@ -294,7 +312,9 @@ function replyHint(ticket: TicketDetail, meId: number): string | undefined {
       ? 'Тикет решён — чтобы ответить, верните его в работу'
       : 'Тикет решён — ответ недоступен'
   }
-  if (ticket.assigned_engineer_id === meId) return undefined
+  if (ticket.assigned_engineer_id === meId) {
+    return ticket.client.is_active ? undefined : 'Клиент заблокирован — ответ он увидит после разблокировки'
+  }
   if (ticket.assigned_engineer_id == null) return 'Возьмите тикет в работу, чтобы ответить клиенту'
   return `Тикет ведёт ${assigneeLabel(ticket.assigned_engineer_id, meId)} — ответить может только он`
 }

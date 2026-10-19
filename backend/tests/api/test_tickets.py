@@ -28,7 +28,7 @@ from tests.api.conftest import (
     model_id,
 )
 from tests.api.knowledge_support import build_tree
-from tests.api.ticket_support import create, error_code
+from tests.api.ticket_support import create, error_code, set_status
 
 CLIENT_PHONE = "+375293300001"
 ENGINEER_PHONE = "+375293300002"
@@ -177,6 +177,30 @@ def test_detail_has_firmware_snapshot_and_aggregate_context(
 
 
 # ---------- Создание ----------
+
+
+def test_detail_shows_client_and_block_flag(client, owner, engineer, admin, vehicle):
+    """#104: в карточке — клиент (владелец авто); блокировка видна, чат её не закрывает."""
+    eng_headers, _ = engineer
+    created = create(client, owner, vehicle["id"])
+    me = client.get(f"{API}/me", headers=owner).json()
+    expected = {"id": me["id"], "phone": CLIENT_PHONE, "role": "client", "is_active": True}
+    assert {k: created["client"][k] for k in expected} == expected, "клиенту — он сам"
+
+    tid = created["id"]
+    claimed = client.post(f"{API}/tickets/{tid}/claim", headers=eng_headers).json()
+    assert {k: claimed["client"][k] for k in expected} == expected, "инженеру — кому он отвечает"
+
+    r = client.patch(f"{API}/users/{me['id']}", json={"is_active": False}, headers=admin[0])
+    assert r.status_code == 200, r.text
+    r = client.get(f"{API}/tickets/{tid}", headers=eng_headers)
+    assert r.status_code == 200, r.text
+    assert r.json()["client"]["is_active"] is False
+    # Тикеты заблокированного сохраняются, ответ он увидит после разблокировки (глоссарий).
+    r = client.post(f"{API}/tickets/{tid}/messages", json={"body": "Ждём вас"}, headers=eng_headers)
+    assert r.status_code == 201, r.text
+    resolved = set_status(client, eng_headers, tid, "resolved")
+    assert resolved["client"]["is_active"] is False, "в ответах записей — тоже"
 
 
 def test_create_requires_own_active_vehicle(client, owner, as_client, vehicle):
