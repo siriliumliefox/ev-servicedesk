@@ -36,6 +36,7 @@ on:
       - ".github/workflows/web-e2e.yml"
       - ".github/workflows/mobile-e2e.yml"
       - ".github/workflows/mobile-ui-e2e.yml"
+      - ".github/actions/**"             # composite backend-poetry/backend-image (regression)
   workflow_dispatch:
     inputs:
       git_sha:

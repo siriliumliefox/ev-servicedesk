@@ -22,8 +22,10 @@ updates:
     target-branch: develop
     schedule: { interval: weekly, day: monday }
     open-pull-requests-limit: 5
+  # `/` — только .github/workflows и корневой action.yml; composite-actions в .github/actions/*
+  # надо перечислять отдельно, иначе их версии отстают от workflow (directories понимает glob).
   - package-ecosystem: github-actions
-    directory: /
+    directories: ["/", "/.github/actions/*"]
     target-branch: develop
     schedule: { interval: weekly, day: monday }
     open-pull-requests-limit: 5
