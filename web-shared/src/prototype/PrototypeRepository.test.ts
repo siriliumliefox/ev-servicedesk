@@ -91,6 +91,27 @@ describe("тикет: claim, статусы, сообщения", () => {
     expect((await apiError(repo.createTicketMessage(1042, "Ещё"))).code).toBe("TICKET_RESOLVED");
   });
 
+  it("повтор сообщения с тем же ключом не создаёт дубль и события (ADR 0031)", async () => {
+    const repo = engineer();
+    const seen: string[] = [];
+    const stop = repo.watchTicket(1042, {
+      onReady: () => undefined,
+      onMessage: (m) => seen.push(m.body),
+      onTicket: () => undefined,
+      onLost: () => undefined,
+    });
+    await Promise.resolve();
+    const before = (await repo.listTicketMessages(1042)).length;
+    const first = await repo.createTicketMessage(1042, "Проверьте APN", "key-1");
+    expect(await repo.createTicketMessage(1042, " Проверьте APN ", "key-1")).toEqual(first);
+    const reused = await apiError(repo.createTicketMessage(1042, "Другое", "key-1"));
+    expect([reused.status, reused.code]).toEqual([422, "CLIENT_REQUEST_ID_REUSED"]);
+    await repo.createTicketMessage(1042, "Проверьте APN", "key-2");
+    expect((await repo.listTicketMessages(1042)).length).toBe(before + 2);
+    expect(seen).toEqual(["Проверьте APN", "Проверьте APN"]);
+    stop();
+  });
+
   it("события тикета: ready, затем свои сообщения и смена статуса", async () => {
     const repo = engineer();
     const events: string[] = [];

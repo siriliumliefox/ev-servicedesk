@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: EV-ServiceDesk API
-  version: "1.12.0"
+  version: "1.13.0"
   description: >
     API дипломного проекта «EV-ServiceDesk» (ООО «ЕТСавтоГомель»).
     Контракты сервисов: Auth, Vehicle, Aggregates & Maintenance, Tickets,
@@ -46,7 +46,8 @@ tags:
       переоткрытием, ни ожиданием вендора). Первичный ответ — метрика аналитики, не срок.
       Граф статусов — updateTicketStatus, видимость тикетов — getTicket. Реал-тайм доставка
       событий тикета — WebSocket /v1/tickets/{ticketId}/ws, описание — docs/asyncapi.yaml
-      (AsyncAPI 3.0).
+      (AsyncAPI 3.0). Повтор после обрыва связи: createTicket и createTicketMessage принимают
+      client_request_id — ключ повтора (UUID черновика, 1.13.0, ADR 0031).
     externalDocs:
       description: События тикета по WebSocket — AsyncAPI 3.0 (Глава 13, ADR 0017)
       url: https://github.com/siriliumliefox/ev-servicedesk/blob/develop/docs/asyncapi.yaml
@@ -975,6 +976,10 @@ paths:
         В тикете сохраняется версия статьи — TicketDetail.source_article. Вложения — до 10, правила и коды ошибок 422 —
         createPresignedUpload. 429 RATE_LIMITED — больше 10 тикетов в час на клиента, заголовок
         Retry-After. Ограничения на число открытых тикетов нет.
+        Повтор (1.13.0, ADR 0031): запрос с client_request_id, с которым на это авто тикет уже
+        создан, возвращает 201 с этим тикетом — без нового тикета и без учёта в лимите;
+        вложения повтора не привязываются (их привязал исходный запрос). Тот же ключ с другими
+        category или description — 422 CLIENT_REQUEST_ID_REUSED.
       requestBody:
         required: true
         content:
@@ -1181,6 +1186,10 @@ paths:
         первичный ответ (метрика аналитики). Подписчики WebSocket получают message.created
         (docs/asyncapi.yaml). 429 RATE_LIMITED — больше 30 сообщений в минуту на пользователя,
         заголовок Retry-After.
+        Повтор (1.13.0, ADR 0031): запрос с client_request_id, с которым этот автор уже написал в
+        этот тикет, возвращает 201 с этим сообщением — без нового сообщения, без события
+        message.created и без учёта в лимите, в том числе после решения тикета; вложения повтора
+        не привязываются. Тот же ключ с другим body — 422 CLIENT_REQUEST_ID_REUSED.
       x-required-roles: [client, engineer, admin]
       x-rbac-action: ["Сообщения в чате тикета"]
       requestBody:
@@ -2566,6 +2575,18 @@ components:
         attachments:
           type: array
           items: { $ref: '#/components/schemas/TicketAttachmentInput' }
+        client_request_id: { $ref: '#/components/schemas/ClientRequestId' }
+
+    ClientRequestId:
+      type: string
+      format: uuid
+      nullable: true
+      description: >-
+        Ключ повтора: UUID, который клиент создаёт для черновика (форма тикета, поле сообщения) и
+        передаёт во всех попытках его отправки, пока не получит ответ. Повтор после обрыва
+        связи не создаёт дубль (#111). Новый черновик или изменённый текст — новый ключ.
+        Область ключа: тикет — авто, сообщение — тикет и автор. null или нет поля — каждый
+        запрос создаёт новую запись. Добавлено в 1.13.0 (ADR 0031).
 
     Ticket:
       type: object
@@ -2658,6 +2679,7 @@ components:
         attachments:
           type: array
           items: { $ref: '#/components/schemas/TicketAttachmentInput' }
+        client_request_id: { $ref: '#/components/schemas/ClientRequestId' }
 
     TicketMessage:
       type: object

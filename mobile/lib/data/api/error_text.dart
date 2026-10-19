@@ -42,6 +42,8 @@ String errorText(String code, {Map<String, Object?>? details, int? retryAfterSec
       return 'Файл слишком большой: фото — до 20 МБ, видео — до 200 МБ';
     case 'TOO_MANY_ATTACHMENTS':
       return 'Можно прикрепить не больше 10 файлов';
+    case 'CLIENT_REQUEST_ID_REUSED':
+      return 'Текст изменился после неудачной отправки — отправьте ещё раз';
     case 'ATTACHMENT_NOT_FOUND':
     case 'ATTACHMENT_ALREADY_USED':
     case 'UPLOAD_FAILED':

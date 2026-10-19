@@ -53,7 +53,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     application = FastAPI(
         title="EV-ServiceDesk API",
-        version="1.12.0",  # = info.version docs/openapi.yaml
+        version="1.13.0",  # = info.version docs/openapi.yaml
         description="Backend EV-ServiceDesk. Контракт — docs/openapi.yaml (Глава 3, ADR 0007).",
         lifespan=lifespan,
         # Swagger и схема — для разработки и staging; в production не публикуются (ADR 0029 п. 8):

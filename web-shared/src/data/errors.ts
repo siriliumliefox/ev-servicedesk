@@ -23,6 +23,7 @@ export const ERROR_TEXTS: Readonly<Record<string, string>> = {
   ASSIGNEE_NOT_ENGINEER: "Назначить можно только активного инженера.",
   ATTACHMENT_NOT_FOUND: "Вложение не найдено — загрузите файл заново.",
   ATTACHMENT_ALREADY_USED: "Вложение уже прикреплено к другому сообщению.",
+  CLIENT_REQUEST_ID_REUSED: "Сообщение изменилось после неудачной отправки — отправьте его ещё раз.",
   ATTACHMENT_TOO_LARGE: "Файл слишком большой.",
   ATTACHMENT_TYPE_NOT_ALLOWED: "Такой тип файла не поддерживается.",
   TOO_MANY_ATTACHMENTS: "Слишком много вложений — не больше 10.",

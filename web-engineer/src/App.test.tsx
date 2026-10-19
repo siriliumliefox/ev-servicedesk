@@ -1,10 +1,10 @@
 // Прототип кабинета инженера (Глава 8, ADR 0012): ключевые сценарии и подсчёт кликов для типовых операций
 // (MASTER_CHECKLIST, «Подсчёт кликов для типовых операций инженера»). Клик = одно нажатие мыши; ввод
 // текста кликом не считается. Таблица — docs/design/WEB_PROTOTYPE.md.
-import { render, screen, within } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it } from 'vitest'
-import { PrototypeRepository } from '@ev-servicedesk/web-shared'
+import { ApiError, PrototypeRepository } from '@ev-servicedesk/web-shared'
 import App from './App.tsx'
 
 const NOW = new Date('2026-10-10T12:00:00Z')
@@ -120,6 +120,41 @@ describe('карточка тикета', () => {
     const reply = await within(panel).findByLabelText('Ответ клиенту')
     expect(reply).toBeDisabled()
     expect(reply).toHaveAccessibleDescription('Тикет решён — ответ недоступен')
+  })
+
+  // #111 (ADR 0031): сервер записал сообщение, а ответ потерян — повтор не создаёт дубль.
+  it('повтор отправки после сбоя сети — тот же ключ, сообщение одно', async () => {
+    const { repo, user, click } = setup()
+    const keys: (string | undefined)[] = []
+    const createTicketMessage = repo.createTicketMessage.bind(repo)
+    let loseResponse = true
+    repo.createTicketMessage = async (ticketId, body, key) => {
+      keys.push(key)
+      const message = await createTicketMessage(ticketId, body, key)
+      if (!loseResponse) return message
+      loseResponse = false
+      throw new ApiError('NETWORK', 'Нет соединения с сервером', 0)
+    }
+    await click(await card(1042))
+    const panel = await screen.findByRole('complementary', { name: 'Карточка тикета #1042' })
+    const chat = within(panel).getByRole('region', { name: 'Переписка' })
+    await user.type(within(panel).getByLabelText('Ответ клиенту'), 'Перезагрузите ГУ')
+    await click(within(panel).getByRole('button', { name: 'Отправить' }))
+    expect(await within(panel).findByText(/Нет соединения с сервером/)).toBeInTheDocument()
+    expect(within(panel).getByLabelText('Ответ клиенту')).toHaveValue('Перезагрузите ГУ')
+
+    await click(within(panel).getByRole('button', { name: 'Отправить' }))
+    await waitFor(() => expect(within(panel).getByLabelText('Ответ клиенту')).toHaveValue(''))
+    expect(within(chat).getAllByText('Перезагрузите ГУ')).toHaveLength(1)
+    expect((await repo.listTicketMessages(1042)).filter((m) => m.body === 'Перезагрузите ГУ')).toHaveLength(1)
+    expect(keys[0]).toMatch(/^[0-9a-f-]{36}$/)
+    expect(keys[1]).toBe(keys[0])
+
+    // Следующее сообщение — новый черновик и новый ключ, даже с тем же текстом.
+    await user.type(within(panel).getByLabelText('Ответ клиенту'), 'Перезагрузите ГУ')
+    await click(within(panel).getByRole('button', { name: 'Отправить' }))
+    await waitFor(() => expect(within(chat).getAllByText('Перезагрузите ГУ')).toHaveLength(2))
+    expect(keys[2]).not.toBe(keys[0])
   })
 
   it('выбранный тикет — в адресе; Escape закрывает карточку', async () => {

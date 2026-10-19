@@ -128,6 +128,34 @@ void main() {
     expect(message.attachments.single.fileName, 'a.jpg', reason: 'имя без подписи URL');
   });
 
+  test('ключ повтора уходит в теле создания тикета и сообщения, без ключа — поля нет (ADR 0031)', () async {
+    routes['POST /v1/tickets'] = (_) => _json(201, {
+          'id': 7,
+          'vehicle_id': 1,
+          'category': 'navigation',
+          'status': 'new',
+          'summary': 's',
+          'created_at': '2026-10-13T10:00:00Z',
+        });
+    routes['POST /v1/tickets/7/messages'] = (_) => _json(201, _message(30));
+    const requestId = '6f1c2a4e-8b3d-4c5e-9f70-1a2b3c4d5e6f';
+    await repo.createTicket(const TicketDraft(
+      vehicleId: 1,
+      category: TicketCategory.navigation,
+      description: 'Не строит маршрут',
+      clientRequestId: requestId,
+    ));
+    await repo.sendMessage(7, 'Жду', clientRequestId: requestId);
+    await repo.sendMessage(7, 'Без ключа');
+
+    final bodies = [
+      for (final r in requests.where((r) => r.method == 'POST' && r.url.path.startsWith('/v1/tickets')))
+        jsonDecode(r.body) as Map,
+    ];
+    expect([for (final b in bodies) b['client_request_id']], [requestId, requestId, null]);
+    expect(bodies.last.containsKey('client_request_id'), isFalse);
+  });
+
   test('переписка — все страницы; догрузка — after_id', () async {
     routes['GET /v1/tickets/7/messages'] = (r) {
       final page = int.parse(r.url.queryParameters['page']!);

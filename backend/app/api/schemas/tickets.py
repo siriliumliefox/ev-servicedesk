@@ -6,6 +6,7 @@
 валидирует возвращённую модель, и валидаторы ответа должны быть идемпотентны.
 """
 
+import uuid
 from collections.abc import Callable
 from datetime import datetime
 from typing import Annotated
@@ -48,6 +49,8 @@ class TicketCreateRequest(BaseModel):
     source_article_id: int | None = None
     source_node_id: int | None = None
     attachments: list[TicketAttachmentInput] = []
+    # Ключ повтора (ADR 0031): UUID черновика — повтор после обрыва связи не создаёт дубль.
+    client_request_id: uuid.UUID | None = None
 
     _check_description = field_validator("description")(_text)
 
@@ -64,6 +67,7 @@ class TicketAssignRequest(BaseModel):
 class TicketMessageCreateRequest(BaseModel):
     body: str
     attachments: list[TicketAttachmentInput] = []
+    client_request_id: uuid.UUID | None = None  # ключ повтора (ADR 0031)
 
     _check_body = field_validator("body")(_text)
 

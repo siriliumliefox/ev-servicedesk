@@ -478,7 +478,7 @@ export interface paths {
         put?: never;
         /**
          * Создать тикет
-         * @description source_article_id/source_node_id — при эскалации из дерева решений (Knowledge Base), иначе null. Вложения — через /uploads/presign заранее. Уточнено в 1.4.0 (ADR 0017): только на своё активное авто, иначе 404. Тикет создаётся в статусе new без исполнителя (очередь); sla_due_at = created_at + норматив категории (тег Tickets); firmware_version_at_creation — снимок текущей прошивки авто (N-09). description — 1…4000 символов после обрезки пробелов по краям. Статья и узел должны существовать, узел — принадлежать статье, узел без статьи запрещён — иначе 422 INVALID_SOURCE_REFERENCE. Уточнено в 1.5.0 (ADR 0018 п. 11): у статьи должна быть опубликованная версия (сейчас может быть снята с публикации), source_node_id — узел эскалации (is_escalation=true); удалённый узел — 422, повторите без source_node_id. В тикете сохраняется версия статьи — TicketDetail.source_article. Вложения — до 10, правила и коды ошибок 422 — createPresignedUpload. 429 RATE_LIMITED — больше 10 тикетов в час на клиента, заголовок Retry-After. Ограничения на число открытых тикетов нет.
+         * @description source_article_id/source_node_id — при эскалации из дерева решений (Knowledge Base), иначе null. Вложения — через /uploads/presign заранее. Уточнено в 1.4.0 (ADR 0017): только на своё активное авто, иначе 404. Тикет создаётся в статусе new без исполнителя (очередь); sla_due_at = created_at + норматив категории (тег Tickets); firmware_version_at_creation — снимок текущей прошивки авто (N-09). description — 1…4000 символов после обрезки пробелов по краям. Статья и узел должны существовать, узел — принадлежать статье, узел без статьи запрещён — иначе 422 INVALID_SOURCE_REFERENCE. Уточнено в 1.5.0 (ADR 0018 п. 11): у статьи должна быть опубликованная версия (сейчас может быть снята с публикации), source_node_id — узел эскалации (is_escalation=true); удалённый узел — 422, повторите без source_node_id. В тикете сохраняется версия статьи — TicketDetail.source_article. Вложения — до 10, правила и коды ошибок 422 — createPresignedUpload. 429 RATE_LIMITED — больше 10 тикетов в час на клиента, заголовок Retry-After. Ограничения на число открытых тикетов нет. Повтор (1.13.0, ADR 0031): запрос с client_request_id, с которым на это авто тикет уже создан, возвращает 201 с этим тикетом — без нового тикета и без учёта в лимите; вложения повтора не привязываются (их привязал исходный запрос). Тот же ключ с другими category или description — 422 CLIENT_REQUEST_ID_REUSED.
          */
         post: operations["createTicket"];
         delete?: never;
@@ -592,7 +592,7 @@ export interface paths {
         put?: never;
         /**
          * Отправить сообщение в тикет
-         * @description Добавляет сообщение в чат тикета; доступно всем сторонам диалога. Уточнено в 1.4.0 (ADR 0017): единственный способ отправки (WebSocket — только доставка). client — в тикет своего авто (в т. ч. в статусе new); engineer — только в назначенный ему тикет (тикет из очереди — сначала claimTicket, иначе 403); admin — в любой. Невидимый тикет — 404. В решённый тикет (status=resolved) не пишет никто — 409 TICKET_RESOLVED; продолжить диалог можно после переоткрытия (updateTicketStatus). body — 1…4000 символов после обрезки пробелов по краям; вложения — до 10, правила и коды ошибок 422 — createPresignedUpload. Первое сообщение engineer/admin фиксирует первичный ответ (метрика аналитики). Подписчики WebSocket получают message.created (docs/asyncapi.yaml). 429 RATE_LIMITED — больше 30 сообщений в минуту на пользователя, заголовок Retry-After.
+         * @description Добавляет сообщение в чат тикета; доступно всем сторонам диалога. Уточнено в 1.4.0 (ADR 0017): единственный способ отправки (WebSocket — только доставка). client — в тикет своего авто (в т. ч. в статусе new); engineer — только в назначенный ему тикет (тикет из очереди — сначала claimTicket, иначе 403); admin — в любой. Невидимый тикет — 404. В решённый тикет (status=resolved) не пишет никто — 409 TICKET_RESOLVED; продолжить диалог можно после переоткрытия (updateTicketStatus). body — 1…4000 символов после обрезки пробелов по краям; вложения — до 10, правила и коды ошибок 422 — createPresignedUpload. Первое сообщение engineer/admin фиксирует первичный ответ (метрика аналитики). Подписчики WebSocket получают message.created (docs/asyncapi.yaml). 429 RATE_LIMITED — больше 30 сообщений в минуту на пользователя, заголовок Retry-After. Повтор (1.13.0, ADR 0031): запрос с client_request_id, с которым этот автор уже написал в этот тикет, возвращает 201 с этим сообщением — без нового сообщения, без события message.created и без учёта в лимите, в том числе после решения тикета; вложения повтора не привязываются. Тот же ключ с другим body — 422 CLIENT_REQUEST_ID_REUSED.
          */
         post: operations["createTicketMessage"];
         delete?: never;
@@ -1394,7 +1394,13 @@ export interface components {
             source_article_id?: number | null;
             source_node_id?: number | null;
             attachments?: components["schemas"]["TicketAttachmentInput"][];
+            client_request_id?: components["schemas"]["ClientRequestId"];
         };
+        /**
+         * Format: uuid
+         * @description Ключ повтора: UUID, который клиент создаёт для черновика (форма тикета, поле сообщения) и передаёт во всех попытках его отправки, пока не получит ответ. Повтор после обрыва связи не создаёт дубль (#111). Новый черновик или изменённый текст — новый ключ. Область ключа: тикет — авто, сообщение — тикет и автор. null или нет поля — каждый запрос создаёт новую запись. Добавлено в 1.13.0 (ADR 0031).
+         */
+        ClientRequestId: string | null;
         /** @description Элемент списка тикетов. vehicle_model (модель авто тикета) и summary — для карточки канбана и списка клиента; добавлены в 1.4.0 (ADR 0017, закрывает ADR 0012 п. 5). */
         Ticket: {
             id: number;
@@ -1449,6 +1455,7 @@ export interface components {
             /** @description 1…4000 символов после обрезки пробелов по краям, иначе 422 (проверяет сервер, ADR 0017 п. 13). Уточнено в 1.4.0. */
             body: string;
             attachments?: components["schemas"]["TicketAttachmentInput"][];
+            client_request_id?: components["schemas"]["ClientRequestId"];
         };
         /** @description Сообщение чата тикета. Клиенту автор-сотрудник (engineer/admin) отдаётся с phone и telegram_id = null (ADR 0017 п. 12). Уточнено в 1.4.0. */
         TicketMessage: {

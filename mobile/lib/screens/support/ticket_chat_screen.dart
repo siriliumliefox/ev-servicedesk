@@ -9,6 +9,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../app/app_state.dart';
 import '../../data/models.dart';
+import '../../data/retry_key.dart';
 import '../../data/ticket_live.dart';
 import '../../theme/app_theme.dart';
 import '../../ui/format.dart';
@@ -49,6 +50,8 @@ class _TicketChatScreenState extends State<TicketChatScreen> {
   late final AppLifecycleListener _lifecycle;
 
   final _controller = TextEditingController();
+  // Повтор неудачной отправки того же черновика — с тем же ключом: сервер не создаст дубль (#111).
+  final _retryKey = RetryKey();
   final _scroll = ScrollController();
   late final AttachmentUploads _uploads = AttachmentUploads(_app.repository)..addListener(_changed);
   bool _sending = false;
@@ -164,12 +167,17 @@ class _TicketChatScreenState extends State<TicketChatScreen> {
       return;
     }
     setState(() => _sending = true);
+    final text = body.isEmpty ? 'Вложение' : body;
+    final attachments = _uploads.uploaded;
+    final key = _retryKey.forDraft([text, for (final a in attachments) a.key].join('\n'));
     try {
       final m = await _app.repository.sendMessage(
         widget.ticket.id,
-        body.isEmpty ? 'Вложение' : body,
-        attachments: _uploads.uploaded,
+        text,
+        attachments: attachments,
+        clientRequestId: key,
       );
+      _retryKey.reset();
       setState(() {
         _messages[m.id] = m;
         _controller.clear();

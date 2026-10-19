@@ -96,6 +96,7 @@ def create_ticket(
         source_article_id=body.source_article_id,
         source_node_id=body.source_node_id,
         attachment_inputs=body.attachments,
+        client_request_id=body.client_request_id,
     )
     return ticket_detail_out(card, presign)
 
@@ -189,5 +190,6 @@ def create_ticket_message(
         ticket_id,
         body=body.body,
         attachment_inputs=body.attachments,
+        client_request_id=body.client_request_id,
     )
     return message_out(message, user, presign)

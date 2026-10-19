@@ -108,8 +108,10 @@ abstract class ClientRepository {
   /// GET /tickets/{id}/messages — вся переписка; afterId — только сообщения новее (догрузка чата).
   Future<List<TicketMessage>> messages(int ticketId, {int? afterId});
 
-  /// POST /tickets/{id}/messages; вложения — загруженные uploadAttachment.
-  Future<TicketMessage> sendMessage(int ticketId, String body, {List<UploadedAttachment> attachments});
+  /// POST /tickets/{id}/messages; вложения — загруженные uploadAttachment. clientRequestId — ключ повтора
+  /// (ADR 0031): повтор той же отправки с тем же ключом возвращает уже записанное сообщение.
+  Future<TicketMessage> sendMessage(int ticketId, String body,
+      {List<UploadedAttachment> attachments, String? clientRequestId});
 
   /// POST /uploads/presign и PUT файла в S3: вложение готово к привязке к тикету или сообщению.
   Future<UploadedAttachment> uploadAttachment(LocalAttachment file, {void Function(double progress)? onProgress});

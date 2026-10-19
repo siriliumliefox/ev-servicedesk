@@ -126,7 +126,11 @@ export interface EngineerRepository extends CommonRepository {
   updateTicketStatus(ticketId: number, status: TicketStatus): Promise<TicketDetail>;
   /** Вся история (все страницы) или только сообщения с `id > after_id` — догрузка после `ready`. */
   listTicketMessages(ticketId: number, query?: { after_id?: number }): Promise<TicketMessage[]>;
-  createTicketMessage(ticketId: number, body: string): Promise<TicketMessage>;
+  /**
+   * `clientRequestId` — ключ повтора (ADR 0031): повтор той же отправки после сбоя сети с тем же
+   * ключом возвращает уже записанное сообщение, а не дубль.
+   */
+  createTicketMessage(ticketId: number, body: string, clientRequestId?: string): Promise<TicketMessage>;
   listMaintenanceRecords(vehicleId: number, query?: PageQuery): Promise<MaintenanceRecordList>;
   /** Замена агрегата (E-05): сброс счётчика «светофора» и запись в истории ТО одним вызовом. */
   replaceAggregateStatus(vehicleId: number, aggregateTypeCode: string, body: AggregateReplaceRequest): Promise<AggregateStatus>;

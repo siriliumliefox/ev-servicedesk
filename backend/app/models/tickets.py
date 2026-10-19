@@ -1,5 +1,6 @@
 """Tickets: тикеты, чат, вложения, нормативы SLA (C-08, C-09, E-01, E-02, E-04, A-05, N-09)."""
 
+import uuid
 from datetime import datetime
 
 from sqlalchemy import (
@@ -13,6 +14,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    Uuid,
     and_,
     func,
     select,
@@ -52,6 +54,8 @@ class Ticket(IdMixin, TimestampMixin, Base):
             ondelete="SET NULL",
         ),
         Index("ix_ticket_status_sla_due_at", "status", "sla_due_at"),
+        # Ключ повтора создания (ADR 0031): область — авто, т. е. его неизменный владелец.
+        UniqueConstraint("vehicle_id", "client_request_id"),
     )
 
     vehicle_id: Mapped[int] = mapped_column(
@@ -80,6 +84,7 @@ class Ticket(IdMixin, TimestampMixin, Base):
     )
     first_response_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    client_request_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
 
     # Связи только явной загрузкой (selectinload), ленивая подгрузка — ошибка (ADR 0015).
     vehicle: Mapped[Vehicle] = relationship(lazy="raise")
@@ -125,6 +130,8 @@ class TicketMessage(IdMixin, CreatedAtMixin, Base):
         # Цель составного FK из ticket_attachment (вложение и сообщение — одного тикета).
         UniqueConstraint("id", "ticket_id"),
         Index("ix_ticket_message_ticket_id_created_at", "ticket_id", "created_at"),
+        # Ключ повтора отправки (ADR 0031): область — тикет и автор.
+        UniqueConstraint("ticket_id", "author_id", "client_request_id"),
     )
 
     ticket_id: Mapped[int] = mapped_column(
@@ -134,6 +141,7 @@ class TicketMessage(IdMixin, CreatedAtMixin, Base):
         BigInteger, ForeignKey("app_user.id", ondelete="RESTRICT"), nullable=False, index=True
     )
     body: Mapped[str] = mapped_column(Text, nullable=False)
+    client_request_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
 
     author: Mapped[AppUser] = relationship(lazy="raise")
     attachments: Mapped[list["TicketAttachment"]] = relationship(

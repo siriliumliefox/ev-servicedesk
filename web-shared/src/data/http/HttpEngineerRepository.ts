@@ -58,9 +58,12 @@ export class HttpEngineerRepository extends HttpCommonRepository implements Engi
     );
   }
 
-  createTicketMessage(ticketId: number, body: string): Promise<TicketMessage> {
+  createTicketMessage(ticketId: number, body: string, clientRequestId?: string): Promise<TicketMessage> {
     return this.session.request((c) =>
-      c.POST("/tickets/{ticketId}/messages", { params: { path: { ticketId } }, body: { body } }),
+      c.POST("/tickets/{ticketId}/messages", {
+        params: { path: { ticketId } },
+        body: { body, client_request_id: clientRequestId },
+      }),
     );
   }
 
