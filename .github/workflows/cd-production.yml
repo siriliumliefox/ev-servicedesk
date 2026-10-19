@@ -36,7 +36,7 @@ jobs:
       sha: ${{ steps.sha.outputs.sha }}
       mode: ${{ steps.sha.outputs.mode }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 2
 
@@ -67,7 +67,7 @@ jobs:
       matrix:
         app: [web-engineer, web-admin]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.resolve.outputs.sha }}
 

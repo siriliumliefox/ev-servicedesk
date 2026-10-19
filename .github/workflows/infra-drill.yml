@@ -32,7 +32,7 @@ jobs:
     env:
       DRILLS: ${{ inputs.drills || 'rollback dr alerts' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0   # выпуск N учения отката — git worktree старого коммита
 
