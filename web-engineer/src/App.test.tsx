@@ -122,6 +122,30 @@ describe('карточка тикета', () => {
     expect(reply).toHaveAccessibleDescription('Тикет решён — ответ недоступен')
   })
 
+  // #104 (ADR 0032): инженер видит клиента и что тот заблокирован; ответ при этом не запрещён.
+  it('клиент в карточке; заблокированный — пометка и подсказка, ответ сохраняется', async () => {
+    const { repo, user, click } = setup()
+    await click(await card(1042))
+    let panel = await screen.findByRole('complementary', { name: 'Карточка тикета #1042' })
+    const { client } = await repo.getTicket(1042)
+    expect(await within(panel).findByText(`· Клиент: ${client.phone}`)).toBeInTheDocument()
+    expect(within(panel).queryByText('Заблокирован')).toBeNull()
+
+    await repo.updateUser(client.id, { is_active: false })
+    await user.keyboard('{Escape}')
+    await click(await card(1042))
+    panel = await screen.findByRole('complementary', { name: 'Карточка тикета #1042' })
+    expect(await within(panel).findByText('Заблокирован')).toBeInTheDocument()
+    expect(within(panel).getByRole('status')).toHaveTextContent(/Клиент заблокирован администратором/)
+    const reply = within(panel).getByLabelText('Ответ клиенту')
+    expect(reply).toBeEnabled()
+    expect(reply).toHaveAccessibleDescription('Клиент заблокирован — ответ он увидит после разблокировки')
+    await user.type(reply, 'Ждём вас в сервисе')
+    await click(within(panel).getByRole('button', { name: 'Отправить' }))
+    const chat = within(panel).getByRole('region', { name: 'Переписка' })
+    expect(await within(chat).findByText('Ждём вас в сервисе')).toBeInTheDocument()
+  })
+
   // #111 (ADR 0031): сервер записал сообщение, а ответ потерян — повтор не создаёт дубль.
   it('повтор отправки после сбоя сети — тот же ключ, сообщение одно', async () => {
     const { repo, user, click } = setup()

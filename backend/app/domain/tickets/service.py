@@ -50,7 +50,13 @@ MESSAGE_OUT = (selectinload(TicketMessage.author), selectinload(TicketMessage.at
 def _card(db: Session, ticket_id: int) -> TicketCard:
     """Состояние после commit (UPDATE в обход ORM, триггеры) со связями для ответа."""
     ticket = db.get_one(Ticket, ticket_id, options=TICKET_DETAIL, populate_existing=True)
-    return TicketCard(ticket, current_statuses(db, ticket.vehicle))
+    return _with_context(db, ticket)
+
+
+def _with_context(db: Session, ticket: Ticket) -> TicketCard:
+    """Карточка: статусы агрегатов авто и клиент — владелец авто (неизменяем, ADR 0003)."""
+    client = db.get_one(AppUser, ticket.vehicle.user_id, populate_existing=True)
+    return TicketCard(ticket, current_statuses(db, ticket.vehicle), client)
 
 
 def _finish(db: Session, events: TicketEvents, ticket_id: int, *, changed: bool) -> TicketCard:
@@ -174,7 +180,7 @@ def list_tickets_stmt(
 def get_ticket(db: Session, user: AppUser, ticket_id: int) -> TicketCard:
     """GET /tickets/{id}: карточка с контекстом авто (Vehicle + Aggregates, Глава 17)."""
     ticket = access.get_ticket(db, user, ticket_id, *TICKET_DETAIL)
-    return TicketCard(ticket, current_statuses(db, ticket.vehicle))
+    return _with_context(db, ticket)
 
 
 # ---------- Создание ----------

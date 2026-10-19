@@ -926,6 +926,8 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
       source_article: null,
       attachments: [],
       vehicle_context: { vehicle, aggregate_statuses: this.garage.aggregateStatuses(vehicle.id) },
+      // Владелец авто (#104) — из пользователей прототипа: блокировка в админ-панели видна в карточке.
+      client: this.user(VEHICLES.find((v) => v.vehicle.id === vehicle.id)!.ownerId),
     };
   }
 

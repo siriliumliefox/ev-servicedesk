@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: EV-ServiceDesk API
-  version: "1.13.0"
+  version: "1.14.0"
   description: >
     API дипломного проекта «EV-ServiceDesk» (ООО «ЕТСавтоГомель»).
     Контракты сервисов: Auth, Vehicle, Aggregates & Maintenance, Tickets,
@@ -2632,9 +2632,18 @@ components:
       allOf:
         - $ref: '#/components/schemas/Ticket'
         - type: object
-          required: [firmware_version_at_creation, source_article]
+          required: [firmware_version_at_creation, source_article, client]
           properties:
             description: { type: string }
+            client:
+              allOf:
+                - $ref: '#/components/schemas/UserPublic'
+              description: >-
+                Клиент — владелец авто тикета: инженеру и администратору — кому они отвечают, клиенту —
+                он сам. is_active=false — клиент заблокирован администратором: войти он не может,
+                уведомления ему не отправляются, а сообщения в чат принимаются и станут видны ему
+                после разблокировки (глоссарий «Блокировка пользователя»). phone=null — ПД
+                анонимизированы. Добавлено в 1.14.0 (#104, ADR 0032).
             firmware_version_at_creation:
               type: string
               nullable: true
