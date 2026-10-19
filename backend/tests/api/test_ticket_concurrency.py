@@ -14,14 +14,18 @@
 - создание тикета и удаление авто упорядочены блокировкой авто (п. 6);
 - сообщение и решение тикета упорядочены блокировкой строки (п. 8): в решённый — 409;
   временные метки — момент записи под блокировкой, а не начало транзакции запроса;
+- повтор по ключу (#111, ADR 0031): исходный запрос и повторы с одним `client_request_id`,
+  обработанные одновременно, создают одно сообщение (одну запись тикета) с одним вложением;
 - нагрузка чата (чек-лист главы 13): 20 одновременных сообщений без потерь — в БД,
   в истории и у двух подписчиков WebSocket.
 Тесты гонок проверены мутацией: без атомарного условия или блокировки они падают.
 """
 
+import itertools
 import random
 import threading
 import time
+import uuid
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
 from typing import Any, NamedTuple
@@ -470,6 +474,96 @@ def test_storage_io_does_not_hold_ticket_lock(
         writer.join(5)
     assert r.status_code == 200, r.text
     assert outcome["message"].status_code == 201, outcome["message"].text
+
+
+# ---------- Повтор по ключу (#111, ADR 0031) ----------
+
+RETRIES = 4  # исходный запрос и повторы после обрыва связи (#111: «2–3 раза»)
+
+
+def check_key_together(monkeypatch: pytest.MonkeyPatch, name: str, n: int) -> None:
+    """Первые `n` проверок ключа ждут друг друга: все запросы проверили ключ до записи первого.
+
+    Так воспроизводится #111: backend «отмёрз» и обрабатывает исходный запрос и повторы
+    одновременно — ни один ещё не видит записи другого.
+    """
+    real = getattr(service, name)
+    barrier = threading.Barrier(n, timeout=5)
+    calls = itertools.count()
+
+    def lookup(*args: Any, **kwargs: Any) -> int | None:
+        found = real(*args, **kwargs)
+        if next(calls) < n:
+            barrier.wait()
+        return found
+
+    monkeypatch.setattr(service, name, lookup)
+
+
+def test_parallel_retries_create_one_message(
+    client: TestClient,
+    db: Session,
+    owner: Owner,
+    minio: S3ObjectStorage,
+    s3_config: dict[str, str],
+    migrated_engine: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Одно сообщение с одним вложением, всем — 201 с ним; копии вложения повторов удалены."""
+    ticket_id = open_ticket(db, owner.vehicle_id)
+    file_url = upload(client, minio, owner.headers)
+    payload = {
+        "body": "Фото панели",
+        "attachments": [{"file_url": file_url, "file_type": "photo"}],
+        "client_request_id": str(uuid.uuid4()),
+    }
+    check_key_together(monkeypatch, "_sent_message_id", RETRIES)
+
+    def send() -> httpx.Response:
+        return client.post(
+            f"{API}/tickets/{ticket_id}/messages", json=payload, headers=owner.headers
+        )
+
+    results = responses(storm(RETRIES, send))
+    assert [r.status_code for r in results] == [201] * RETRIES, [r.text for r in results]
+    assert len({r.json()["id"] for r in results}) == 1
+    [message] = fetch_messages(migrated_engine, ticket_id)
+    [row] = attachment_rows(migrated_engine, file_url.rsplit("/", 1)[1])
+    assert row.ticket_message_id == message.id
+    assert bucket_keys(s3_config) == [row.object_key], "одна копия, исходник удалён, сирот нет"
+
+
+def test_parallel_retries_create_one_ticket(
+    client: TestClient,
+    owner: Owner,
+    minio: S3ObjectStorage,
+    s3_config: dict[str, str],
+    migrated_engine: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """FOR SHARE авто создания не упорядочивает — дубль останавливает UNIQUE ключа."""
+    file_url = upload(client, minio, owner.headers)
+    payload = {
+        "vehicle_id": owner.vehicle_id,
+        "category": "app_crash",
+        "description": "Фото панели",
+        "attachments": [{"file_url": file_url, "file_type": "photo"}],
+        "client_request_id": str(uuid.uuid4()),
+    }
+    check_key_together(monkeypatch, "_created_ticket_id", RETRIES)
+
+    def create() -> httpx.Response:
+        return client.post(f"{API}/tickets", json=payload, headers=owner.headers)
+
+    results = responses(storm(RETRIES, create))
+    assert [r.status_code for r in results] == [201] * RETRIES, [r.text for r in results]
+    [ticket_id] = {r.json()["id"] for r in results}
+    with Session(migrated_engine) as check:
+        created = check.scalars(select(Ticket.id).where(Ticket.vehicle_id == owner.vehicle_id))
+        assert list(created) == [ticket_id]
+    [row] = attachment_rows(migrated_engine, file_url.rsplit("/", 1)[1])
+    assert row.ticket_id == ticket_id
+    assert bucket_keys(s3_config) == [row.object_key], "одна копия, исходник удалён, сирот нет"
 
 
 # ---------- Создание тикета и удаление авто (ADR 0017 п. 6) ----------

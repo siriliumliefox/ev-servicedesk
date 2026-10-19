@@ -140,6 +140,8 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
   private notifications: Notification[] = [];
   private users: UserPublic[] = [];
   private revisions: KnowledgeArticleRevision[] = [];
+  /** Отправленные сообщения по ключу повтора «тикет:автор:ключ» (ADR 0031). */
+  private sent = new Map<string, TicketMessage>();
   private nextId = 10_000;
 
   constructor(options: PrototypeOptions) {
@@ -178,6 +180,7 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
     const now = this.clock();
     const empty = this.scenario === "empty";
     this.tickets = empty ? [] : seedTickets(now);
+    this.sent.clear();
     this.articles = empty ? [] : clone(ARTICLES);
     this.treeNodes = empty ? [] : clone(DECISION_TREE_NODES);
     this.aggregateTypes = clone(AGGREGATE_TYPES);
@@ -305,9 +308,19 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
     return this.call(() => this.ticket(ticketId).messages.filter((m) => m.id > (query.after_id ?? 0)));
   }
 
-  createTicketMessage(ticketId: number, body: string): Promise<TicketMessage> {
+  createTicketMessage(ticketId: number, body: string, clientRequestId?: string): Promise<TicketMessage> {
     return this.call(() => {
       const t = this.ticket(ticketId);
+      const author = USERS[this.role === "admin" ? ADMIN_ID : ENGINEER_ID];
+      // Повтор с тем же ключом — уже записанное сообщение, без события (как backend, ADR 0031).
+      const key = clientRequestId && `${ticketId}:${author.id}:${clientRequestId}`;
+      const sent = key ? this.sent.get(key) : undefined;
+      if (sent) {
+        if (sent.body !== body.trim()) {
+          throw new ApiError("CLIENT_REQUEST_ID_REUSED", "Ключ повтора уже использован", 422, "client_request_id");
+        }
+        return sent;
+      }
       if (this.role === "engineer" && t.assigned_engineer_id !== ENGINEER_ID) {
         throw new ApiError("FORBIDDEN", "Писать в чат может инженер, назначенный на тикет", 403);
       }
@@ -315,12 +328,13 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
       if (!body.trim()) throw validation("Сообщение пустое", "body");
       const message: TicketMessage = {
         id: this.nextId++,
-        author: USERS[this.role === "admin" ? ADMIN_ID : ENGINEER_ID],
+        author,
         body: body.trim(),
         attachments: [],
         created_at: this.clock().toISOString(),
       };
       t.messages.push(message);
+      if (key) this.sent.set(key, message);
       this.emit(ticketId, (h) => h.onMessage(clone(message)));
       return message;
     });

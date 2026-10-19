@@ -140,6 +140,7 @@ class HttpClientRepository implements ClientRepository {
         if (draft.sourceArticleId != null) 'source_article_id': draft.sourceArticleId,
         if (draft.sourceNodeId != null) 'source_node_id': draft.sourceNodeId,
         if (draft.attachments.isNotEmpty) 'attachments': _attachmentInputs(draft.attachments),
+        if (draft.clientRequestId != null) 'client_request_id': draft.clientRequestId,
       }) as Json);
 
   @override
@@ -162,14 +163,17 @@ class HttpClientRepository implements ClientRepository {
   }
 
   @override
-  Future<TicketMessage> sendMessage(int ticketId, String body, {List<UploadedAttachment> attachments = const []}) async =>
+  Future<TicketMessage> sendMessage(int ticketId, String body,
+          {List<UploadedAttachment> attachments = const [], String? clientRequestId}) async =>
       parseTicketMessage(await api.post('/tickets/$ticketId/messages', body: {
         'body': body,
         if (attachments.isNotEmpty) 'attachments': _attachmentInputs(attachments),
+        if (clientRequestId != null) 'client_request_id': clientRequestId,
       }) as Json);
 
   @override
-  Future<UploadedAttachment> uploadAttachment(LocalAttachment file, {void Function(double progress)? onProgress}) async {
+  Future<UploadedAttachment> uploadAttachment(LocalAttachment file,
+      {void Function(double progress)? onProgress}) async {
     final presign = await api.post('/uploads/presign', body: {
       'file_name': file.fileName,
       'file_type': file.fileType.name,

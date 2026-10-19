@@ -4,18 +4,21 @@
 `TICKET_DETAIL`, `MESSAGE_OUT`): ленивая подгрузка в моделях запрещена (ADR 0015).
 События (`events`) публикуются после COMMIT и после последнего обращения к БД в сценарии.
 Описания, тексты сообщений и имена файлов в логи не пишутся (ADR 0017 п. 12).
+Создание тикета и сообщения повторяемо по ключу `client_request_id` (ADR 0031).
 """
 
+import uuid
 from collections.abc import Sequence
 from datetime import datetime
 
 from redis import Redis
 from sqlalchemy import Select, func, not_, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app.core import rate_limit
 from app.core.config import Settings
-from app.core.db import get_by_id, is_db_id
+from app.core.db import constraint_name, get_by_id, is_db_id
 from app.core.errors import ApiError, field_error
 from app.core.storage import ObjectStorage
 from app.domain.aggregates.service import current_statuses
@@ -61,6 +64,71 @@ def _finish(db: Session, events: TicketEvents, ticket_id: int, *, changed: bool)
     if changed:
         events.ticket_updated(ticket_id)
     return card
+
+
+# ---------- Повтор запроса (ADR 0031) ----------
+
+
+class _AlreadyCreated(Exception):
+    """Повтор дождался блокировки исходного запроса и нашёл под ней запись со своим ключом."""
+
+    def __init__(self, record_id: int) -> None:
+        super().__init__(record_id)
+        self.record_id = record_id
+
+
+def _key_reused() -> ApiError:
+    return field_error(
+        "client_request_id",
+        "CLIENT_REQUEST_ID_REUSED",
+        "Ключ повтора уже использован для другого запроса — создайте новый",
+    )
+
+
+def _created_ticket_id(
+    db: Session,
+    user: AppUser,
+    vehicle_id: int,
+    key: uuid.UUID | None,
+    category: TicketCategory,
+    description: str,
+) -> int | None:
+    """Тикет, уже созданный на видимое авто с ключом `key`; тот же ключ, другой тикет — 422."""
+    if key is None or not is_db_id(vehicle_id):
+        return None
+    row = db.execute(
+        select(Ticket.id, Ticket.category, Ticket.description).where(
+            Ticket.vehicle_id == vehicle_id, Ticket.client_request_id == key, access.visible(user)
+        )
+    ).one_or_none()
+    if row is None:
+        return None
+    if (row.category, row.description) != (category, description):
+        raise _key_reused()
+    return row.id
+
+
+def _sent_message_id(
+    db: Session, user: AppUser, ticket_id: int, key: uuid.UUID | None, body: str
+) -> int | None:
+    """Сообщение автора `user` с ключом `key` в видимом тикете; тот же ключ, другой текст — 422."""
+    if key is None or not is_db_id(ticket_id):
+        return None
+    row = db.execute(
+        select(TicketMessage.id, TicketMessage.body)
+        .join(Ticket, Ticket.id == TicketMessage.ticket_id)
+        .where(
+            TicketMessage.ticket_id == ticket_id,
+            TicketMessage.author_id == user.id,
+            TicketMessage.client_request_id == key,
+            access.visible(user),
+        )
+    ).one_or_none()
+    if row is None:
+        return None
+    if row.body != body:
+        raise _key_reused()
+    return row.id
 
 
 # ---------- Список и карточка ----------
@@ -125,8 +193,68 @@ def create_ticket(
     source_article_id: int | None,
     source_node_id: int | None,
     attachment_inputs: Sequence[AttachmentInput],
+    client_request_id: uuid.UUID | None = None,
 ) -> TicketCard:
-    """POST /tickets (client): тикет в очереди (new без исполнителя) на своё активное авто."""
+    """POST /tickets (client): тикет в очереди (new без исполнителя) на своё активное авто.
+
+    Повтор с ключом `client_request_id` (ADR 0031) возвращает тикет, уже созданный с этим
+    ключом на это авто, — без новой записи и без учёта в лимите.
+    """
+    key = client_request_id
+
+    def created() -> int | None:
+        return _created_ticket_id(db, user, vehicle_id, key, category, description)
+
+    ticket_id = created()
+    if ticket_id is not None:
+        return _card(db, ticket_id)
+    try:
+        ticket_id = _write_ticket(
+            db,
+            redis,
+            settings,
+            storage,
+            user,
+            vehicle_id=vehicle_id,
+            category=category,
+            description=description,
+            source_article_id=source_article_id,
+            source_node_id=source_node_id,
+            attachment_inputs=attachment_inputs,
+            client_request_id=key,
+        )
+    except IntegrityError as exc:
+        # Одновременный повтор: FOR SHARE авто запросы не упорядочивает, вставку второго
+        # останавливает UNIQUE ключа до commit первого — тогда записанное уже видно.
+        if constraint_name(exc) != "uq_ticket_vehicle_id_client_request_id":
+            raise
+        ticket_id = created()
+        if ticket_id is None:
+            raise
+    except ApiError:
+        # Повтор, начатый до commit исходного запроса: исходный уже привязал вложения и
+        # удалил загрузки — 422 ATTACHMENT_NOT_FOUND повтору не ошибка.
+        ticket_id = created()
+        if ticket_id is None:
+            raise
+    return _card(db, ticket_id)
+
+
+def _write_ticket(
+    db: Session,
+    redis: Redis,
+    settings: Settings,
+    storage: ObjectStorage,
+    user: AppUser,
+    *,
+    vehicle_id: int,
+    category: TicketCategory,
+    description: str,
+    source_article_id: int | None,
+    source_node_id: int | None,
+    attachment_inputs: Sequence[AttachmentInput],
+    client_request_id: uuid.UUID | None,
+) -> int:
     with rate_limit.reserve(
         redis,
         f"ticket-create:{user.id}",
@@ -166,11 +294,12 @@ def create_ticket(
                     source_article_id=source_article_id,
                     source_article_version=source_version,
                     source_node_id=source_node_id,
+                    client_request_id=client_request_id,
                 )
             )
             db.flush()
             attach(created_at=now)
-    return _card(db, ticket_id)
+    return ticket_id
 
 
 # ---------- Статус, claim, назначение ----------
@@ -289,8 +418,61 @@ def create_message(
     *,
     body: str,
     attachment_inputs: Sequence[AttachmentInput],
+    client_request_id: uuid.UUID | None = None,
 ) -> TicketMessage:
-    """POST /tickets/{id}/messages — единственный путь записи в чат (WebSocket — доставка)."""
+    """POST /tickets/{id}/messages — единственный путь записи в чат (WebSocket — доставка).
+
+    Повтор с ключом `client_request_id` (ADR 0031) возвращает сообщение, уже записанное с этим
+    ключом тем же автором в тот же тикет, — без новой записи, без события message.created и
+    без учёта в лимите. Решённый после записи тикет повтору не мешает.
+    """
+    key = client_request_id
+
+    def sent() -> int | None:
+        return _sent_message_id(db, user, ticket_id, key, body)
+
+    message_id = sent()
+    created = False
+    if message_id is None:
+        try:
+            message_id = _write_message(
+                db,
+                redis,
+                settings,
+                storage,
+                user,
+                ticket_id,
+                body=body,
+                attachment_inputs=attachment_inputs,
+                client_request_id=key,
+            )
+            created = True
+        except _AlreadyCreated as exc:
+            message_id = exc.record_id
+        except ApiError:
+            # Повтор, начатый до commit исходного запроса: исходный уже привязал вложения и
+            # удалил загрузки — 422 ATTACHMENT_NOT_FOUND повтору не ошибка.
+            message_id = sent()
+            if message_id is None:
+                raise
+    message = db.get_one(TicketMessage, message_id, options=MESSAGE_OUT, populate_existing=True)
+    if created:
+        events.message_created(message.ticket_id, message.id)
+    return message
+
+
+def _write_message(
+    db: Session,
+    redis: Redis,
+    settings: Settings,
+    storage: ObjectStorage,
+    user: AppUser,
+    ticket_id: int,
+    *,
+    body: str,
+    attachment_inputs: Sequence[AttachmentInput],
+    client_request_id: uuid.UUID | None,
+) -> int:
     with rate_limit.reserve(
         redis,
         f"ticket-message:{user.id}",
@@ -307,12 +489,21 @@ def create_message(
         # Commit — при выходе из блока (attachments.bind).
         with attachments.bind(db, storage, user, uploads, ticket_id=ticket.id) as attach:
             ticket = access.for_update(db, user, ticket_id)
+            # Повторы с одним ключом идут по очереди этой блокировки: второй видит запись
+            # первого и откатывает свою попытку (копии вложений удаляет bind).
+            sent = _sent_message_id(db, user, ticket.id, client_request_id, body)
+            if sent is not None:
+                raise _AlreadyCreated(sent)
             access.ensure_can_write_message(user, ticket)
             # Момент записи под блокировкой: в чате тикета created_at растёт вместе с id и не
             # позже resolved_at (решение ждёт ту же блокировку).
             now = db.scalar(select(func.clock_timestamp()))
             message = TicketMessage(
-                ticket_id=ticket.id, author_id=user.id, body=body, created_at=now
+                ticket_id=ticket.id,
+                author_id=user.id,
+                body=body,
+                created_at=now,
+                client_request_id=client_request_id,
             )
             db.add(message)
             db.flush()
@@ -325,6 +516,4 @@ def create_message(
                     .values(first_response_at=now)
                     .execution_options(synchronize_session=False)
                 )
-    message = db.get_one(TicketMessage, message.id, options=MESSAGE_OUT, populate_existing=True)
-    events.message_created(message.ticket_id, message.id)
-    return message
+    return message.id

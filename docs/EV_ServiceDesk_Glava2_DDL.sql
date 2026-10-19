@@ -1006,5 +1006,17 @@ ALTER TABLE app_user ADD COLUMN sessions_revoked_at TIMESTAMP WITH TIME ZONE;
 
 UPDATE alembic_version SET version_num='0017' WHERE alembic_version.version_num = '0016';
 
+-- Running upgrade 0017 -> 0018
+
+ALTER TABLE ticket ADD COLUMN client_request_id UUID;
+
+ALTER TABLE ticket ADD CONSTRAINT uq_ticket_vehicle_id_client_request_id UNIQUE (vehicle_id, client_request_id);
+
+ALTER TABLE ticket_message ADD COLUMN client_request_id UUID;
+
+ALTER TABLE ticket_message ADD CONSTRAINT uq_ticket_message_ticket_id_author_id_client_request_id UNIQUE (ticket_id, author_id, client_request_id);
+
+UPDATE alembic_version SET version_num='0018' WHERE alembic_version.version_num = '0017';
+
 COMMIT;
 

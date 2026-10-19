@@ -40,6 +40,9 @@ class PrototypeRepository implements ClientRepository {
   late List<Ticket> _tickets;
   late Map<int, List<TicketMessage>> _messages;
   late List<NotificationItem> _notifications;
+  // Записанное по ключу повтора (ADR 0031): «авто:ключ» и «тикет:ключ».
+  final _createdByKey = <String, Ticket>{};
+  final _sentByKey = <String, TicketMessage>{};
   int _codeAttempts = 0;
   int _nextId = 1100;
 
@@ -53,6 +56,8 @@ class PrototypeRepository implements ClientRepository {
     final hasVehicles = _vehicles.isNotEmpty;
     _tickets = hasVehicles ? _demoTickets() : [];
     _messages = hasVehicles ? _demoMessages() : {};
+    _createdByKey.clear();
+    _sentByKey.clear();
     _notifications = _demoNotifications(withVehicles: hasVehicles);
     _codeAttempts = 0;
   }
@@ -203,6 +208,10 @@ class PrototypeRepository implements ClientRepository {
 
   @override
   Future<Ticket> createTicket(TicketDraft draft) => _call(() {
+        // Как backend (ADR 0031): повтор черновика с тем же ключом — уже созданный тикет.
+        final key = draft.clientRequestId;
+        final created = key == null ? null : _createdByKey['${draft.vehicleId}:$key'];
+        if (created != null) return created;
         // Как backend: описание и вложения — в самом тикете, переписка начинается пустой.
         final ticket = Ticket(
           id: _nextId++,
@@ -216,6 +225,7 @@ class PrototypeRepository implements ClientRepository {
         );
         _tickets = [..._tickets, ticket];
         _messages[ticket.id] = [];
+        if (key != null) _createdByKey['${draft.vehicleId}:$key'] = ticket;
         return ticket;
       });
 
@@ -242,8 +252,12 @@ class PrototypeRepository implements ClientRepository {
   TicketLive watchTicket(int ticketId, {required int afterId}) => OfflineTicketLive();
 
   @override
-  Future<TicketMessage> sendMessage(int ticketId, String body, {List<UploadedAttachment> attachments = const []}) =>
+  Future<TicketMessage> sendMessage(int ticketId, String body,
+          {List<UploadedAttachment> attachments = const [], String? clientRequestId}) =>
       _call(() {
+        // Как backend (ADR 0031): повтор с тем же ключом — уже записанное сообщение.
+        final sent = clientRequestId == null ? null : _sentByKey['$ticketId:$clientRequestId'];
+        if (sent != null) return sent;
         final message = TicketMessage(
           id: _nextId++,
           fromClient: true,
@@ -253,6 +267,7 @@ class PrototypeRepository implements ClientRepository {
           attachments: _shown(attachments),
         );
         _messages[ticketId] = [...?_messages[ticketId], message];
+        if (clientRequestId != null) _sentByKey['$ticketId:$clientRequestId'] = message;
         return message;
       });
 

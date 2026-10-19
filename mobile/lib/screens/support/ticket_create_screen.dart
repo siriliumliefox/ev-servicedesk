@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 
 import '../../app/app_state.dart';
 import '../../data/models.dart';
+import '../../data/retry_key.dart';
 import '../../theme/app_theme.dart';
 import '../../ui/info_note.dart';
 import '../../ui/states.dart';
@@ -59,6 +60,8 @@ class _TicketCreateScreenState extends State<TicketCreateScreen> {
   late int? _vehicleId = widget.vehicleId;
   late TicketCategory? _category = widget.booking != null ? TicketCategory.maintenance : widget.category;
   late final _description = TextEditingController(text: widget.description);
+  // Повтор неудачной отправки той же формы — с тем же ключом: второй тикет не создаётся (#111).
+  final _retryKey = RetryKey();
   late final AttachmentUploads _uploads = AttachmentUploads(AppScope.read(context).repository)
     ..addListener(() => setState(() {}));
   String? _visitTime;
@@ -111,15 +114,21 @@ class _TicketCreateScreenState extends State<TicketCreateScreen> {
       return;
     }
     setState(() => _busy = true);
+    final description = _ticketDescription;
+    final attachments = _uploads.uploaded;
+    final key =
+        _retryKey.forDraft([vehicleId, _category!.name, description, for (final a in attachments) a.key].join('\n'));
     try {
       final ticket = await app.repository.createTicket(TicketDraft(
         vehicleId: vehicleId!,
         category: _category!,
-        description: _ticketDescription,
+        description: description,
         sourceArticleId: widget.sourceArticleId,
         sourceNodeId: widget.sourceNodeId,
-        attachments: _uploads.uploaded,
+        attachments: attachments,
+        clientRequestId: key,
       ));
+      _retryKey.reset();
       if (!mounted) return;
       // Заявка на запись — пояснение остаётся над перепиской; обычное обращение — короткое уведомление.
       if (!_booking) {

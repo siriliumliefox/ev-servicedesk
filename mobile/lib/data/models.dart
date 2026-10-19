@@ -185,6 +185,7 @@ class TicketDraft {
     this.sourceArticleId,
     this.sourceNodeId,
     this.attachments = const [],
+    this.clientRequestId,
   });
 
   final int vehicleId;
@@ -193,6 +194,9 @@ class TicketDraft {
   final int? sourceArticleId;
   final int? sourceNodeId;
   final List<UploadedAttachment> attachments;
+
+  /// Ключ повтора (ADR 0031): повтор этого черновика после обрыва связи не создаёт второй тикет.
+  final String? clientRequestId;
 }
 
 /// TicketMessage.

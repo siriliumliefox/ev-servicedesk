@@ -178,6 +178,7 @@ erDiagram
         bigint source_node_id FK "nullable"
         timestamptz first_response_at "nullable"
         timestamptz resolved_at "nullable"
+        uuid client_request_id "nullable"
         timestamptz created_at
         timestamptz updated_at
     }
@@ -198,6 +199,7 @@ erDiagram
         bigint ticket_id FK
         bigint author_id FK
         text body
+        uuid client_request_id "nullable"
         timestamptz created_at
     }
     ticket_sla_policy {

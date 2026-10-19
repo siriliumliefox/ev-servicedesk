@@ -73,6 +73,8 @@ export function TicketPanel({
   const [showReplies, setShowReplies] = useState(false)
   const headingRef = useRef<HTMLHeadingElement>(null)
   const expiredAt = useRef(0)
+  /** Неподтверждённая отправка: повтор того же текста — с тем же ключом (ADR 0031). */
+  const pending = useRef<{ text: string; key: string } | null>(null)
 
   // Новый тикет — фокус на заголовок карточки (клавиатура и скринридер; карточка монтируется по key).
   useEffect(() => {
@@ -105,15 +107,22 @@ export function TicketPanel({
     }
   }
 
-  const send = (text: string) =>
-    run(
-      () => repo.createTicketMessage(ticketId, text),
+  const send = (text: string) => {
+    // Ответ не дошёл (сбой сети), а сервер сообщение записал — повтор с тем же ключом вернёт
+    // его, а не дубль. Другой текст — новое сообщение и новый ключ.
+    const body = text.trim()
+    const key = pending.current?.text === body ? pending.current.key : crypto.randomUUID()
+    pending.current = { text: body, key }
+    return run(
+      () => repo.createTicketMessage(ticketId, text, key),
       (message) => {
+        pending.current = null
         live.append(message)
         setDraft('')
         setShowReplies(false)
       },
     )
+  }
 
   const act = (action: () => Promise<TicketDetail>) => run(action, live.apply)
 
