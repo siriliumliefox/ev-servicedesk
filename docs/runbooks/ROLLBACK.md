@@ -24,7 +24,7 @@ sha + ревизия Alembic. Конфигурации ВМ (`deploy/`) — из
 ## Откат
 | Ситуация | Действие | Время (стенд) |
 |---|---|---|
-| health или smoke после выкладки не прошли | автоматически `deploy.sh` | ≈ 30 с после отказа |
+| health или smoke после выкладки не прошли | автоматически `deploy.sh` | 20 с от выкладки до работающего предыдущего выпуска |
 | critical-алерт в течение 30 мин после релиза | `ssh deploy@<ВМ> rollback <env>` (предыдущий) | 11 с |
 | откат на конкретный выпуск (из последних 5) | `ssh deploy@<ВМ> rollback <env> <sha>`; staging — `scripts/rollback-staging.sh <sha>`; production — cd-production, ручной запуск с `rollback_sha` | 11 с |
 | миграция несовместима (страж FAIL был принят) | `docker compose … run --rm migrate alembic downgrade <ревизия>` предыдущего выпуска, затем откат образа | минуты |

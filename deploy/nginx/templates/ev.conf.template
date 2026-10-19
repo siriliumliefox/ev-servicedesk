@@ -48,8 +48,16 @@ server {
     location /v1/ {
         include /etc/nginx/snippets/proxy.conf;
     }
+    # Ответы самого nginx — в формате ошибок API (JSON, как app.core.errors): клиенты и сканеры не
+    # получают HTML (ZAP через nginx стенда: «Unexpected Content-Type» на путях вне /v1).
     location / {
-        return 404;
+        default_type application/json;
+        return 404 '{"error":{"code":"NOT_FOUND","message":"Not Found","details":null}}';
+    }
+    error_page 502 503 504 = @ev_unavailable;
+    location @ev_unavailable {
+        default_type application/json;
+        return 503 '{"error":{"code":"SERVICE_UNAVAILABLE","message":"Сервис временно недоступен","details":null}}';
     }
 }
 

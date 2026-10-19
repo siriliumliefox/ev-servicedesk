@@ -44,10 +44,7 @@ api="https://$EV_API_HOST$port"
 zap() { docker run --rm ${hosts[@]+"${hosts[@]}"} -v "$SHARE:/zap/wrk:rw" "$@"; }
 
 if [[ "$TARGET" != production ]]; then
-  echo "ZAP  API без токена: $api/v1"
-  zap "$ZAP_IMAGE" zap-api-scan.py -t /zap/wrk/openapi.yaml -f openapi -O "$api/v1" -c api-rules.tsv \
-    -J api-anonymous.json -r api-anonymous.html -I -T "${ZAP_MAX_MINUTES:-20}" >"$OUT/api-anonymous.log" 2>&1 \
-    || echo "WARN  ZAP API без токена: код $?"
+  # Сначала клиент: access-токен живёт 15 мин (ADR 0013), проход без токена — после.
   if [[ -n "${ZAP_CLIENT_TOKEN:-}" ]]; then
     echo "ZAP  API клиента"
     zap -e ZAP_AUTH_HEADER=Authorization -e "ZAP_AUTH_HEADER_VALUE=Bearer $ZAP_CLIENT_TOKEN" -e "ZAP_AUTH_HEADER_SITE=$EV_API_HOST" \
@@ -55,6 +52,10 @@ if [[ "$TARGET" != production ]]; then
       -J api-client.json -r api-client.html -I -T "${ZAP_MAX_MINUTES:-20}" >"$OUT/api-client.log" 2>&1 \
       || echo "WARN  ZAP API клиента: код $?"
   fi
+  echo "ZAP  API без токена: $api/v1"
+  zap "$ZAP_IMAGE" zap-api-scan.py -t /zap/wrk/openapi.yaml -f openapi -O "$api/v1" -c api-rules.tsv \
+    -J api-anonymous.json -r api-anonymous.html -I -T "${ZAP_MAX_MINUTES:-20}" >"$OUT/api-anonymous.log" 2>&1 \
+    || echo "WARN  ZAP API без токена: код $?"
 else
   echo "ZAP  API, пассивно: $api/health"
   zap "$ZAP_IMAGE" zap-baseline.py -t "$api/health" -c api-rules.tsv -J api-baseline.json -r api-baseline.html -I \

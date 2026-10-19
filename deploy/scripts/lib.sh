@@ -141,7 +141,7 @@ smoke() {
 
 # wait_healthy <env> <release-dir> <сервис> [секунд] — healthy (или running без healthcheck); второй
 # перезапуск контейнера — сразу отказ: он падает при старте (fail closed preflight), ждать нечего —
-# простой при автооткате короче (учение отката на стенде: 208 с → ≈ 30 с).
+# простой при автооткате короче (учение отката на стенде: 208 с → 20 с).
 wait_healthy() {
   local env="$1" dir="$2" service="$3" limit="${4:-180}" waited=0 id state restarts
   while (( waited < limit )); do
