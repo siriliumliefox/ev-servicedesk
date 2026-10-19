@@ -18,8 +18,9 @@ from app.domain.notifications.reminders import run_maintenance_reminders
 from app.models.enums import UserRole
 from app.tools import integrity
 from tests.api.conftest import API, Headers, model_id
-from tests.api.notifications_support import mileage, publish, regulation, replace
+from tests.api.notifications_support import publish, regulation
 from tests.api.ticket_support import create
+from tests.api.vehicle_support import replace, set_mileage
 
 
 @dataclass
@@ -50,7 +51,7 @@ def world(client, as_staff, make_owner, make_worker, db: Session) -> World:
     model = model_id(client, admin, "Zeekr")
     regulation(client, admin, model, "engine_oil", interval_km=10_000)
     replace(client, admin, a.vehicle_id, "engine_oil", date(2026, 1, 10), 0)
-    mileage(client, a.headers, a.vehicle_id, 9_500)
+    set_mileage(client, a.headers, a.vehicle_id, 9_500)
     worker = make_worker()
     assert run_maintenance_reminders(db, worker.outbox, date(2026, 6, 1)) == 1
     publish(client, admin, type="news", message="Новость для всех")

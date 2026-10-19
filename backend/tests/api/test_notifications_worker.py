@@ -30,7 +30,8 @@ from app.models import (
 from app.models.enums import UserRole
 from app.workers.metrics import WorkerMetrics
 from tests.api.conftest import API, Headers, model_id
-from tests.api.notifications_support import feed, mileage, publish, regulation, replace
+from tests.api.notifications_support import feed, publish, regulation
+from tests.api.vehicle_support import replace, set_mileage
 
 
 @pytest.fixture
@@ -199,10 +200,10 @@ def test_reminders_on_overdue_aggregates(
     worker = make_worker()
     run = lambda day: run_maintenance_reminders(db, worker.outbox, day)  # noqa: E731
 
-    mileage(client, owner.headers, vid, 8_500)  # осталось 1500 км > 1000
+    set_mileage(client, owner.headers, vid, 8_500)  # осталось 1500 км > 1000
     assert run(date(2026, 6, 1)) == 0
 
-    mileage(client, owner.headers, vid, 9_200)  # осталось 800 км ≤ 1000
+    set_mileage(client, owner.headers, vid, 9_200)  # осталось 800 км ≤ 1000
     assert run(date(2026, 6, 2)) == 1
     assert run(date(2026, 6, 3)) == 0, "повтор в цикле не создаётся"
     assert reminders(db, vid) == [
@@ -216,7 +217,7 @@ def test_reminders_on_overdue_aggregates(
         "Zeekr 001 — Салонный фильтр: до замены осталось 7 дн. Запишитесь на ТО.",
     )
 
-    mileage(client, owner.headers, vid, 10_500)  # 105% — красный
+    set_mileage(client, owner.headers, vid, 10_500)  # 105% — красный
     assert run(date(2026, 6, 4)) == 1
     assert reminders(db, vid)[-1] == (
         "overdue",
@@ -227,7 +228,7 @@ def test_reminders_on_overdue_aggregates(
     # Новая замена — новый цикл.
     replace(client, admin, vid, "engine_oil", date(2026, 6, 6), 10_500)
     assert run(date(2026, 6, 7)) == 0
-    mileage(client, owner.headers, vid, 20_000)  # осталось 500 км
+    set_mileage(client, owner.headers, vid, 20_000)  # осталось 500 км
     assert run(date(2026, 6, 8)) == 1
     assert [k for k, _ in reminders(db, vid)] == ["due_soon", "due_soon", "overdue", "due_soon"]
 
@@ -257,7 +258,7 @@ def test_red_first_gives_only_overdue_and_no_late_due_soon(
     model = model_id(client, admin, "Zeekr")
     regulation(client, admin, model, "engine_oil", interval_km=10_000)
     replace(client, admin, vid, "engine_oil", date(2026, 1, 10), 0)
-    mileage(client, owner.headers, vid, 12_000)
+    set_mileage(client, owner.headers, vid, 12_000)
     worker = make_worker()
     assert run_maintenance_reminders(db, worker.outbox, date(2026, 6, 1)) == 1
     # Регламент увеличили — агрегат снова «скоро», но в этом цикле напоминание уже было.
@@ -275,7 +276,7 @@ def test_reminders_skip_deleted_vehicles_and_withdrawn_clients(
     regulation(client, admin, model, "engine_oil", interval_km=10_000)
     for o in (gone, withdrawn):
         replace(client, admin, o.vehicle_id, "engine_oil", date(2026, 1, 10), 0)
-        mileage(client, o.headers, o.vehicle_id, 12_000)
+        set_mileage(client, o.headers, o.vehicle_id, 12_000)
     assert (
         client.delete(f"{API}/vehicles/{gone.vehicle_id}", headers=gone.headers).status_code == 204
     )
@@ -496,7 +497,7 @@ def test_reminder_counts_to_configured_red_threshold(
     assert r.status_code == 200, r.text
     regulation(client, admin, model, "engine_oil", interval_km=10_000)
     replace(client, admin, owner.vehicle_id, "engine_oil", date(2026, 1, 10), 0)
-    mileage(client, owner.headers, owner.vehicle_id, km)
+    set_mileage(client, owner.headers, owner.vehicle_id, km)
     run_maintenance_reminders(db, make_worker().outbox, date(2026, 6, 1))
     got = reminders(db, owner.vehicle_id)
     if expected is None:
@@ -515,7 +516,7 @@ def queued_reminder(client, admin, make_owner, make_worker, db: Session):
     model = model_id(client, admin, "Zeekr")
     regulation(client, admin, model, "engine_oil", interval_km=10_000)
     replace(client, admin, owner.vehicle_id, "engine_oil", date(2026, 1, 10), 0)
-    mileage(client, owner.headers, owner.vehicle_id, 12_000)
+    set_mileage(client, owner.headers, owner.vehicle_id, 12_000)
     worker = make_worker()
     assert run_maintenance_reminders(db, worker.outbox, date(2026, 6, 1)) == 1
     (notification_id,) = db.scalars(

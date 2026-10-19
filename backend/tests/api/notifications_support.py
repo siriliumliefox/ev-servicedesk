@@ -3,8 +3,6 @@
 Фикстуры клиентов с авто и токенами, фейкового отправителя и worker — tests/api/conftest.py.
 """
 
-from datetime import date
-
 from fastapi.testclient import TestClient
 
 from tests.api.conftest import API, Headers
@@ -29,17 +27,3 @@ def regulation(client: TestClient, admin: Headers, model: int, code: str, **inte
         headers=admin,
     )
     assert r.status_code == 201, r.text
-
-
-def replace(client: TestClient, admin: Headers, vid: int, code: str, day: date, km: int) -> None:
-    r = client.post(
-        f"{API}/vehicles/{vid}/aggregate-statuses/{code}/replace",
-        json={"replaced_at": str(day), "mileage_at_replacement": km},
-        headers=admin,
-    )
-    assert r.status_code == 200, r.text
-
-
-def mileage(client: TestClient, headers: Headers, vid: int, km: int) -> None:
-    r = client.patch(f"{API}/vehicles/{vid}/mileage", json={"mileage": km}, headers=headers)
-    assert r.status_code == 200, r.text

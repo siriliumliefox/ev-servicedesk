@@ -11,12 +11,9 @@
 
 import argparse
 import logging
-import signal
 import sys
-import threading
 from collections.abc import Callable
 from datetime import UTC, datetime
-from types import FrameType
 
 from redis import Redis
 
@@ -28,7 +25,8 @@ from app.core.redis import get_redis
 from app.core.storage import ObjectStorage, get_storage
 from app.domain.auth.sms import SmsError, SmsProvider, get_sms_provider_for
 from app.domain.users import privacy
-from app.workers import metrics
+from app.workers import metrics, runtime
+from app.workers.runtime import StoppableWorker
 
 logger = logging.getLogger("app.workers.privacy")
 
@@ -37,7 +35,7 @@ NOTIFIED_PREFIX = "privacy:notified:"
 DAY = 24 * 3600
 
 
-class PrivacyWorker:
+class PrivacyWorker(StoppableWorker):
     def __init__(
         self,
         settings: Settings,
@@ -47,6 +45,7 @@ class PrivacyWorker:
         storage: ObjectStorage,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
+        super().__init__()
         self.settings = settings
         self.scope = scope
         self.redis = redis
@@ -54,7 +53,6 @@ class PrivacyWorker:
         self.storage = storage
         self.now = now
         self._purged_at: datetime | None = None
-        self._stopping = threading.Event()
         self.metrics = metrics.WorkerMetrics("privacy")
 
     def _notify_before_erase(self, item: privacy.Due, late: bool) -> bool:
@@ -134,9 +132,6 @@ class PrivacyWorker:
             self._stopping.wait(self.settings.privacy_run_seconds)
         logger.info("Worker ПД остановлен")
 
-    def stop(self, *_: object) -> None:
-        self._stopping.set()
-
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Анонимизация ПД и сроки хранения (ADR 0029)")
@@ -155,13 +150,7 @@ def main(argv: list[str] | None = None) -> int:
         worker.run_once()
         return 0
 
-    def _stop(signum: int, frame: FrameType | None) -> None:
-        worker.stop()
-
-    signal.signal(signal.SIGTERM, _stop)
-    signal.signal(signal.SIGINT, _stop)
-    worker.metrics.serve(settings.metrics_port)
-    worker.run_forever()
+    runtime.run(worker, settings.metrics_port)
     return 0
 
 

@@ -19,7 +19,7 @@ from app.core.config import get_settings
 from app.core.storage import ObjectStorage, StorageUnavailable
 from app.models import Ticket, TicketAttachment, TicketMessage
 from app.models.enums import UserRole
-from tests.api.conftest import API, ContractClient, Headers, add_vehicle, api_settings
+from tests.api.conftest import API, ContractClient, Headers, add_vehicle, api_settings, error_code
 from tests.api.ticket_support import (
     JPEG,
     MP4,
@@ -143,7 +143,7 @@ def test_upload_overwritten_after_check_is_not_copied(
             headers=owner,
         )
     assert r.status_code == 422, r.text
-    assert r.json()["error"]["code"] == "ATTACHMENT_NOT_FOUND"
+    assert error_code(r) == "ATTACHMENT_NOT_FOUND"
     assert r.json()["error"]["details"]["fields"] == [
         {"loc": ["body", "attachments", 0, "file_url"]}
     ]
@@ -199,7 +199,7 @@ def test_attachment_errors(client, owner, as_client, vehicle, storage, app, db: 
     def code(attachments: list[dict]) -> str:
         r = create_ticket(client, owner, vehicle["id"], attachments=attachments)
         assert r.status_code == 422, r.text
-        return r.json()["error"]["code"]
+        return error_code(r)
 
     foreign = uploaded(client, stranger, storage)
     assert code([foreign]) == "ATTACHMENT_NOT_FOUND", "чужая загрузка"
@@ -229,7 +229,7 @@ def test_attachment_errors(client, owner, as_client, vehicle, storage, app, db: 
             json={"vehicle_id": vehicle["id"], "category": "audio", "description": text},
             headers=owner,
         )
-        assert r.status_code == 422 and r.json()["error"]["code"] == "VALIDATION_ERROR", text
+        assert r.status_code == 422 and error_code(r) == "VALIDATION_ERROR", text
     assert code([uploaded(client, owner, storage) for _ in range(11)]) == "TOO_MANY_ATTACHMENTS"
 
     assert create_ticket(client, owner, vehicle["id"], attachments=[item]).status_code == 201
@@ -338,5 +338,5 @@ def test_upload_overwritten_after_check_on_minio(
     item = {"file_url": target["file_url"], "file_type": "photo"}
     r = create_ticket(client, owner, vehicle["id"], attachments=[item])
     assert r.status_code == 422, r.text
-    assert r.json()["error"]["code"] == "ATTACHMENT_NOT_FOUND"
+    assert error_code(r) == "ATTACHMENT_NOT_FOUND"
     assert db.scalars(select(TicketAttachment)).all() == []

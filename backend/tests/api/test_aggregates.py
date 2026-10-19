@@ -20,7 +20,8 @@ from app.models import (
     VehicleAggregateStatus,
 )
 from app.models.enums import TicketStatus, UserRole
-from tests.api.conftest import API, add_vehicle, model_id
+from tests.api.conftest import API, add_vehicle, error_code, model_id
+from tests.api.vehicle_support import post_replace, set_mileage
 
 Headers = dict[str, str]
 
@@ -49,18 +50,6 @@ def statuses(client: TestClient, headers: Headers, vid: int, **params) -> dict:
 
 def by_code(body: dict) -> dict[str, dict]:
     return {s["aggregate_type_code"]: s for s in body["items"]}
-
-
-def replace(client: TestClient, headers: Headers, vid: int, code: str, **body):
-    r = client.post(
-        f"{API}/vehicles/{vid}/aggregate-statuses/{code}/replace", json=body, headers=headers
-    )
-    return r
-
-
-def set_mileage(client: TestClient, headers: Headers, vid: int, mileage: int) -> None:
-    r = client.patch(f"{API}/vehicles/{vid}/mileage", json={"mileage": mileage}, headers=headers)
-    assert r.status_code == 200, r.text
 
 
 TODAY = today_in_business_tz
@@ -94,7 +83,7 @@ def test_engineer_replacement_turns_client_status_green(
 
     eng_headers, eng = engineer
     ticket = make_ticket(vid, eng)
-    replace(
+    post_replace(
         client,
         eng_headers,
         vid,
@@ -105,7 +94,7 @@ def test_engineer_replacement_turns_client_status_green(
     oil = by_code(statuses(client, owner, vid))["engine_oil"]
     assert oil["status"] == "red" and oil["percentage"] == 120.0 and oil["remaining_km"] == -2000
 
-    r = replace(
+    r = post_replace(
         client,
         eng_headers,
         vid,
@@ -166,7 +155,7 @@ def staffed_vehicle(client, as_client, admin, engineer, make_ticket):
 def test_replace_rejects_future_date_and_mileage_ahead(client, engineer, staffed_vehicle):
     _, vid = staffed_vehicle
     eng = engineer[0]
-    r = replace(
+    r = post_replace(
         client,
         eng,
         vid,
@@ -174,9 +163,9 @@ def test_replace_rejects_future_date_and_mileage_ahead(client, engineer, staffed
         replaced_at=str(TODAY() + timedelta(days=1)),
         mileage_at_replacement=1,
     )
-    assert r.status_code == 422 and r.json()["error"]["code"] == "REPLACED_AT_IN_FUTURE"
+    assert r.status_code == 422 and error_code(r) == "REPLACED_AT_IN_FUTURE"
 
-    r = replace(
+    r = post_replace(
         client, eng, vid, "engine_oil", replaced_at=str(TODAY()), mileage_at_replacement=20001
     )
     assert r.status_code == 409
@@ -186,12 +175,14 @@ def test_replace_rejects_future_date_and_mileage_ahead(client, engineer, staffed
         "details": {"current_mileage": 20000},
     }
 
-    r = replace(
+    r = post_replace(
         client, eng, vid, "no_such_part", replaced_at=str(TODAY()), mileage_at_replacement=1
     )
-    assert r.status_code == 404 and r.json()["error"]["code"] == "AGGREGATE_TYPE_NOT_FOUND"
+    assert r.status_code == 404 and error_code(r) == "AGGREGATE_TYPE_NOT_FOUND"
 
-    r = replace(client, eng, vid, "engine_oil", replaced_at="2026-01-01", mileage_at_replacement=-1)
+    r = post_replace(
+        client, eng, vid, "engine_oil", replaced_at="2026-01-01", mileage_at_replacement=-1
+    )
     assert r.status_code == 422
 
 
@@ -199,13 +190,13 @@ def test_backdated_replacement_goes_to_history_only(client, engineer, staffed_ve
     owner, vid = staffed_vehicle
     eng = engineer[0]
     assert (
-        replace(
+        post_replace(
             client, eng, vid, "engine_oil", replaced_at=str(TODAY()), mileage_at_replacement=18000
         ).status_code
         == 200
     )
 
-    r = replace(
+    r = post_replace(
         client,
         eng,
         vid,
@@ -222,7 +213,7 @@ def test_backdated_replacement_goes_to_history_only(client, engineer, staffed_ve
 
     # Повтор того же запроса: вторая запись в истории, текущая замена та же (E7, ADR 0016 п. 2).
     for _ in range(2):
-        r = replace(
+        r = post_replace(
             client, eng, vid, "engine_oil", replaced_at=str(TODAY()), mileage_at_replacement=18000
         )
         assert r.status_code == 200 and r.json()["last_replaced_mileage"] == 18000
@@ -233,7 +224,7 @@ def test_replacement_without_regulation_is_recorded_as_unknown(
     client, admin, engineer, staffed_vehicle
 ):
     owner, vid = staffed_vehicle
-    r = replace(
+    r = post_replace(
         client,
         engineer[0],
         vid,
@@ -286,7 +277,7 @@ def test_aggregate_history_tells_replacement_from_work(client, engineer, staffed
     """ADR 0023 п. 2: история агрегата — замены и работы по нему, у записи kind."""
     owner, vid = staffed_vehicle
     eng = engineer[0]
-    r = replace(
+    r = post_replace(
         client,
         eng,
         vid,
@@ -336,22 +327,23 @@ def test_replace_access(client, as_client, as_staff, admin, make_ticket, db):
     assert r.status_code == 403, "клиент не фиксирует замену (RBAC)"
 
     stranger, _ = as_staff("+375292230002")
-    assert replace(client, stranger, vid, "engine_oil", **body).status_code == 404, "без тикета"
+    r = post_replace(client, stranger, vid, "engine_oil", **body)
+    assert r.status_code == 404, "без тикета"
 
     queued, queued_user = as_staff("+375292230003")
     make_ticket(vid)  # очередь: видно, но менять нельзя
-    assert replace(client, queued, vid, "engine_oil", **body).status_code == 403
+    assert post_replace(client, queued, vid, "engine_oil", **body).status_code == 403
 
     closed, closed_user = as_staff("+375292230004")
     make_ticket(vid, closed_user, TicketStatus.RESOLVED)
-    assert replace(client, closed, vid, "engine_oil", **body).status_code == 403
+    assert post_replace(client, closed, vid, "engine_oil", **body).status_code == 403
 
-    assert replace(client, admin, vid, "engine_oil", **body).status_code == 200
+    assert post_replace(client, admin, vid, "engine_oil", **body).status_code == 200
     record = db.scalars(select(MaintenanceRecord).where(MaintenanceRecord.vehicle_id == vid)).one()
     assert record.ticket_id is None, "у админа тикета-основания нет"
 
     assert client.delete(f"{API}/vehicles/{vid}", headers=owner).status_code == 204
-    r = replace(client, admin, vid, "engine_oil", **body)
+    r = post_replace(client, admin, vid, "engine_oil", **body)
     assert r.status_code == 403, "удалённое авто не изменяется никем"
 
 
@@ -398,7 +390,7 @@ def test_revision_and_archive_keep_history(client, admin, engineer, staffed_vehi
     zeekr = model_id(client, owner, "Zeekr")
     eng = engineer[0]
     assert (
-        replace(
+        post_replace(
             client, eng, vid, "engine_oil", replaced_at=str(TODAY()), mileage_at_replacement=15000
         ).status_code
         == 200
@@ -453,7 +445,7 @@ def test_revision_and_archive_keep_history(client, admin, engineer, staffed_vehi
     for regulation_id in (same["id"], old["id"], 10**9, 10**20):
         r = client.delete(f"{API}/maintenance-regulations/{regulation_id}", headers=admin)
         assert r.status_code == 404, regulation_id
-        assert r.json()["error"]["code"] == "REGULATION_NOT_FOUND"
+        assert error_code(r) == "REGULATION_NOT_FOUND"
 
     revise(
         client, admin, vehicle_model_id=zeekr, aggregate_type_code="engine_oil", interval_km=10000
@@ -488,7 +480,7 @@ def test_revise_validation(client, as_client, admin, body, code):
     body = {"vehicle_model_id": model_id(client, owner, "Zeekr")} | body
     r = client.post(f"{API}/maintenance-regulations", json=body, headers=admin)
     assert r.status_code == 422, r.text
-    assert r.json()["error"]["code"] == code
+    assert error_code(r) == code
 
 
 def test_regulation_version_has_date_and_author(client, as_client, as_staff, engineer):
@@ -541,7 +533,7 @@ def test_aggregate_types_catalog(client, as_client, admin, engineer):
     assert r.json() == {"code": "brake_fluid", "name": "Тормозная жидкость"}
 
     r = client.post(f"{API}/aggregate-types", json=body, headers=admin)
-    assert r.status_code == 409 and r.json()["error"]["code"] == "AGGREGATE_TYPE_EXISTS"
+    assert r.status_code == 409 and error_code(r) == "AGGREGATE_TYPE_EXISTS"
 
     for bad in (
         {"code": "Brake", "name": "x"},
@@ -566,7 +558,9 @@ def test_aggregate_types_catalog(client, as_client, admin, engineer):
 def test_thresholds(client, admin, engineer, staffed_vehicle, as_staff):
     owner, vid = staffed_vehicle
     eng = engineer[0]
-    replace(client, eng, vid, "engine_oil", replaced_at=str(TODAY()), mileage_at_replacement=14000)
+    post_replace(
+        client, eng, vid, "engine_oil", replaced_at=str(TODAY()), mileage_at_replacement=14000
+    )
 
     r = client.get(f"{API}/aggregate-status-thresholds", headers=eng)
     assert r.json()["yellow_from_percent"] == 70 and r.json()["red_above_percent"] == 100

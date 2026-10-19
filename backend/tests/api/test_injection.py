@@ -9,7 +9,7 @@ SQL — только ORM и параметры (LIKE экранируется): 
 import pytest
 
 from app.models.enums import UserRole
-from tests.api.conftest import API, add_vehicle
+from tests.api.conftest import API, add_vehicle, error_code
 from tests.api.ticket_support import create
 
 SQLI = [
@@ -120,4 +120,4 @@ def test_control_chars_in_query_and_path_are_422(client, world, bad):
         assert r.status_code == 422, (method, path, r.status_code, r.text)
     # У deletePushToken в контракте нет 422: такого токена не существует — 404.
     r = client.delete(f"{API}/push-tokens/{bad}", headers=owner)
-    assert r.status_code == 404 and r.json()["error"]["code"] == "PUSH_TOKEN_NOT_FOUND"
+    assert r.status_code == 404 and error_code(r) == "PUSH_TOKEN_NOT_FOUND"

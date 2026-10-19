@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.models import FirmwareRelease, KnowledgeArticle, KnowledgeArticleRevision, VehicleModel
 from app.models.enums import KbArticleType, UserRole
-from tests.api.conftest import API, Headers, model_id
+from tests.api.conftest import API, Headers, error_code, model_id
 from tests.api.knowledge_support import (
     api,
     api_tree,
@@ -23,7 +23,6 @@ from tests.api.knowledge_support import (
     create_node,
     update_article,
 )
-from tests.api.ticket_support import error_code
 
 ADMIN_PHONE = "+375293400001"
 ENGINEER_PHONE = "+375293400002"

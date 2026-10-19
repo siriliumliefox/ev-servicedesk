@@ -8,17 +8,13 @@ CONCURRENTLY не блокирует чтение витрины на время
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.core.locks import AdvisoryLock, try_xact_lock
 from app.domain.analytics.views import VIEWS
-
-ADVISORY_LOCK_KEY = 16_0020  # глава 16, ADR 0020
 
 
 def refresh_views(db: Session) -> bool:
     """Пересчитывает витрину и фиксирует время; False — обновляет другой экземпляр."""
-    locked = db.execute(
-        text("SELECT pg_try_advisory_xact_lock(:k)"), {"k": ADVISORY_LOCK_KEY}
-    ).scalar_one()
-    if not locked:
+    if not try_xact_lock(db, AdvisoryLock.ANALYTICS_REFRESH):
         db.rollback()
         return False
     for view in VIEWS:

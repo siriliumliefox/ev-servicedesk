@@ -39,6 +39,7 @@ from tests.api.conftest import (
     add_vehicle,
     api_settings,
     bearer,
+    error_code,
 )
 from tests.api.ticket_world import (
     ADMIN,
@@ -255,7 +256,7 @@ def test_rejected_token_is_401_everywhere(client, world, settings, db, real_redi
     for op_id in OPS:
         r = call(client, world, op_id, headers)
         assert r.status_code == 401, (op_id, r.text)
-        assert r.json()["error"]["code"] == "UNAUTHORIZED", op_id
+        assert error_code(r) == "UNAUTHORIZED", op_id
         assert r.headers["WWW-Authenticate"] == "Bearer", op_id
     assert ws_outcome(client, real_redis, world.tickets[ASSIGNED], token) == 4401
 
@@ -294,7 +295,7 @@ def test_role_outside_contract_roles_is_403(client, world):
             for target in targets:
                 r = call(client, world, op_id, headers, **target)
                 assert r.status_code == 403, (op_id, role, target, r.text)
-                assert r.json()["error"]["code"] == "FORBIDDEN", (op_id, role, target)
+                assert error_code(r) == "FORBIDDEN", (op_id, role, target)
 
 
 # ---------- Object-level (RBAC-04) ----------
@@ -391,7 +392,7 @@ def test_object_level_matrix(client, world, real_redis, actor):
                 got = r.status_code
                 if got == want and want >= 400:
                     code = "TICKET_ALREADY_CLAIMED" if want == 409 else ERROR_CODES[want]
-                    if r.json()["error"]["code"] != code:
+                    if error_code(r) != code:
                         mismatches.append(f"{op_id} {ticket}: код {r.json()['error']['code']}")
                 if got == want == 404:
                     # Невидимый тикет неотличим от несуществующего (не раскрываем id).
@@ -418,7 +419,7 @@ def test_create_ticket_only_on_own_active_vehicle(client, world):
 
     assert create(OWNER, world.vehicles[OWNER]).status_code == 201
     ghost = create(OWNER, GHOST_ID)
-    assert ghost.status_code == 404 and ghost.json()["error"]["code"] == "NOT_FOUND"
+    assert ghost.status_code == 404 and error_code(ghost) == "NOT_FOUND"
     for actor, vehicle_id in (
         (STRANGER, world.vehicles[OWNER]),  # чужое авто
         (OWNER, world.vehicles[EX_OWNER]),  # чужое удалённое
@@ -431,7 +432,7 @@ def test_create_ticket_only_on_own_active_vehicle(client, world):
     for vehicle_id in ("abc", 1.5, None):
         r = create(OWNER, vehicle_id)
         assert r.status_code == 422, (vehicle_id, r.text)
-        assert r.json()["error"]["code"] == "VALIDATION_ERROR"
+        assert error_code(r) == "VALIDATION_ERROR"
 
 
 def test_sold_vehicle_tickets_hidden_from_ex_and_new_owner(client, world, login_client, real_redis):
@@ -471,13 +472,13 @@ def test_out_of_range_ticket_id_is_404_not_500(app, world, op_id):
     for tid in OUT_OF_RANGE_IDS:
         r = call(client, world, op_id, headers, tid=tid)
         assert r.status_code == 404, (tid, r.text)
-        assert r.json()["error"]["code"] == "NOT_FOUND"
+        assert error_code(r) == "NOT_FOUND"
     # Не целое число — ошибка валидации пути: 422 объявлен у всех операций с id в пути (1.7.1,
     # раньше у getTicket и claimTicket его не было — нашла сверка ответов, ADR 0021 п. 2).
     for tid in NOT_INTEGER_IDS:
         r = call(client, world, op_id, headers, tid=tid)
         assert r.status_code == 422, (tid, r.text)
-        assert r.json()["error"]["code"] == "VALIDATION_ERROR"
+        assert error_code(r) == "VALIDATION_ERROR"
 
 
 def test_ws_out_of_range_ticket_id(client, world, real_redis):
