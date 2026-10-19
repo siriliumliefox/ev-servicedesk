@@ -6,7 +6,16 @@ export function assigneeLabel(id: number | null | undefined, meId: number): stri
   return id === meId ? 'Вы' : `Инженер #${id}`
 }
 
-/** Текст сообщения клиенту из статьи. Ссылки на статью в приложении нет в контракте — заголовок + текст. */
+/**
+ * Текст сообщения клиенту из статьи. Ссылки на статью в приложении нет в контракте — заголовок + текст.
+ * У «Устранения неполадок» шаги — в дереве решений, а текст — только вводный абзац (#112): ответ говорит,
+ * где пройти шаги в приложении клиента (Поддержка → вкладка «Неполадки» → статья).
+ */
 export function articleMessage(article: KnowledgeArticle): string {
-  return `${article.title}\n\n${article.content ?? ''}`.trim()
+  const text = `${article.title}\n\n${article.content ?? ''}`.trim()
+  if (article.article_type !== 'troubleshooting') return text
+  return (
+    `${text}\n\nПошаговая проверка — в приложении: Поддержка → Неполадки → «${article.title}». ` +
+    'Если не поможет, напишите здесь, на каком шаге остановились.'
+  )
 }
