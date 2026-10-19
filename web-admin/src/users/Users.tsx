@@ -3,6 +3,7 @@
 // только найти и заблокировать (в карточке). Глоссарий: «Учётная запись сотрудника», «Блокировка пользователя».
 import { useState, type FormEvent } from 'react'
 import {
+  ApiError,
   Badge,
   Button,
   Card,
@@ -15,7 +16,9 @@ import {
   Select,
   TextField,
   USER_ROLE_LABELS,
+  errorText,
   formatDate,
+  normalizePhone,
   useAsync,
   type UserPublic,
   type UserRole,
@@ -156,6 +159,18 @@ export function Users({ onOpen }: { onOpen: (id: number) => void }) {
   )
 }
 
+const PHONE_FORMAT = 'Номер — +375 и 9 цифр, например +375 29 111-22-33'
+
+/**
+ * Ошибка номера — у поля «Телефон», а не общим «Проверьте введённые данные» под формой (#114). Белорусский
+ * номер — ровно 9 цифр после +375: формат E.164 сервера пропустил бы и неполный.
+ */
+function phoneProblem(phone: string, error: unknown): string | undefined {
+  if (phone.startsWith('+375') && phone.length !== 13) return PHONE_FORMAT
+  if (!(error instanceof ApiError) || error.field !== 'phone') return undefined
+  return error.code === 'VALIDATION_ERROR' ? PHONE_FORMAT : errorText(error)
+}
+
 function NewStaffForm({ onCreated }: { onCreated: () => void }) {
   const { repo } = useAdmin()
   const [phone, setPhone] = useState('+375')
@@ -165,15 +180,19 @@ function NewStaffForm({ onCreated }: { onCreated: () => void }) {
   const [error, setError] = useState<unknown>(null)
   const [busy, setBusy] = useState(false)
   const [created, setCreated] = useState<{ phone: string; password: string } | null>(null)
+  const [phoneNote, setPhoneNote] = useState<string>()
 
   const submit = async (e: FormEvent) => {
     e.preventDefault()
     setError(null)
+    // Номер целиком поверх префикса «+375» (+375+375…, 8 029…) — тот же номер (#114).
+    const normalized = normalizePhone(phone)
+    const badPhone = phoneProblem(normalized, null)
+    setPhoneNote(badPhone)
     const tooShort = passwordProblem(password)
     setProblem(tooShort)
-    if (tooShort) return
+    if (badPhone || tooShort) return
     setBusy(true)
-    const normalized = phone.replace(/[\s()-]/g, '')
     try {
       await repo.createStaffUser({ phone: normalized, role, password })
       setCreated({ phone: normalized, password })
@@ -182,6 +201,7 @@ function NewStaffForm({ onCreated }: { onCreated: () => void }) {
       onCreated()
     } catch (err) {
       setError(err)
+      setPhoneNote(phoneProblem(normalized, err))
     } finally {
       setBusy(false)
     }
@@ -202,7 +222,8 @@ function NewStaffForm({ onCreated }: { onCreated: () => void }) {
           type="tel"
           inputMode="tel"
           autoComplete="off"
-          hint="Формат +375XXXXXXXXX"
+          hint="Можно вставить номер целиком: +375 29 111-22-33 или 8 029 111-22-33"
+          error={phoneNote}
           required
           value={phone}
           onChange={(e) => setPhone(e.target.value)}
@@ -212,7 +233,7 @@ function NewStaffForm({ onCreated }: { onCreated: () => void }) {
           <option value="admin">{USER_ROLE_LABELS.admin}</option>
         </Select>
         <PasswordInput label="Пароль" value={password} error={problem ?? undefined} onChange={setPassword} />
-        <InlineError error={error} />
+        {!phoneNote && <InlineError error={error} />}
         {created && <PasswordReveal phone={created.phone} password={created.password} onClose={() => setCreated(null)} />}
         <Button type="submit" disabled={busy}>
           Создать сотрудника

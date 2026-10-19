@@ -13,6 +13,7 @@ export * from "./data/labels.ts";
 export * from "./data/notifications.ts";
 export * from "./data/sla.ts";
 export * from "./data/format.ts";
+export * from "./data/phone.ts";
 export * from "./data/repository.ts";
 export { PrototypeRepository } from "./prototype/PrototypeRepository.ts";
 export { allowedTransitions, engineerMoves } from "./data/ticketFlow.ts";

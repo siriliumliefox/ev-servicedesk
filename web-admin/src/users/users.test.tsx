@@ -66,6 +66,30 @@ describe('список пользователей', () => {
     await user.click(screen.getByRole('button', { name: 'Создать сотрудника' }))
     expect(await screen.findByRole('alert')).toHaveTextContent('Этот телефон уже зарегистрирован.')
   })
+
+  // #114 (X2): поле начинается с «+375», номер вставляют целиком — тот же номер, а не +375+375….
+  it('номер, вставленный поверх префикса +375, — тот же номер; неверный — ошибка у поля', async () => {
+    const { user, repo } = setup('/users')
+    const create = vi.spyOn(repo, 'createStaffUser')
+    const phone = await screen.findByLabelText('Телефон')
+    expect(phone).toHaveValue('+375')
+    expect(phone).toHaveAccessibleDescription('Можно вставить номер целиком: +375 29 111-22-33 или 8 029 111-22-33')
+    await user.click(phone)
+    await user.paste('8 029 111-22-33')
+    await user.click(screen.getByRole('button', { name: 'Сгенерировать' }))
+    await user.click(screen.getByRole('button', { name: 'Создать сотрудника' }))
+    expect(create).toHaveBeenLastCalledWith(expect.objectContaining({ phone: '+375291112233' }))
+    expect(await screen.findByRole('link', { name: '+375291112233' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Готово' }))
+
+    await user.clear(screen.getByLabelText('Телефон'))
+    await user.type(screen.getByLabelText('Телефон'), '+375 29 111')
+    await user.click(screen.getByRole('button', { name: 'Сгенерировать' }))
+    await user.click(screen.getByRole('button', { name: 'Создать сотрудника' }))
+    expect(await screen.findByText('Номер — +375 и 9 цифр, например +375 29 111-22-33')).toBeInTheDocument()
+    expect(screen.getByLabelText('Телефон')).toHaveAttribute('aria-invalid', 'true')
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
 })
 
 describe('карточка пользователя', () => {
