@@ -398,7 +398,8 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
       const km = body.interval_km ?? null;
       const months = body.interval_months ?? null;
       if (km === null && months === null) throw validation("Укажите интервал в км и/или месяцах", "interval_km");
-      if (km !== null && (!Number.isInteger(km) || km < 1)) throw validation("Интервал в км — целое число ≥ 1", "interval_km");
+      // Как backend (#105): меньше 500 км — опечатка, а не регламент.
+      if (km !== null && (!Number.isInteger(km) || km < 500)) throw validation("Интервал в км — целое число, не меньше 500", "interval_km");
       if (months !== null && (!Number.isInteger(months) || months < 1)) {
         throw validation("Интервал в месяцах — целое число ≥ 1", "interval_months");
       }
@@ -415,6 +416,8 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
         interval_km: km,
         interval_months: months,
         is_archived: false,
+        created_at: this.clock().toISOString(),
+        created_by_user_id: ADMIN_ID,
       };
       this.regulations.push(created);
       return created;

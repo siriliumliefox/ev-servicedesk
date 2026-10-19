@@ -96,15 +96,17 @@ void main() {
     await tester.enterText(find.byKey(const Key('message')), text);
     repo.loseNextResponse = true;
     await _tap(tester, find.byKey(const Key('send')));
-    expect(find.text('Нет подключения к интернету. Попробуйте позже'), findsOneWidget);
+    // Ошибка — над полем ввода (#105): всплывающее сообщение закрывало «Отправить», повторить было нельзя.
+    expect(find.byType(SnackBar), findsNothing);
+    expect(find.text('Не отправлено. Нет подключения к интернету. Попробуйте позже'), findsOneWidget);
     expect(find.text(text), findsOneWidget, reason: 'текст остался в поле');
-    await _waitSnackGone(tester);
 
     await _tap(tester, find.byKey(const Key('send')));
     expect(repo.keys, hasLength(2));
     expect(repo.keys.first, matches(_uuidV4));
     expect(repo.keys.last, repo.keys.first);
     expect(find.text(text), findsOneWidget, reason: 'в переписке, поле очищено');
+    expect(find.byKey(const Key('send-error')), findsNothing, reason: 'ошибка снята после отправки');
 
     // Переписка с «сервера» — сообщение записано один раз.
     await _tap(tester, find.byType(BackButton));

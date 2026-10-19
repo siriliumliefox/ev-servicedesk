@@ -200,6 +200,8 @@ def test_blocking_client_ends_sessions_and_push(client, as_staff, login_client, 
     assert client.get(f"{API}/me", headers=headers).status_code == 401
     refresh = client.post(f"{API}/auth/refresh", json={"refresh_token": session["refresh_token"]})
     assert refresh.status_code == 401
+    # #105 (№16): не «Refresh-токен уже использован» — это не повтор токена, а блокировка.
+    assert refresh.json()["error"]["message"] == "Учётная запись недоступна"
     assert (
         db.scalars(
             select(RefreshToken).where(

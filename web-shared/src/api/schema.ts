@@ -343,7 +343,7 @@ export interface paths {
         put?: never;
         /**
          * Создать/пересмотреть регламент (upsert по модели+агрегату)
-         * @description Не PATCH: если для пары (vehicle_model_id, aggregate_type_code) уже есть активный регламент, сервер атомарно архивирует его (is_archived=true) и создаёт новый активный — это и есть "удаление/изменение регламента не ломает историю" (Глава 2/12). Прямое редактирование интервала в старой записи не предусмотрено намеренно, чтобы не потерять исторические пороги для прошлых расчётов. Новая версия создаётся всегда, даже с теми же интервалами; одновременные пересмотры выполняются по очереди, побеждает последний. 422: VEHICLE_MODEL_NOT_FOUND, AGGREGATE_TYPE_NOT_FOUND, нет ни одного интервала, interval_months > 1200. Уточнено в 1.3.2 (ADR 0016).
+         * @description Не PATCH: если для пары (vehicle_model_id, aggregate_type_code) уже есть активный регламент, сервер атомарно архивирует его (is_archived=true) и создаёт новый активный — это и есть "удаление/изменение регламента не ломает историю" (Глава 2/12). Прямое редактирование интервала в старой записи не предусмотрено намеренно, чтобы не потерять исторические пороги для прошлых расчётов. Новая версия создаётся всегда, даже с теми же интервалами; одновременные пересмотры выполняются по очереди, побеждает последний. 422: VEHICLE_MODEL_NOT_FOUND, AGGREGATE_TYPE_NOT_FOUND, нет ни одного интервала, interval_months > 1200. Уточнено в 1.3.2 (ADR 0016). Уточнено в 1.16.0 (#105, ADR 0034): interval_km < 500 — 422 (меньше — опечатка: «1» вместо «10 000» давало выработку 1 600 000 %; проверяет сервер, как interval_months > 1200 — схема v1 заморожена, ADR 0007); у версии — дата (created_at) и автор (created_by_user_id).
          */
         post: operations["reviseMaintenanceRegulation"];
         delete?: never;
@@ -831,7 +831,7 @@ export interface paths {
         put?: never;
         /**
          * Опубликовать уведомление (новости/акции/ручная рассылка)
-         * @description target_vehicle_model_id — единственный источник таргетинга (Глава 2, 3НФ). Для type=firmware обычно создаётся автоматически через POST /firmware-releases, но ручная публикация тоже разрешена: релиз той же модели обязателен, аудитория — владельцы авто модели с более ранней или неизвестной прошивкой. Уточнено в 1.6.0 (ADR 0019): type=maintenance — только системные напоминания о ТО (422 NOTIFICATION_TYPE_RESERVED); message — 1–1000 символов после обрезки пробелов (422); аудитория — активные клиенты с действующим согласием ПД и неудалёнными авто модели (null — все клиенты). Перед отправкой — previewNotificationAudience. Коды 422 (уточнено в 1.7.1): VEHICLE_MODEL_NOT_FOUND, FIRMWARE_RELEASE_REQUIRED, FIRMWARE_RELEASE_NOT_ALLOWED (релиз у не-прошивки), FIRMWARE_RELEASE_NOT_FOUND, FIRMWARE_MODEL_MISMATCH.
+         * @description target_vehicle_model_id — единственный источник таргетинга (Глава 2, 3НФ). Для type=firmware обычно создаётся автоматически через POST /firmware-releases, но ручная публикация тоже разрешена: релиз той же модели обязателен, аудитория — владельцы авто модели с более ранней или неизвестной прошивкой. Уточнено в 1.6.0 (ADR 0019): type=maintenance — только системные напоминания о ТО (422 NOTIFICATION_TYPE_RESERVED); message — 1–1000 символов после обрезки пробелов (422); аудитория — активные клиенты с действующим согласием ПД и неудалёнными авто модели (null — все клиенты). Перед отправкой — previewNotificationAudience. Коды 422 (уточнено в 1.7.1): VEHICLE_MODEL_NOT_FOUND, FIRMWARE_RELEASE_REQUIRED, FIRMWARE_RELEASE_NOT_ALLOWED (релиз у не-прошивки), FIRMWARE_RELEASE_NOT_FOUND, FIRMWARE_MODEL_MISMATCH. Уточнено в 1.16.0 (#105, ADR 0034): об этом релизе уведомление уже опубликовано (в том числе самим createFirmwareRelease) — 409 FIRMWARE_ALREADY_NOTIFIED, второе не создаётся; ручная публикация прошивки — для релиза без уведомления.
          */
         post: operations["createNotification"];
         delete?: never;
@@ -915,7 +915,7 @@ export interface paths {
         put?: never;
         /**
          * Проверить аудиторию публикации без отправки
-         * @description Число клиентов и устройств, которые получат публикацию с таким телом, по тем же правилам, что createNotification (включая его проверки и 422). Ничего не создаёт и не отправляет. Добавлено в 1.6.0 (ADR 0019 п. 12, U-45).
+         * @description Число клиентов и устройств, которые получат публикацию с таким телом, по тем же правилам, что createNotification (включая его проверки и 422). Ничего не создаёт и не отправляет. Добавлено в 1.6.0 (ADR 0019 п. 12, U-45). 409 FIRMWARE_ALREADY_NOTIFIED — как у createNotification: предпросмотр предупреждает о повторе (1.16.0, ADR 0034).
          */
         post: operations["previewNotificationAudience"];
         delete?: never;
@@ -1299,6 +1299,13 @@ export interface components {
             interval_km?: number | null;
             interval_months?: number | null;
             is_archived: boolean;
+            /**
+             * Format: date-time
+             * @description Когда создана версия (U-44). Добавлено в 1.16.0 (#105, ADR 0034).
+             */
+            created_at: string;
+            /** @description Администратор, создавший версию (U-44); null — версия создана до 1.16.0. Только id: регламенты читает и инженер. Добавлено в 1.16.0 (#105, ADR 0034). */
+            created_by_user_id: number | null;
         };
         /** @description Нужно указать interval_km и/или interval_months — хотя бы одно. */
         MaintenanceRegulationCreateRequest: {
@@ -3331,6 +3338,7 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
             422: components["responses"]["ValidationError"];
             default: components["responses"]["ServerError"];
         };
@@ -3443,6 +3451,7 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
             422: components["responses"]["ValidationError"];
             default: components["responses"]["ServerError"];
         };

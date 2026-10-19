@@ -67,6 +67,10 @@ class MaintenanceRegulation(IdMixin, TimestampMixin, Base):
     interval_km: Mapped[int | None] = mapped_column(Integer)
     interval_months: Mapped[int | None] = mapped_column(Integer)
     is_archived: Mapped[bool] = mapped_column(server_default=text("false"), nullable=False)
+    # Автор версии (#105, U-44): администратор, создавший её; NULL — версии до миграции 0019.
+    created_by_user_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("app_user.id", ondelete="RESTRICT"), index=True
+    )
 
     # Связи только явной загрузкой (selectinload), ленивая подгрузка — ошибка (ADR 0015).
     aggregate_type: Mapped[AggregateType] = relationship(lazy="raise")

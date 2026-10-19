@@ -267,10 +267,24 @@ describe('конструктор регламентов ТО', () => {
     await user.type(within(form).getByLabelText('Интервал, км'), '12000')
     await click(within(form).getByRole('button', { name: 'Сохранить' }))
     const row = (await screen.findByRole('rowheader', { name: 'Масло двигателя' })).closest('tr')!
-    expect(within(row).getAllByRole('cell')[2]).toHaveTextContent('2')
+    // #105 (U-44): у версии — номер, дата и автор (телефон администратора).
+    expect(within(row).getAllByRole('cell')[2]).toHaveTextContent(/^2 · 10 окт\. 2026 г\. · \+375291000001$/)
     await click(screen.getByLabelText('Показать историю версий'))
     const archived = (await screen.findByText('в архиве')).closest('tr')!
-    expect(within(archived).getAllByRole('cell')[3]).toHaveTextContent(/^1$/)
+    expect(within(archived).getAllByRole('cell')[3]).toHaveTextContent(/^1 · 1 апр\. 2026 г\. · \+375291000001$/)
+  })
+
+  it('интервал меньше 500 км — ошибка, версия не создаётся (#105)', async () => {
+    const { user, click, repo } = setup('/regulations')
+    await click(await screen.findByRole('button', { name: 'Изменить интервал: Масло двигателя' }))
+    const form = screen.getByRole('form', { name: 'Интервал: Масло двигателя' })
+    expect(within(form).getByLabelText('Интервал, км')).toHaveAccessibleDescription('Не меньше 500 км')
+    await user.clear(within(form).getByLabelText('Интервал, км'))
+    await user.type(within(form).getByLabelText('Интервал, км'), '1')
+    await click(within(form).getByRole('button', { name: 'Сохранить' }))
+    expect(await within(form).findByText(/не меньше 500/)).toBeInTheDocument()
+    const active = (await repo.listMaintenanceRegulations({ vehicle_model_id: 1 })).filter((r) => !r.is_archived)
+    expect(active.find((r) => r.aggregate_type_code === 'engine_oil')?.interval_km).toBe(10000)
   })
 
   it('масляный фильтр: подсказка интервала масла и «Как у масла» (ADR 0009)', async () => {

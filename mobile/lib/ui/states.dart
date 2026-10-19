@@ -180,12 +180,15 @@ class FieldError extends StatelessWidget {
   }
 }
 
+/// Текст ошибки действия для пользователя.
+String actionErrorText(Object error) =>
+    error is OfflineException ? 'Нет подключения к интернету. Попробуйте позже' : error.toString();
+
 /// Сообщение об ошибке действия (отправка формы и т.п.).
 void showErrorSnack(BuildContext context, Object error) {
-  final text = error is OfflineException ? 'Нет подключения к интернету. Попробуйте позже' : error.toString();
   ScaffoldMessenger.of(context)
     ..hideCurrentSnackBar()
-    ..showSnackBar(SnackBar(content: Text(text)));
+    ..showSnackBar(SnackBar(content: Text(actionErrorText(error))));
 }
 
 /// Индикатор в кнопке на время запроса.

@@ -179,6 +179,23 @@ def test_detail_has_firmware_snapshot_and_aggregate_context(
 # ---------- Создание ----------
 
 
+def test_resolved_ticket_message_text_by_role(client, owner, engineer, vehicle):
+    """#105 (№1): 409 TICKET_RESOLVED клиенту — без «переоткройте» (переоткрывает персонал)."""
+    eng_headers, _ = engineer
+    tid = create(client, owner, vehicle["id"])["id"]
+    client.post(f"{API}/tickets/{tid}/claim", headers=eng_headers)
+    set_status(client, eng_headers, tid, "resolved")
+    texts = {}
+    for role, headers in (("client", owner), ("engineer", eng_headers)):
+        r = client.post(f"{API}/tickets/{tid}/messages", json={"body": "Ещё"}, headers=headers)
+        assert (r.status_code, error_code(r)) == (409, "TICKET_RESOLVED"), role
+        texts[role] = r.json()["error"]["message"]
+    assert texts == {
+        "client": "Обращение решено — если проблема вернулась, создайте новое",
+        "engineer": "Тикет решён — сначала переоткройте его (смена статуса)",
+    }
+
+
 def test_detail_shows_client_and_block_flag(client, owner, engineer, admin, vehicle):
     """#104: в карточке — клиент (владелец авто); блокировка видна, чат её не закрывает."""
     eng_headers, _ = engineer

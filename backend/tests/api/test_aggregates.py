@@ -5,7 +5,7 @@
 tests/api/test_aggregate_scenarios.py.
 """
 
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -467,12 +467,15 @@ def test_revision_and_archive_keep_history(client, admin, engineer, staffed_vehi
     ("body", "code"),
     [
         (
-            {"vehicle_model_id": 10**9, "aggregate_type_code": "engine_oil", "interval_km": 1},
+            {"vehicle_model_id": 10**9, "aggregate_type_code": "engine_oil", "interval_km": 500},
             "VEHICLE_MODEL_NOT_FOUND",
         ),
-        ({"aggregate_type_code": "no_such_part", "interval_km": 1}, "AGGREGATE_TYPE_NOT_FOUND"),
+        ({"aggregate_type_code": "no_such_part", "interval_km": 500}, "AGGREGATE_TYPE_NOT_FOUND"),
         ({"aggregate_type_code": "engine_oil"}, "VALIDATION_ERROR"),
         ({"aggregate_type_code": "engine_oil", "interval_km": 0}, "VALIDATION_ERROR"),
+        # #105 (№13): меньше 500 км — опечатка, а не регламент.
+        ({"aggregate_type_code": "engine_oil", "interval_km": 1}, "VALIDATION_ERROR"),
+        ({"aggregate_type_code": "engine_oil", "interval_km": 499}, "VALIDATION_ERROR"),
         ({"aggregate_type_code": "engine_oil", "interval_months": 1201}, "VALIDATION_ERROR"),
         (
             {"vehicle_model_id": 2**63, "aggregate_type_code": "engine_oil", "interval_km": 1},
@@ -486,6 +489,24 @@ def test_revise_validation(client, as_client, admin, body, code):
     r = client.post(f"{API}/maintenance-regulations", json=body, headers=admin)
     assert r.status_code == 422, r.text
     assert r.json()["error"]["code"] == code
+
+
+def test_regulation_version_has_date_and_author(client, as_client, as_staff, engineer):
+    """#105 (U-44): у версии регламента — дата и автор; инженер видит только id автора."""
+    admin_headers, admin_user = as_staff("+375292280002", UserRole.ADMIN)
+    owner = as_client("+375292280001")
+    model = model_id(client, owner, "Zeekr")
+    body = {"vehicle_model_id": model, "aggregate_type_code": "engine_oil", "interval_km": 500}
+    r = client.post(f"{API}/maintenance-regulations", json=body, headers=admin_headers)
+    assert r.status_code == 201, r.text
+    created = r.json()
+    assert created["created_by_user_id"] == admin_user.id
+    assert datetime.fromisoformat(created["created_at"]) > datetime.now(UTC) - timedelta(minutes=5)
+    r = client.get(
+        f"{API}/maintenance-regulations", params={"vehicle_model_id": model}, headers=engineer[0]
+    )
+    seen = next(item for item in r.json()["items"] if item["id"] == created["id"])
+    assert (seen["created_by_user_id"], "created_by" in seen) == (admin_user.id, False)
 
 
 def test_regulations_rbac(client, as_client, engineer):

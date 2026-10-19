@@ -20,6 +20,7 @@ from app.domain.notifications.push import Outcome, PushResult
 from app.domain.notifications.service import firmware_message
 from app.models import (
     AppUser,
+    FirmwareRelease,
     NotificationDelivery,
     NotificationRecipient,
     PdConsent,
@@ -282,7 +283,7 @@ def test_create_notification_rejects(client, admin, body, code):
         assert (r.status_code, error_code(r)) == (422, code), path
 
 
-def test_manual_firmware_notification_rules(client, admin, make_owner):
+def test_manual_firmware_notification_rules(client, admin, make_owner, db: Session):
     owner = make_owner("Zeekr")
     model = zeekr(client, admin)
     fw = release(client, admin, model, "1.0", date(2026, 1, 1)).json()
@@ -306,7 +307,20 @@ def test_manual_firmware_notification_rules(client, admin, make_owner):
         422,
         "FIRMWARE_RELEASE_NOT_ALLOWED",
     )
-    # Модель не указана — берётся модель релиза; владелец без прошивки — в аудитории.
+    # #105 (№6): о релизе из createFirmwareRelease владельцы уже уведомлены — повтор не уходит,
+    # предпросмотр предупреждает тем же 409.
+    body = {"type": "firmware", "firmware_release_id": fw["id"], "message": "Обновитесь"}
+    for path in ("/notifications", "/notifications/audience-preview"):
+        r = client.post(f"{API}{path}", json=body, headers=admin)
+        assert (r.status_code, error_code(r)) == (409, "FIRMWARE_ALREADY_NOTIFIED"), path
+    assert [n["firmware_release_id"] for n in feed(client, owner.headers)["items"]] == [fw["id"]]
+
+    # Релиз, заведённый не через API (без уведомления), публикуется вручную. Модель не указана —
+    # берётся модель релиза; владелец без прошивки — в аудитории.
+    silent = FirmwareRelease(vehicle_model_id=model, version="1.1", released_at=date(2026, 2, 1))
+    db.add(silent)
+    db.flush()
+    fw = {"id": silent.id}
     manual = publish(
         client, admin, type="firmware", firmware_release_id=fw["id"], message="  Обновитесь\n"
     )

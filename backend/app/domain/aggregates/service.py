@@ -103,6 +103,7 @@ def revise_regulation(
     aggregate_type_code: str,
     interval_km: int | None,
     interval_months: int | None,
+    author_id: int | None = None,
 ) -> MaintenanceRegulation:
     """POST /maintenance-regulations (admin): активная версия архивируется, создаётся новая.
 
@@ -136,6 +137,7 @@ def revise_regulation(
         aggregate_type_id=aggregate_type.id,
         interval_km=interval_km,
         interval_months=interval_months,
+        created_by_user_id=author_id,
     )
     db.add(regulation)
     db.commit()

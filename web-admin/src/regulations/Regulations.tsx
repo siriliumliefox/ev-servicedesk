@@ -12,6 +12,7 @@ import {
   InlineError,
   LoadingState,
   TextField,
+  formatDate,
   formatInt,
   useAsync,
   type AggregateType,
@@ -152,8 +153,16 @@ function RegulationTable({
   /** null — подтверждение устарело: агрегат архивирован или открыт новый пересмотр. */
   onRevised: (revision: Revision | null) => void
 }) {
+  const { repo } = useAdmin()
   const [editing, setEditing] = useState<string | null>(null)
   const numbers = versionNumbers(regulations)
+  // Автор версии (#105, U-44): в регламенте — только id, телефон — из списка администраторов.
+  const { data: admins } = useAsync(() => repo.listUsers({ role: 'admin', page_size: 100 }), [repo])
+  const versionLabel = (r: MaintenanceRegulation) => {
+    const author =
+      r.created_by_user_id == null ? null : (admins?.items.find((u) => u.id === r.created_by_user_id)?.phone ?? `#${r.created_by_user_id}`)
+    return [numbers.get(r.id), formatDate(r.created_at), author].filter(Boolean).join(' · ')
+  }
   // ADR 0009: масляный фильтр — отдельный регламент с интервалом масла; подсказка в форме фильтра.
   const oil = regulations.find((r) => r.aggregate_type_code === 'engine_oil' && !r.is_archived)
   return (
@@ -195,7 +204,7 @@ function RegulationTable({
                   key={type.code}
                   type={type}
                   regulation={active}
-                  version={active ? numbers.get(active.id) : undefined}
+                  version={active ? versionLabel(active) : undefined}
                   onEdit={() => {
                     setEditing(type.code)
                     onRevised(null)
@@ -212,7 +221,7 @@ function RegulationTable({
                       <td className="py-2 pr-4 pl-8">в архиве</td>
                       <td className="px-4 py-2 tabular-nums">{r.interval_km == null ? '—' : formatInt(r.interval_km)}</td>
                       <td className="px-4 py-2 tabular-nums">{r.interval_months ?? '—'}</td>
-                      <td className="px-4 py-2 tabular-nums">{numbers.get(r.id)}</td>
+                      <td className="px-4 py-2 tabular-nums">{versionLabel(r)}</td>
                       <td />
                     </tr>
                   ))
@@ -234,8 +243,8 @@ function RegulationRow({
 }: {
   type: AggregateType
   regulation: MaintenanceRegulation | undefined
-  /** Номер действующей версии (U-44). */
-  version: number | undefined
+  /** Действующая версия (U-44): номер, дата и автор. */
+  version: string | undefined
   onEdit: () => void
   onChanged: () => void
 }) {
@@ -343,7 +352,14 @@ function RegulationForm({
         <form onSubmit={submit} className="grid gap-3" aria-label={`Интервал: ${type.name}`}>
           <p className="text-label">{type.name}</p>
           <div className="flex flex-wrap items-start gap-4">
-            <TextField label="Интервал, км" inputMode="numeric" className="w-44" value={km} onChange={(e) => setKm(e.target.value)} />
+            <TextField
+              label="Интервал, км"
+              inputMode="numeric"
+              className="w-44"
+              hint="Не меньше 500 км"
+              value={km}
+              onChange={(e) => setKm(e.target.value)}
+            />
             <TextField
               label="Интервал, мес."
               inputMode="numeric"

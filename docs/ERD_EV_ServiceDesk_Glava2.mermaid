@@ -97,6 +97,7 @@ erDiagram
         integer interval_km "nullable"
         integer interval_months "nullable"
         boolean is_archived
+        bigint created_by_user_id FK "nullable"
         timestamptz created_at
         timestamptz updated_at
     }
@@ -259,6 +260,7 @@ erDiagram
     ticket |o--o{ maintenance_record : "ticket_id (SET NULL)"
     vehicle ||--o{ maintenance_record : "vehicle_id (RESTRICT)"
     aggregate_type ||--o{ maintenance_regulation : "aggregate_type_id (RESTRICT)"
+    app_user |o--o{ maintenance_regulation : "created_by_user_id (RESTRICT)"
     vehicle_model ||--o{ maintenance_regulation : "vehicle_model_id (RESTRICT)"
     aggregate_type ||--o{ maintenance_reminder : "aggregate_type_id (RESTRICT)"
     notification ||--o{ maintenance_reminder : "notification_id (CASCADE)"
