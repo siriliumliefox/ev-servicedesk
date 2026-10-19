@@ -25,10 +25,11 @@ from tests.api.conftest import (
     Headers,
     add_vehicle,
     api_settings,
+    error_code,
     model_id,
 )
 from tests.api.knowledge_support import build_tree
-from tests.api.ticket_support import create, error_code, set_status
+from tests.api.ticket_support import create, set_status
 
 CLIENT_PHONE = "+375293300001"
 ENGINEER_PHONE = "+375293300002"

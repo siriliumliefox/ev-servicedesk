@@ -18,6 +18,7 @@ from tests.api.conftest import (
     ContractClient,
     api_settings,
     bearer,
+    error_code,
     telegram_widget,
 )
 
@@ -160,7 +161,7 @@ def test_no_or_malformed_token_401(app, client, headers):
     for route in protected_routes(app):
         r = call(client, route, headers)
         assert r.status_code == 401, (route.path, r.text)
-        assert r.json()["error"]["code"] == "UNAUTHORIZED"
+        assert error_code(r) == "UNAUTHORIZED"
         assert r.headers["WWW-Authenticate"] == "Bearer"
 
 
@@ -229,7 +230,7 @@ def test_staff_forbidden_on_client_only_routes(client, make_staff, role):
         f"{API}/auth/staff/login", json={"phone": phone, "password": STAFF_PASSWORD}
     ).json()["access_token"]
     r = client.delete(f"{API}/auth/pd-consent", headers=bearer(token))
-    assert r.status_code == 403 and r.json()["error"]["code"] == "FORBIDDEN"
+    assert r.status_code == 403 and error_code(r) == "FORBIDDEN"
     r = client.post(
         f"{API}/auth/telegram/link", json=telegram_widget("1002"), headers=bearer(token)
     )

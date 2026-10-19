@@ -41,9 +41,9 @@ from app.domain.tickets import access, attachments, service
 from app.domain.vehicles import access as vehicle_access
 from app.models import AppUser, PdConsent, Ticket, TicketAttachment, TicketMessage, Vehicle
 from app.models.enums import TicketCategory, TicketStatus, UserRole
-from tests.api.conftest import API, DbOverrides, Headers, add_vehicle, bearer
+from tests.api.conftest import API, DbOverrides, Headers, add_vehicle, bearer, error_code
 from tests.api.test_concurrency import storm
-from tests.api.ticket_support import JPEG, create_ticket, error_code, presign, put_upload
+from tests.api.ticket_support import JPEG, create_ticket, presign, put_upload
 from tests.api.ticket_ws import assert_frame, assert_quiet, auth, connect, receive_event
 from tests.conftest import s3_admin, s3_keys
 

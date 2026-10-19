@@ -10,9 +10,9 @@ from sqlalchemy.orm import Session
 
 from app.models import DecisionTreeNode, Ticket
 from app.models.enums import UserRole
-from tests.api.conftest import API, Headers, add_vehicle
+from tests.api.conftest import API, Headers, add_vehicle, error_code
 from tests.api.knowledge_support import api, api_tree, create_article, create_node, update_article
-from tests.api.ticket_support import create, error_code
+from tests.api.ticket_support import create
 
 ADMIN_PHONE = "+375293500001"
 CLIENT_PHONE = "+375293500002"

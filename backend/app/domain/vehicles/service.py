@@ -57,16 +57,14 @@ def search_models_stmt(search: str | None) -> Select:
 def list_vehicles_stmt(user: AppUser) -> Select:
     return (
         select(Vehicle)
-        .where(Vehicle.user_id == user.id, Vehicle.deleted_at.is_(None))
+        .where(Vehicle.owned_active(user.id))
         .order_by(Vehicle.created_at, Vehicle.id)
         .options(*VEHICLE_OUT)
     )
 
 
 def _vin_conflict(db: Session, user: AppUser, vin: str) -> ApiError | None:
-    owner_id = db.scalar(
-        select(Vehicle.user_id).where(Vehicle.vin == vin, Vehicle.deleted_at.is_(None))
-    )
+    owner_id = db.scalar(select(Vehicle.user_id).where(Vehicle.vin == vin, Vehicle.is_active))
     if owner_id is None:
         return None
     if owner_id == user.id:

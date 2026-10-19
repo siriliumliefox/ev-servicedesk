@@ -12,6 +12,7 @@ from datetime import date
 from decimal import Decimal
 from enum import StrEnum
 from fractions import Fraction
+from typing import Protocol
 
 
 class TrafficLight(StrEnum):
@@ -37,12 +38,33 @@ class Replacement:
     mileage: int | None = None
 
 
+class ThresholdsRow(Protocol):
+    """Строка `aggregate_status_thresholds` (или любой объект с теми же порогами)."""
+
+    yellow_from_percent: int
+    red_above_percent: int
+
+
 @dataclass(frozen=True)
 class Thresholds:
     """Пороги `aggregate_status_thresholds`: green < yellow_from ≤ yellow ≤ red_above < red."""
 
     yellow_from_percent: int = 70
     red_above_percent: int = 100
+
+    @classmethod
+    def of(cls, row: ThresholdsRow) -> "Thresholds":
+        """Пороги из строки настроек — одна сборка для статусов и напоминаний о ТО (#73, D8)."""
+        return cls(row.yellow_from_percent, row.red_above_percent)
+
+
+@dataclass(frozen=True)
+class LeftToReplacement:
+    """Остаток до порога «требуется замена» (красный, `red_above_percent`), а не до 100 %
+    интервала: порог настраивает администратор (ADR 0009). Не отрицателен, пока не красный."""
+
+    km: int | None = None
+    days: int | None = None
 
 
 @dataclass(frozen=True)
@@ -59,6 +81,17 @@ def add_months(start: date, months: int) -> date:
     year += start.year
     month = month0 + 1
     return date(year, month, min(start.day, calendar.monthrange(year, month)[1]))
+
+
+def _used_km(last: Replacement, current_mileage: int) -> int:
+    """Пробег после замены; пробег ниже пробега замены (корректировка) — 0, а не отрицательный."""
+    return max(0, current_mileage - last.mileage)
+
+
+def _cycle(regulation: Regulation, last: Replacement, today: date) -> tuple[date, int, int]:
+    """Срок замены по времени, длина цикла в днях и прошедшие дни (не меньше 0)."""
+    due = add_months(last.replaced_at, regulation.interval_months)
+    return due, (due - last.replaced_at).days, max(0, (today - last.replaced_at).days)
 
 
 def _truncate(p: Fraction) -> Decimal:
@@ -81,14 +114,13 @@ def compute_status(
     remaining_km = remaining_days = None
 
     if regulation.interval_km is not None and last.mileage is not None:
-        used_km = max(0, current_mileage - last.mileage)
+        used_km = _used_km(last, current_mileage)
         components.append(Fraction(100 * used_km, regulation.interval_km))
         remaining_km = regulation.interval_km - used_km
 
     if regulation.interval_months is not None and last.replaced_at is not None:
-        due = add_months(last.replaced_at, regulation.interval_months)
-        elapsed_days = max(0, (today - last.replaced_at).days)
-        components.append(Fraction(100 * elapsed_days, (due - last.replaced_at).days))
+        due, cycle_days, elapsed_days = _cycle(regulation, last, today)
+        components.append(Fraction(100 * elapsed_days, cycle_days))
         remaining_days = (due - today).days
 
     if not components:
@@ -112,3 +144,19 @@ def becomes_current(current: Replacement | None, replaced_at: date) -> bool:
     if current is None or current.replaced_at is None:
         return True
     return replaced_at >= current.replaced_at
+
+
+def left_to_replacement(
+    regulation: Regulation, last: Replacement, mileage: int, today: date, red_above_percent: int
+) -> LeftToReplacement:
+    """Сколько осталось до «требуется замена» — для напоминаний о ТО (N-10, ADR 0019 п. 5).
+
+    Та же арифметика, что у `compute_status` (#73, D8): пробег и дни цикла считаются одинаково.
+    """
+    km = days = None
+    if regulation.interval_km is not None and last.mileage is not None:
+        km = regulation.interval_km * red_above_percent // 100 - _used_km(last, mileage)
+    if regulation.interval_months is not None and last.replaced_at is not None:
+        _, cycle_days, elapsed_days = _cycle(regulation, last, today)
+        days = cycle_days * red_above_percent // 100 - elapsed_days
+    return LeftToReplacement(km, days)

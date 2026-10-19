@@ -12,7 +12,7 @@
 
 from typing import NamedTuple
 
-from sqlalchemy import ColumnElement, ScalarSelect, and_, exists, false, null, select, true
+from sqlalchemy import ColumnElement, ScalarSelect, exists, false, null, select, true
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.base import ExecutableOption
 
@@ -44,7 +44,7 @@ def _visible(user: AppUser) -> ColumnElement[bool]:
     if user.role is UserRole.ADMIN:
         return true()
     if user.role is UserRole.CLIENT:
-        return and_(Vehicle.user_id == user.id, Vehicle.deleted_at.is_(None))
+        return Vehicle.owned_active(user.id)
     if user.role is UserRole.ENGINEER:
         # Авто, по которому есть видимый инженеру тикет: свой или из очереди.
         return exists().where(Ticket.vehicle_id == Vehicle.id, ticket_access.visible(user))
@@ -96,7 +96,7 @@ def for_new_ticket(db: Session, user: AppUser, vehicle_id: int) -> Vehicle:
     _check_id(vehicle_id)
     vehicle = db.scalars(
         select(Vehicle)
-        .where(Vehicle.id == vehicle_id, Vehicle.deleted_at.is_(None), _visible(user))
+        .where(Vehicle.id == vehicle_id, Vehicle.is_active, _visible(user))
         .with_for_update(read=True, of=Vehicle)
         .execution_options(populate_existing=True)
     ).one_or_none()
@@ -118,7 +118,7 @@ def for_change(db: Session, user: AppUser, vehicle_id: int) -> Change:
     allowed, ticket_id = _change_basis(user)
     row = db.execute(
         select(Vehicle, ticket_id)
-        .where(Vehicle.id == vehicle_id, Vehicle.deleted_at.is_(None), _visible(user), allowed)
+        .where(Vehicle.id == vehicle_id, Vehicle.is_active, _visible(user), allowed)
         .with_for_update(of=Vehicle, key_share=True)
     ).one_or_none()
     if row is None:

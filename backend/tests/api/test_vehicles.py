@@ -22,6 +22,7 @@ from tests.api.conftest import (
     ZEEKR_VIN,
     add_vehicle,
     bearer,
+    error_code,
     model_id,
 )
 
@@ -45,7 +46,7 @@ def test_add_list_mileage_history_flow(client, as_client, as_staff, make_ticket,
 
     r = client.patch(f"{API}/vehicles/{vid}/mileage", json={"mileage": 11999}, headers=owner)
     assert r.status_code == 409
-    assert r.json()["error"]["code"] == "MILEAGE_DECREASE"
+    assert error_code(r) == "MILEAGE_DECREASE"
 
     engineer_headers, engineer = as_staff("+375291100002")
     ticket = make_ticket(vid, engineer)
@@ -96,7 +97,7 @@ def test_unrecognized_vin_requires_manual_model(client, as_client):
     owner = as_client("+375291100021")
     r = client.post(f"{API}/vehicles", json={"vin": UNKNOWN_VIN}, headers=owner)
     assert r.status_code == 422
-    assert r.json()["error"]["code"] == "VIN_DECODE_FAILED"
+    assert error_code(r) == "VIN_DECODE_FAILED"
 
     voyah = model_id(client, owner, "voyah free")
     vehicle = add_vehicle(client, owner, UNKNOWN_VIN, vehicle_model_id=voyah)
@@ -110,7 +111,7 @@ def test_unrecognized_vin_requires_manual_model(client, as_client):
             headers=owner,
         )
         assert r.status_code == 422, r.text
-        assert r.json()["error"]["code"] == "VEHICLE_MODEL_NOT_FOUND"
+        assert error_code(r) == "VEHICLE_MODEL_NOT_FOUND"
 
 
 @pytest.mark.parametrize(
@@ -151,7 +152,7 @@ def test_same_vin_on_two_accounts_is_conflict(client, as_client, db):
 
     r = client.post(f"{API}/vehicles", json={"vin": ZEEKR_VIN}, headers=first)
     assert r.status_code == 409
-    assert r.json()["error"]["code"] == "VIN_ALREADY_ADDED"
+    assert error_code(r) == "VIN_ALREADY_ADDED"
     assert db.scalar(select(func.count()).select_from(Vehicle).where(Vehicle.vin == ZEEKR_VIN)) == 1
 
 
@@ -365,7 +366,7 @@ def test_vehicle_endpoints_require_valid_token(client, method, path, body, token
     r = client.request(method, f"{API}{path}", json=body, headers=headers)
     assert r.status_code == 401
     assert r.headers["WWW-Authenticate"] == "Bearer"
-    assert r.json()["error"]["code"] == "UNAUTHORIZED"
+    assert error_code(r) == "UNAUTHORIZED"
 
 
 def test_roles_outside_matrix_get_403(client, as_client, as_staff):
@@ -393,7 +394,7 @@ def test_roles_outside_matrix_get_403(client, as_client, as_staff):
     for headers, method, path, body in denied:
         r = client.request(method, f"{API}{path}", json=body, headers=headers)
         assert r.status_code == 403, f"{method} {path}"
-        assert r.json()["error"]["code"] == "FORBIDDEN"
+        assert error_code(r) == "FORBIDDEN"
 
 
 # ---------- Исправление пробега (ADR 0006) ----------
@@ -412,7 +413,7 @@ def test_admin_mileage_correction(client, as_client, as_staff, db):
         headers=admin_headers,
     )
     assert r.status_code == 409
-    assert r.json()["error"]["code"] == "MILEAGE_CORRECTION_STALE"
+    assert error_code(r) == "MILEAGE_CORRECTION_STALE"
 
     r = client.post(
         url,
@@ -420,7 +421,7 @@ def test_admin_mileage_correction(client, as_client, as_staff, db):
         headers=admin_headers,
     )
     assert r.status_code == 409
-    assert r.json()["error"]["code"] == "MILEAGE_NOT_DECREASED"
+    assert error_code(r) == "MILEAGE_NOT_DECREASED"
 
     r = client.post(
         url,
@@ -478,7 +479,7 @@ def test_maintenance_record_rules(client, as_client, as_staff, make_ticket, db):
     for body, code in cases:
         r = client.post(url, json=body, headers=eng_headers)
         assert r.status_code == 422, body
-        assert r.json()["error"]["code"] == code
+        assert error_code(r) == code
 
     # Запись задним числом: пробег авто не уменьшается; связь с последним тикетом инженера.
     r = client.post(

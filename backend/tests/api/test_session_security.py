@@ -20,7 +20,7 @@ from app.core.errors import ApiError
 from app.domain.auth import staff, tokens
 from app.models import RefreshToken
 from app.models.enums import UserRole
-from tests.api.conftest import API, STAFF_PASSWORD, api_settings, bearer
+from tests.api.conftest import API, STAFF_PASSWORD, api_settings, bearer, error_code
 
 STAFF = "+375296680001"
 ADMIN = "+375296680002"
@@ -44,7 +44,7 @@ def test_logout_revokes_presented_access_token_only(client, make_staff):
     )
     assert r.status_code == 204
     me = client.get(f"{API}/me", headers=bearer(first["access_token"]))
-    assert me.status_code == 401 and me.json()["error"]["code"] == "UNAUTHORIZED"
+    assert me.status_code == 401 and error_code(me) == "UNAUTHORIZED"
     # Другая сессия того же сотрудника продолжает работать.
     assert client.get(f"{API}/me", headers=bearer(second["access_token"])).status_code == 200
 
@@ -88,7 +88,7 @@ def test_redis_down_fails_closed(client, make_staff, monkeypatch):
     monkeypatch.setattr(Redis, "exists", broken)
     with client.unchecked():
         r = client.get(f"{API}/me", headers=bearer(token))
-    assert r.status_code == 503 and r.json()["error"]["code"] == "SERVICE_UNAVAILABLE"
+    assert r.status_code == 503 and error_code(r) == "SERVICE_UNAVAILABLE"
 
 
 # ---------- Блокировка входа (B1 №3) ----------
@@ -230,7 +230,7 @@ def test_wrong_current_password_counts_as_failed_login(client, make_staff):
     headers = bearer(staff_login(client).json()["access_token"])
     codes = [change(client, headers, "wrong-password", NEW_PASSWORD) for _ in range(6)]
     assert [r.status_code for r in codes] == [400] * 5 + [429]
-    assert codes[0].json()["error"]["code"] == "PASSWORD_INVALID"
+    assert error_code(codes[0]) == "PASSWORD_INVALID"
     assert staff_login(client).status_code == 429, "подбор через смену пароля не обходит лимит"
 
 

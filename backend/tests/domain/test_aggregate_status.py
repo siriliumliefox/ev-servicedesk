@@ -21,6 +21,7 @@ from app.domain.aggregates import (
     becomes_current,
     compute_status,
 )
+from app.domain.aggregates.status import LeftToReplacement, left_to_replacement
 
 SPECS = Path(__file__).resolve().parents[3] / "docs" / "specs"
 SCENARIOS = yaml.safe_load((SPECS / "aggregate_status_scenarios.yaml").read_text(encoding="utf-8"))
@@ -158,3 +159,27 @@ def test_unknown_when_regulation_has_no_matching_history() -> None:
         Thresholds(),
     )
     assert result is not None and result.status is TrafficLight.UNKNOWN
+
+
+@pytest.mark.parametrize(
+    ("red", "expected"),
+    [(100, LeftToReplacement(3_000, 184)), (120, LeftToReplacement(5_000, 257))],
+    ids=["red-100", "red-120"],
+)
+def test_left_to_replacement_counts_to_red_threshold(red: int, expected) -> None:
+    """#73 (D8): остаток для напоминаний о ТО — та же арифметика, что у `compute_status`, но до
+    порога «красный» (ADR 0009): 10 000 км × 1,2 − 7 000; 365 дн. × 1,2 − 181 дн."""
+    rule = Regulation(interval_km=10_000, interval_months=12)
+    last = Replacement(replaced_at=date(2026, 1, 1), mileage=20_000)
+    today = date(2026, 7, 1)
+    assert left_to_replacement(rule, last, 27_000, today, red) == expected
+    status = compute_status(rule, last, 27_000, today, Thresholds(70, red))
+    assert (status.remaining_km, status.remaining_days) == (3_000, 184), "100 % — у статуса"
+
+
+def test_thresholds_of_row() -> None:
+    class Row:
+        yellow_from_percent = 60
+        red_above_percent = 110
+
+    assert Thresholds.of(Row()) == Thresholds(60, 110)

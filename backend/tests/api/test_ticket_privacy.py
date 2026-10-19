@@ -31,8 +31,8 @@ from sqlalchemy.orm import Session
 from app.core import storage as storage_module
 from app.core.storage import ObjectStorage, S3ObjectStorage, StorageUnavailable, get_storage
 from app.models import TicketAttachment
-from tests.api.conftest import API, ContractClient, telegram_widget
-from tests.api.ticket_support import JPEG, MP4, UPLOAD_KEY, error_code, presign, put_upload
+from tests.api.conftest import API, ContractClient, error_code, telegram_widget
+from tests.api.ticket_support import JPEG, MP4, UPLOAD_KEY, presign, put_upload
 from tests.api.ticket_world import (
     ADMIN,
     ASSIGNED,

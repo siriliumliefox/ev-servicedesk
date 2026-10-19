@@ -14,21 +14,23 @@ import logging
 from dataclasses import dataclass
 from datetime import date
 
-from sqlalchemy import BigInteger, and_, literal, select, text
+from sqlalchemy import BigInteger, and_, literal, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.db import constraint_name
+from app.core.locks import AdvisoryLock, try_xact_lock
 from app.core.time import today_in_business_tz
 from app.domain.aggregates.service import get_thresholds
 from app.domain.aggregates.status import (
     AggregateStatusResult,
+    LeftToReplacement,
     Regulation,
     Replacement,
     Thresholds,
     TrafficLight,
-    add_months,
     compute_status,
+    left_to_replacement,
 )
 from app.domain.notifications.outbox import Outbox
 from app.domain.notifications.service import eligible_client, enqueue
@@ -46,37 +48,12 @@ from app.models.enums import MaintenanceReminderKind, NotificationType
 
 logger = logging.getLogger(__name__)
 
-ADVISORY_LOCK_KEY = 15_0019  # глава 15, ADR 0019
-
 
 @dataclass(frozen=True)
 class ReminderRules:
     thresholds: Thresholds
     before_km: int
     before_days: int
-
-
-@dataclass(frozen=True)
-class LeftToReplacement:
-    """Остаток до порога «требуется замена» (красный, `red_above_percent`), а не до 100 %
-    интервала: порог настраивает администратор (ADR 0009). Не отрицателен, пока не красный."""
-
-    km: int | None = None
-    days: int | None = None
-
-
-def left_to_replacement(
-    regulation: Regulation, last: Replacement, mileage: int, today: date, red_above_percent: int
-) -> LeftToReplacement:
-    km = days = None
-    if regulation.interval_km is not None and last.mileage is not None:
-        used = max(0, mileage - last.mileage)
-        km = regulation.interval_km * red_above_percent // 100 - used
-    if regulation.interval_months is not None and last.replaced_at is not None:
-        total = (add_months(last.replaced_at, regulation.interval_months) - last.replaced_at).days
-        elapsed = max(0, (today - last.replaced_at).days)
-        days = total * red_above_percent // 100 - elapsed
-    return LeftToReplacement(km, days)
 
 
 def reminder_kind(
@@ -113,7 +90,7 @@ def reminder_message(
 def _rules(db: Session) -> ReminderRules:
     row = get_thresholds(db)
     return ReminderRules(
-        Thresholds(row.yellow_from_percent, row.red_above_percent),
+        Thresholds.of(row),
         row.reminder_before_km,
         row.reminder_before_days,
     )
@@ -140,7 +117,7 @@ def _candidates(db: Session):  # noqa: ANN202 — строки Result из пя�
                 VehicleAggregateStatus.aggregate_type_id == MaintenanceRegulation.aggregate_type_id,
             ),
         )
-        .where(Vehicle.deleted_at.is_(None), *eligible_client())
+        .where(Vehicle.is_active, *eligible_client())
         .order_by(Vehicle.id, MaintenanceRegulation.aggregate_type_id)
     ).all()
 
@@ -165,10 +142,7 @@ def _sent_kinds(
 def run_maintenance_reminders(db: Session, outbox: Outbox, today: date | None = None) -> int | None:
     """Создаёт положенные напоминания; None — задачу сейчас выполняет другой экземпляр."""
     today = today or today_in_business_tz()
-    locked = db.execute(
-        text("SELECT pg_try_advisory_xact_lock(:k)"), {"k": ADVISORY_LOCK_KEY}
-    ).scalar_one()
-    if not locked:
+    if not try_xact_lock(db, AdvisoryLock.MAINTENANCE_REMINDERS):
         db.rollback()
         return None
     rules = _rules(db)

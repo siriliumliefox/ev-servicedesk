@@ -9,12 +9,9 @@
 
 import argparse
 import logging
-import signal
 import sys
-import threading
 import time
 from datetime import UTC, datetime
-from types import FrameType
 
 from sqlalchemy import func, select
 
@@ -24,18 +21,19 @@ from app.core.logging import configure_logging
 from app.domain.analytics.refresh import refresh_views
 from app.models import AnalyticsRefresh
 from app.tools.integrity import run_checks
-from app.workers import metrics
+from app.workers import metrics, runtime
+from app.workers.runtime import StoppableWorker
 
 logger = logging.getLogger("app.workers.analytics")
 
 INTEGRITY_EVERY_SECONDS = 24 * 3600
 
 
-class AnalyticsWorker:
+class AnalyticsWorker(StoppableWorker):
     def __init__(self, settings: Settings, scope: SessionScope) -> None:
+        super().__init__()
         self.settings = settings
         self.scope = scope
-        self._stopping = threading.Event()
         self.metrics = metrics.WorkerMetrics("analytics")
         self._integrity_at: float | None = None
 
@@ -92,9 +90,6 @@ class AnalyticsWorker:
             self._stopping.wait(self.settings.analytics_refresh_seconds)
         logger.info("Worker аналитики остановлен")
 
-    def stop(self, *_: object) -> None:
-        self._stopping.set()
-
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Обновление витрины аналитики (ADR 0020)")
@@ -106,13 +101,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.once:
         return 0 if worker.refresh() else 1
 
-    def _stop(signum: int, frame: FrameType | None) -> None:
-        worker.stop()
-
-    signal.signal(signal.SIGTERM, _stop)
-    signal.signal(signal.SIGINT, _stop)
-    worker.metrics.serve(settings.metrics_port)
-    worker.run_forever()
+    runtime.run(worker, settings.metrics_port)
     return 0
 
 

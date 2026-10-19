@@ -198,8 +198,7 @@ def update_thresholds(
 
 
 def _thresholds(db: Session) -> Thresholds:
-    row = get_thresholds(db)
-    return Thresholds(row.yellow_from_percent, row.red_above_percent)
+    return Thresholds.of(get_thresholds(db))
 
 
 # ---------- Статусы агрегатов авто ----------
