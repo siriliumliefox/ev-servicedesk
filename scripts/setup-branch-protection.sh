@@ -5,7 +5,9 @@
 #   • изменения только через PR, прямой push запрещён;
 #   • обязательная проверка — `ci-gate` из ci.yml (только от GitHub Actions,
 #     app_id 15368), ветка PR должна быть актуальной относительно базовой;
-#   • линейная история, без force-push и удаления ветки;
+#   • без force-push и удаления ветки; линейная история — только на develop (squash).
+#     main принимает release-PR `develop → main` merge-коммитом (глава 26, ADR 0030): squash
+#     оторвал бы историю main от develop, и каждый следующий release-PR давал бы конфликты;
 #   • approve второго человека не требуется (команда из одного человека,
 #     см. CONTRIBUTING.md) — при появлении ревьюера поднять REVIEWS до 1.
 #
@@ -22,7 +24,7 @@ REVIEWS="${REVIEWS:-0}"
 GITHUB_ACTIONS_APP_ID=15368
 
 protect() {
-  local branch="$1"
+  local branch="$1" linear="$2"
   echo "→ ${REPO}: защищаю ${branch}"
   gh api -X PUT "repos/${REPO}/branches/${branch}/protection" --input - >/dev/null <<EOF
 {
@@ -36,7 +38,7 @@ protect() {
     "dismiss_stale_reviews": true
   },
   "restrictions": null,
-  "required_linear_history": true,
+  "required_linear_history": ${linear},
   "allow_force_pushes": false,
   "allow_deletions": false
 }
@@ -47,5 +49,5 @@ EOF
     + " linear=\(.required_linear_history.enabled) force_push=\(.allow_force_pushes.enabled) deletions=\(.allow_deletions.enabled)"'
 }
 
-protect main
-protect develop
+protect main false
+protect develop true

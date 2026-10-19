@@ -1,0 +1,129 @@
+name: cd-production
+
+# Выпуск в production (глава 26, ADR 0030 п. 8): «собрали один раз — продвигаем».
+#
+# push в main — release-PR `develop → main` влит merge-коммитом; выпускается его второй родитель (коммит
+# develop). Проверки до выкладки: cd-staging этого коммита успешен (образы, интеграционный стек,
+# regression всех браузеров и Android). Образы — те же digest backend:staging-<sha> и
+# postgres:staging-<sha>; статика кабинетов собирается под production из того же sha. Выкладка — окружение
+# production: Approve владельца (required reviewer, ADR 0008). После выкладки теги production и
+# production-<sha> указывают на выпущенные digest.
+#
+# Ручной запуск с rollback_sha — откат production на выпуск, уже лежащий на ВМ (ssh rollback).
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      rollback_sha:
+        description: "Откат: полный SHA коммита develop ранее выпущенного релиза (выпуск должен быть на ВМ)"
+        required: true
+
+permissions:
+  contents: read
+  packages: write
+  actions: read
+
+concurrency:
+  group: cd-production
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    runs-on: ubuntu-24.04
+    outputs:
+      sha: ${{ steps.sha.outputs.sha }}
+      mode: ${{ steps.sha.outputs.mode }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Выпускаемый коммит develop
+        id: sha
+        env:
+          ROLLBACK_SHA: ${{ inputs.rollback_sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -n "$ROLLBACK_SHA" ]; then
+            [[ "$ROLLBACK_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "rollback_sha — полный SHA"; exit 1; }
+            echo "sha=$ROLLBACK_SHA" >> "$GITHUB_OUTPUT"; echo "mode=rollback" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          # Release-PR — merge-коммит (ADR 0030 п. 8): второй родитель — коммит develop, прошедший staging.
+          sha="$(git rev-parse HEAD^2 2>/dev/null)" || { echo "HEAD main — не merge-коммит release-PR: выпуск только из develop"; exit 1; }
+          runs="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/cd-staging.yml/runs?head_sha=$sha&status=success&per_page=1" --jq '.total_count')"
+          [ "$runs" -gt 0 ] || { echo "cd-staging для $sha не завершился успешно — production не выкладывается"; exit 1; }
+          echo "PASS  cd-staging $sha успешен (образы, интеграционный стек, regression)"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"; echo "mode=deploy" >> "$GITHUB_OUTPUT"
+
+  build-web:
+    needs: resolve
+    if: needs.resolve.outputs.mode == 'deploy'
+    # Без окружения: Approve владельца — один раз, на выкладке (deploy-server). Origin S3 —
+    # переменная репозитория PRODUCTION_MEDIA_ORIGIN (как STAGING_MEDIA_ORIGIN у cd-staging).
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        app: [web-engineer, web-admin]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - run: npm ci
+
+      # Тот же sha, что и образ; отличается только origin S3 в CSP и адресах вложений (ADR 0025 п. 14).
+      - run: npm run build --workspace ${{ matrix.app }}
+        env:
+          VITE_API_BASE_URL: /v1
+          VITE_MEDIA_ORIGIN: ${{ vars.PRODUCTION_MEDIA_ORIGIN }}
+
+      - name: Режим API и CSP в сборке
+        working-directory: ${{ matrix.app }}/dist
+        run: |
+          grep -q 'http-equiv="Content-Security-Policy"' index.html
+          grep -qE "[\"'\`]/v1[\"'\`]" assets/*.js
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.app }}-production-${{ needs.resolve.outputs.sha }}
+          path: ${{ matrix.app }}/dist
+          retention-days: 90
+
+  deploy-production:
+    needs: [resolve, build-web]
+    if: ${{ !failure() && !cancelled() }}
+    uses: ./.github/workflows/deploy-server.yml
+    with:
+      environment: production
+      sha: ${{ needs.resolve.outputs.sha }}
+      mode: ${{ needs.resolve.outputs.mode }}
+    secrets: inherit
+
+  promote:
+    needs: [resolve, deploy-production]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Теги production → выпущенные digest
+        env:
+          SHA: ${{ needs.resolve.outputs.sha }}
+        run: |
+          repo="ghcr.io/${GITHUB_REPOSITORY,,}"
+          for name in backend postgres; do
+            docker buildx imagetools create --tag "$repo/$name:production" --tag "$repo/$name:production-$SHA" "$repo/$name:staging-$SHA"
+            echo "PASS  $name:production → $name:staging-$SHA"
+          done

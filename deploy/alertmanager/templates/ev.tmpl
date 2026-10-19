@@ -1,0 +1,8 @@
+{{/* Сообщение в Telegram (parse_mode HTML). ПД в алертах нет: окружение, сервис, значения. */}}
+{{ define "ev.telegram" -}}
+{{ if eq .Status "firing" }}🔴{{ else }}✅{{ end }} <b>{{ .CommonLabels.alertname | html }}</b> · {{ .CommonLabels.env | html }} · {{ .CommonLabels.severity | html }}
+{{ range .Alerts -}}
+• {{ .Annotations.summary | html }}{{ if eq .Status "resolved" }} — восстановлено{{ end }} ({{ .StartsAt.Format "02.01 15:04 MST" }})
+{{ end -}}
+{{ with .CommonAnnotations.runbook }}Что делать: {{ . | html }}{{ end }}
+{{- end }}

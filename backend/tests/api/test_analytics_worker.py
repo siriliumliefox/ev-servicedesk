@@ -4,6 +4,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 
 import pytest
+from prometheus_client import REGISTRY
 from sqlalchemy import Engine, text
 from sqlalchemy.orm import Session
 
@@ -82,3 +83,13 @@ def test_worker_survives_refresh_error(db: Session, caplog: pytest.LogCaptureFix
 def test_refresh_interval_bounds() -> None:
     with pytest.raises(ValueError):
         Settings(_env_file=None, environment="test", analytics_refresh_seconds=5)
+
+
+def test_cycle_metrics_and_daily_integrity(db: Session) -> None:
+    """Свежесть витрины и аудит целостности в метриках (глава 26, ADR 0030 п. 13)."""
+    w = worker(db)
+    w.cycle()
+    assert REGISTRY.get_sample_value("ev_analytics_data_age_seconds") >= 0
+    assert REGISTRY.get_sample_value("ev_integrity_violations") == 0
+    assert REGISTRY.get_sample_value("ev_integrity_last_run_timestamp_seconds") > 0
+    assert w.check_integrity() is None, "аудит — не чаще раза в сутки"

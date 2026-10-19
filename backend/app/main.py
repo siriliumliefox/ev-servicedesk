@@ -1,7 +1,7 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 from starlette.concurrency import run_in_threadpool
 
 from app.api.routes import (
@@ -17,6 +17,7 @@ from app.api.routes import (
     users,
     vehicles,
 )
+from app.core import metrics
 from app.core.config import Settings, get_settings
 from app.core.errors import install_error_handlers
 from app.core.headers import SecurityHeadersMiddleware
@@ -62,12 +63,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     install_error_handlers(application)
     application.add_middleware(SecurityHeadersMiddleware, api_prefix=API_PREFIX)
     application.add_middleware(AccessLogMiddleware)
-    configure_logging()
+    configure_logging(log_format=settings.log_format)
 
     @application.get("/health")
     def health() -> dict:
         """Проверка живости — используется CI (Глава 4) и мониторингом (Глава 26)."""
         return {"status": "ok", "environment": settings.environment}
+
+    @application.get("/metrics", include_in_schema=False)
+    def prometheus_metrics() -> Response:
+        """Метрики Prometheus (глава 26, ADR 0030 п. 13): вне /v1 и контракта; снаружи nginx
+        отдаёт на этот путь 404 — читает только Prometheus из сети контейнеров."""
+        body, content_type = metrics.render()
+        return Response(body, media_type=content_type)
 
     application.include_router(auth.router, prefix=API_PREFIX)
     application.include_router(users.router, prefix=API_PREFIX)

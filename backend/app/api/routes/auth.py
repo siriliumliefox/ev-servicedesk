@@ -2,7 +2,7 @@
 
 import asyncio
 from functools import partial
-from typing import Annotated
+from typing import Annotated, Literal
 from weakref import WeakKeyDictionary
 
 import anyio
@@ -32,6 +32,8 @@ from app.api.schemas.auth import (
     VerifyCodeRequest,
     VerifyCodeResponse,
 )
+from app.core.audit import security_event
+from app.core.errors import ApiError
 from app.domain.auth import service, sessions, staff, telegram, tokens
 from app.models.enums import UserRole
 
@@ -55,6 +57,11 @@ def _sms_limiter() -> anyio.CapacityLimiter:
     return limiter
 
 
+def _outcome(exc: ApiError) -> Literal["failure", "denied"]:
+    """429 — отказ лимитом попыток (подбор), остальное — неудача."""
+    return "denied" if exc.status_code == status.HTTP_429_TOO_MANY_REQUESTS else "failure"
+
+
 @router.post("/phone/request-code", operation_id="requestPhoneCode")
 async def request_phone_code(
     body: PhoneRequestCode,
@@ -71,11 +78,18 @@ async def request_phone_code(
 
 @router.post("/phone/verify-code", operation_id="verifyPhoneCode")
 def verify_phone_code(
-    body: VerifyCodeRequest, db: DbDep, redis: RedisDep, settings: SettingsDep
+    body: VerifyCodeRequest, db: DbDep, redis: RedisDep, settings: SettingsDep, ip: ClientIp
 ) -> VerifyCodeResponse:
-    result = service.verify_phone_code(
-        db, redis, settings, body.phone, body.code, body.pd_policy_version
-    )
+    try:
+        result = service.verify_phone_code(
+            db, redis, settings, body.phone, body.code, body.pd_policy_version
+        )
+    except ApiError as exc:
+        # Номер в журнал не пишется: только IP и код ответа (подбор кода виден по IP).
+        security_event("auth.client_login", outcome=_outcome(exc), ip=ip, target=exc.code)
+        raise
+    event = "auth.client_registered" if result.is_new_user else "auth.client_login"
+    security_event(event, user_id=result.user.id, role=result.user.role.value, ip=ip)
     return VerifyCodeResponse(
         **vars(result.tokens),
         is_new_user=result.is_new_user,
@@ -101,6 +115,7 @@ def logout(
     """Выход: refresh-токен (если свой) и предъявленный access-токен (ADR 0029 п. 12)."""
     tokens.revoke(db, body.refresh_token, user.id)
     sessions.revoke_token(redis, claims)
+    security_event("auth.logout", user_id=user.id, role=user.role.value)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -113,6 +128,7 @@ def logout(
 )
 def withdraw_pd_consent(user: CurrentUser, db: DbDep) -> Response:
     service.withdraw_pd_consent(db, user)
+    security_event("pd.consent_withdrawn", user_id=user.id, role=user.role.value)
     return Response(status_code=status.HTTP_202_ACCEPTED)
 
 
@@ -120,7 +136,12 @@ def withdraw_pd_consent(user: CurrentUser, db: DbDep) -> Response:
 def staff_login(
     body: StaffLoginRequest, db: DbDep, redis: RedisDep, settings: SettingsDep, ip: ClientIp
 ) -> StaffLoginResponse:
-    result = staff.login(db, redis, settings, body.phone, body.password, ip)
+    try:
+        result = staff.login(db, redis, settings, body.phone, body.password, ip)
+    except ApiError as exc:
+        security_event("auth.staff_login", outcome=_outcome(exc), ip=ip, target=exc.code)
+        raise
+    security_event("auth.staff_login", user_id=result.user.id, role=result.user.role.value, ip=ip)
     return StaffLoginResponse(**vars(result.tokens), user=UserPublic.model_validate(result.user))
 
 
@@ -135,9 +156,21 @@ def change_staff_password(
     settings: SettingsDep,
     ip: ClientIp,
 ) -> AuthTokens:
-    pair = staff.change_password(
-        db, redis, settings, user, body.current_password, body.new_password, ip
-    )
+    try:
+        pair = staff.change_password(
+            db, redis, settings, user, body.current_password, body.new_password, ip
+        )
+    except ApiError as exc:
+        security_event(
+            "auth.password_changed",
+            outcome=_outcome(exc),
+            user_id=user.id,
+            role=user.role.value,
+            ip=ip,
+            target=exc.code,
+        )
+        raise
+    security_event("auth.password_changed", user_id=user.id, role=user.role.value, ip=ip)
     return AuthTokens(**vars(pair))
 
 

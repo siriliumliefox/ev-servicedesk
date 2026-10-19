@@ -1,0 +1,42 @@
+// Журналы контейнеров проекта compose → Loki (глава 26, ADR 0030 п. 15). Promtail снят с поддержки.
+// Метки: env, service (сервис compose), logger и level (из JSON backend, worker'ов и nginx).
+discovery.docker "project" {
+  host = "unix:///var/run/docker.sock"
+  filter {
+    name   = "label"
+    values = ["com.docker.compose.project=" + sys.env("EV_PROJECT")]
+  }
+}
+
+discovery.relabel "project" {
+  targets = []
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "service"
+  }
+}
+
+loki.source.docker "project" {
+  host          = "unix:///var/run/docker.sock"
+  targets       = discovery.docker.project.targets
+  relabel_rules = discovery.relabel.project.rules
+  labels        = {"env" = sys.env("EV_ENV")}
+  forward_to    = [loki.process.ev.receiver]
+}
+
+loki.process "ev" {
+  // Строки не в JSON (PostgreSQL, Redis) идут как есть, без меток logger/level.
+  stage.json {
+    expressions = {logger = "logger", level = "level"}
+  }
+  stage.labels {
+    values = {logger = "", level = ""}
+  }
+  forward_to = [loki.write.local.receiver]
+}
+
+loki.write "local" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}

@@ -1,0 +1,50 @@
+name: load-nightly
+
+# Ночной облегчённый прогон k6 на staging (глава 26, ADR 0030 п. 20): `ssh deploy@<staging> load staging`
+# (forced command ev-ssh → deploy/scripts/nightly-load.sh): 20 VU 5 мин, чтение, нормативы ADR 0028;
+# итоги — в Prometheus staging, дашборд Grafana «EV-ServiceDesk — нагрузка k6». Полный прогон ADR 0028 —
+# вручную на production-ВМ до запуска (docs/runbooks/LOAD_ON_SERVER.md). В ci-gate не входит.
+# Сервер не настроен (SSH_HOST окружения staging пуст) — job пишет об этом и успешен.
+
+on:
+  schedule:
+    - cron: "30 23 * * *"   # 02:30 по Минску
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: load-nightly
+  cancel-in-progress: false
+
+jobs:
+  load:
+    runs-on: ubuntu-24.04
+    environment: staging
+    env:
+      SSH_HOST: ${{ vars.SSH_HOST }}
+    steps:
+      - name: Сервер staging настроен?
+        id: server
+        run: |
+          if [ -z "$SSH_HOST" ]; then
+            echo "::notice::Сервер staging не настроен (SSH_HOST пуст) — ночной прогон пропущен (ADR 0030 п. 2)"
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Прогон k6 на staging
+        if: steps.server.outputs.configured == 'true'
+        env:
+          SSH_DEPLOY_KEY: ${{ secrets.SSH_DEPLOY_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+        run: |
+          install -d -m 0700 ~/.ssh
+          (umask 077 && printf '%s\n' "$SSH_DEPLOY_KEY" > ~/.ssh/ev_deploy && printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts)
+          ssh -i ~/.ssh/ev_deploy -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes "deploy@$SSH_HOST" "load staging"
+
+      - name: Убрать ключ
+        if: always()
+        run: rm -f ~/.ssh/ev_deploy

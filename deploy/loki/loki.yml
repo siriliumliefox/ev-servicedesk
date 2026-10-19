@@ -1,0 +1,63 @@
+# Loki окружения (глава 26, ADR 0030 п. 15): один процесс, файловое хранилище на ВМ.
+# Хранение: поток logger="app.security" (события безопасности) — 365 дней (журналы ИБ класса 3-ин,
+# приказ ОАЦ № 66), остальное — EV_LOG_RETENTION (production 720h, staging 168h).
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+  log_level: warn
+
+common:
+  path_prefix: /loki
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+
+schema_config:
+  configs:
+    - from: 2026-01-01
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+limits_config:
+  retention_period: ${EV_LOG_RETENTION}
+  retention_stream:
+    - selector: '{logger="app.security"}'
+      priority: 1
+      period: 8760h
+  reject_old_samples: true
+  reject_old_samples_max_age: 168h
+  ingestion_rate_mb: 8
+  ingestion_burst_size_mb: 16
+
+compactor:
+  working_directory: /loki/compactor
+  retention_enabled: true
+  delete_request_store: filesystem
+  compaction_interval: 10m
+  retention_delete_delay: 2h
+
+# Алерты по журналу (ADR 0030 п. 15): подбор пароля сотрудника — в Alertmanager.
+ruler:
+  storage:
+    type: local
+    local:
+      directory: /etc/loki/rules
+  rule_path: /loki/rules-temp
+  alertmanager_url: http://alertmanager:9093
+  enable_api: false
+  ring:
+    kvstore:
+      store: inmemory
+
+analytics:
+  reporting_enabled: false

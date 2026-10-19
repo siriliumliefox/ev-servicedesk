@@ -1,0 +1,132 @@
+# Серверы окружения (глава 26, ADR 0030 п. 18). Переменные: EV_API_HOST, EV_ENGINEER_HOST,
+# EV_ADMIN_HOST — имена; EV_MEDIA_ORIGIN — origin S3 для CSP; EV_BACKEND_UPSTREAM — backend:8000.
+
+upstream ev_backend {
+    server ${EV_BACKEND_UPSTREAM};
+    keepalive 32;
+}
+
+# HTTP: только проверка Let's Encrypt (HTTP-01) и переход на HTTPS.
+server {
+    listen 80 default_server;
+    server_name _;
+    location /.well-known/acme-challenge/ {
+        root /var/www/acme;
+    }
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+# Неизвестное имя по HTTPS — обрыв рукопожатия, сертификат не нужен.
+server {
+    listen 443 ssl default_server;
+    http2 on;
+    ssl_reject_handshake on;
+}
+
+# API: мобильное приложение и пробы мониторинга. Заголовки безопасности ставит backend (ADR 0029
+# п. 8); здесь — HSTS. /metrics наружу не отдаётся.
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name ${EV_API_HOST};
+    ssl_certificate /etc/letsencrypt/live/${EV_API_HOST}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${EV_API_HOST}/privkey.pem;
+    include /etc/nginx/snippets/tls.conf;
+    add_header Strict-Transport-Security "max-age=31536000" always;
+
+    location = /health {
+        access_log off;
+        include /etc/nginx/snippets/proxy.conf;
+    }
+    location ~ ^/v1/tickets/[0-9]+/ws$ {
+        include /etc/nginx/snippets/proxy.conf;
+        proxy_read_timeout 1h;
+        proxy_send_timeout 1h;
+    }
+    location /v1/ {
+        include /etc/nginx/snippets/proxy.conf;
+    }
+    # Ответы самого nginx — в формате ошибок API (JSON, как app.core.errors): клиенты и сканеры не
+    # получают HTML (ZAP через nginx стенда: «Unexpected Content-Type» на путях вне /v1).
+    location / {
+        default_type application/json;
+        return 404 '{"error":{"code":"NOT_FOUND","message":"Not Found","details":null}}';
+    }
+    error_page 502 503 504 = @ev_unavailable;
+    location @ev_unavailable {
+        default_type application/json;
+        return 503 '{"error":{"code":"SERVICE_UNAVAILABLE","message":"Сервис временно недоступен","details":null}}';
+    }
+}
+
+# Кабинет инженера: статика текущего релиза и /v1 того же origin (ADR 0025 п. 2).
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name ${EV_ENGINEER_HOST};
+    ssl_certificate /etc/letsencrypt/live/${EV_ENGINEER_HOST}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${EV_ENGINEER_HOST}/privkey.pem;
+    include /etc/nginx/snippets/tls.conf;
+    root /srv/web/web-engineer/current;
+    include /etc/nginx/conf.d/snippets/cabinet-headers.conf;
+
+    # /v1 — ответы backend со своими заголовками (ADR 0029 п. 8): заголовки статики сюда не
+    # наследуются (add_header в location), только HSTS.
+    location ~ ^/v1/tickets/[0-9]+/ws$ {
+        include /etc/nginx/snippets/proxy.conf;
+        add_header Strict-Transport-Security "max-age=31536000" always;
+        proxy_read_timeout 1h;
+        proxy_send_timeout 1h;
+    }
+    location /v1/ {
+        include /etc/nginx/snippets/proxy.conf;
+        add_header Strict-Transport-Security "max-age=31536000" always;
+    }
+    location /assets/ {
+        include /etc/nginx/conf.d/snippets/cabinet-headers.conf;
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+        try_files $uri =404;
+    }
+    location / {
+        include /etc/nginx/conf.d/snippets/cabinet-headers.conf;
+        add_header Cache-Control "no-cache" always;
+        try_files $uri /index.html;
+    }
+}
+
+# Админ-панель — как кабинет инженера (ADR 0026 п. 16).
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name ${EV_ADMIN_HOST};
+    ssl_certificate /etc/letsencrypt/live/${EV_ADMIN_HOST}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${EV_ADMIN_HOST}/privkey.pem;
+    include /etc/nginx/snippets/tls.conf;
+    root /srv/web/web-admin/current;
+    include /etc/nginx/conf.d/snippets/cabinet-headers.conf;
+
+    # /v1 — ответы backend со своими заголовками (ADR 0029 п. 8): заголовки статики сюда не
+    # наследуются (add_header в location), только HSTS.
+    location ~ ^/v1/tickets/[0-9]+/ws$ {
+        include /etc/nginx/snippets/proxy.conf;
+        add_header Strict-Transport-Security "max-age=31536000" always;
+        proxy_read_timeout 1h;
+        proxy_send_timeout 1h;
+    }
+    location /v1/ {
+        include /etc/nginx/snippets/proxy.conf;
+        add_header Strict-Transport-Security "max-age=31536000" always;
+    }
+    location /assets/ {
+        include /etc/nginx/conf.d/snippets/cabinet-headers.conf;
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+        try_files $uri =404;
+    }
+    location / {
+        include /etc/nginx/conf.d/snippets/cabinet-headers.conf;
+        add_header Cache-Control "no-cache" always;
+        try_files $uri /index.html;
+    }
+}
