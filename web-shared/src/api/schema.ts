@@ -939,7 +939,7 @@ export interface paths {
         put?: never;
         /**
          * Опубликовать релиз прошивки
-         * @description Атомарно создаёт FirmwareRelease и триггерит Notification(type=firmware) с targeting по vehicle_model_id. Уточнено в 1.6.0 (ADR 0019 п. 4): текст уведомления формирует сервер; аудитория — владельцы авто модели, у которых прошивка не указана или выпущена раньше (released_at, при равенстве — id). Неизвестная модель, повтор версии модели, дата в будущем — 422 VEHICLE_MODEL_NOT_FOUND, FIRMWARE_VERSION_EXISTS, RELEASED_AT_IN_FUTURE (коды — в 1.7.1).
+         * @description Атомарно создаёт FirmwareRelease и триггерит Notification(type=firmware) с targeting по vehicle_model_id. Уточнено в 1.6.0 (ADR 0019 п. 4): текст уведомления формирует сервер; аудитория — владельцы авто модели, у которых прошивка не указана или выпущена раньше (released_at, при равенстве — id). Неизвестная модель, повтор версии модели, дата в будущем — 422 VEHICLE_MODEL_NOT_FOUND, FIRMWARE_VERSION_EXISTS, RELEASED_AT_IN_FUTURE (коды — в 1.7.1). Текст уведомления — две строки, как тема и текст новости (1.15.0, ADR 0033): «Доступна прошивка {version} для {brand} {model}» и «Запишитесь на обновление в сервисном центре.». Тот же текст показывает предпросмотр админ-панели; в приложении клиента у уведомления о прошивке — запись на обновление (target_vehicle_model_id — модель его авто).
          */
         post: operations["createFirmwareRelease"];
         delete?: never;

@@ -22,6 +22,7 @@ import {
   Select,
   TextArea,
   TextField,
+  firmwareMessage,
   formatDate,
   formatDateTime,
   formatInt,
@@ -296,8 +297,9 @@ function PublishForm({ onPublished }: { onPublished: () => void }) {
     }
   }
 
+  // Текст о прошивке формирует сервер по шаблону контракта — предпросмотр строит его тем же шаблоном (#113).
   const preview = firmware
-    ? { subject: `Доступна прошивка ${fwVersion.trim() || '…'} для ${modelLabel}. Запишитесь на обновление.`, text: '' }
+    ? splitMessage(firmwareMessage(fwVersion.trim() || '…', modelLabel))
     : { subject: subject.trim(), text: message.trim() }
 
   return (
@@ -386,13 +388,16 @@ function PublishForm({ onPublished }: { onPublished: () => void }) {
           <div className="grid gap-0.5 rounded-md border border-border bg-surface p-3">
             <span className="text-caption text-fg-muted">EV-ServiceDesk · {NOTIFICATION_TYPE_LABELS[type]}</span>
             <span className={`text-label ${preview.subject ? 'text-fg' : 'text-fg-muted'}`}>{preview.subject || 'Тема'}</span>
-            {!firmware && (
-              <span className={`whitespace-pre-line text-body-sm ${preview.text ? 'text-fg' : 'text-fg-muted'}`}>
-                {preview.text || 'Текст уведомления'}
-              </span>
-            )}
+            <span className={`whitespace-pre-line text-body-sm ${preview.text ? 'text-fg' : 'text-fg-muted'}`}>
+              {preview.text || 'Текст уведомления'}
+            </span>
           </div>
-          {firmware && <span className="text-caption text-fg-muted">Тему уведомления о прошивке формирует система.</span>}
+          {firmware && (
+            <span className="text-caption text-fg-muted">
+              Текст уведомления о прошивке формирует система — клиент получит его в таком виде и сможет записаться на
+              обновление.
+            </span>
+          )}
         </div>
         <InlineError error={error} />
         {done && (

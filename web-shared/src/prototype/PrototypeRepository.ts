@@ -48,6 +48,7 @@ import type {
 } from "../data/models.ts";
 import { TICKET_CATEGORIES } from "../data/models.ts";
 import { toIsoDate } from "../data/format.ts";
+import { firmwareMessage } from "../data/notifications.ts";
 import { allowedTransitions } from "../data/ticketFlow.ts";
 import { checkNode, validateTree } from "./decisionTree.ts";
 import { Garage } from "./garage.ts";
@@ -680,7 +681,7 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
         type: "firmware",
         target_vehicle_model_id: body.vehicle_model_id,
         firmware_release_id: release.id,
-        message: `Доступна прошивка ${version} для ${model.brand} ${model.model}. Запишитесь на обновление.`,
+        message: firmwareMessage(version, `${model.brand} ${model.model}`),
         created_at: this.clock().toISOString(),
       });
       return release;
