@@ -14,7 +14,7 @@ import re
 import pytest
 
 from app.models.enums import UserRole
-from tests.api.conftest import API, STAFF_PASSWORD, bearer
+from tests.api.conftest import API, STAFF_PASSWORD, bearer, error_code
 from tests.api.test_security import BODIES
 from tests.support.contract import contract
 
@@ -75,4 +75,4 @@ def test_role_matrix(client, role_headers, op_id, method, path, roles):
         for object_id in ("1", GHOST_ID):
             r = _request(client, method, path, op_id, headers, object_id)
             assert r.status_code == 403, (op_id, role, object_id, r.text)
-            assert r.json()["error"]["code"] == "FORBIDDEN", (op_id, role, object_id)
+            assert error_code(r) == "FORBIDDEN", (op_id, role, object_id)

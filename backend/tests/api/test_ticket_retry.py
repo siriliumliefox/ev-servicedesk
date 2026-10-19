@@ -26,8 +26,8 @@ from app.domain.tickets import service
 from app.domain.tickets.events import TicketEvents
 from app.models import AppUser, Ticket, TicketAttachment, TicketMessage
 from app.models.enums import UserRole
-from tests.api.conftest import API, Headers, add_vehicle, api_settings
-from tests.api.ticket_support import JPEG, claim, error_code, presign, put_upload, set_status
+from tests.api.conftest import API, Headers, add_vehicle, api_settings, error_code
+from tests.api.ticket_support import JPEG, claim, presign, put_upload, set_status
 
 CLIENT_PHONE = "+375293300101"
 OTHER_CLIENT_PHONE = "+375293300102"

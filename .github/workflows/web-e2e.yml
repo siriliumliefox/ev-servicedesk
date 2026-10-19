@@ -74,7 +74,7 @@ jobs:
 
       - name: Сборка кабинета инженера из cd-staging
         if: inputs.artifacts_run_id != ''
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: web-engineer-staging-${{ inputs.ref }}
           path: ${{ runner.temp }}/dist/web-engineer
@@ -83,7 +83,7 @@ jobs:
 
       - name: Сборка админ-панели из cd-staging
         if: inputs.artifacts_run_id != ''
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: web-admin-staging-${{ inputs.ref }}
           path: ${{ runner.temp }}/dist/web-admin

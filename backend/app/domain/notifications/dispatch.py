@@ -68,8 +68,7 @@ def _recipient_eligible() -> ColumnElement[bool]:
     owns_vehicle = exists(
         select(Vehicle.id).where(
             Vehicle.id == Notification.vehicle_id,
-            Vehicle.user_id == PushToken.user_id,
-            Vehicle.deleted_at.is_(None),
+            Vehicle.owned_active(PushToken.user_id),
         )
     )
     return and_(

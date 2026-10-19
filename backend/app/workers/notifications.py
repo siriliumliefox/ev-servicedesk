@@ -14,11 +14,9 @@
 """
 
 import logging
-import signal
 import time
 from collections.abc import Callable
 from datetime import date, datetime, timedelta
-from types import FrameType
 
 from redis import Redis
 from redis.client import PubSub
@@ -34,7 +32,8 @@ from app.domain.notifications.push import PushSender, get_push_sender
 from app.domain.notifications.reminders import run_maintenance_reminders
 from app.domain.notifications.ticket_push import TicketPush
 from app.domain.tickets import events as ticket_events
-from app.workers import metrics
+from app.workers import metrics, runtime
+from app.workers.runtime import StoppableWorker
 
 logger = logging.getLogger("app.workers.notifications")
 
@@ -43,7 +42,7 @@ REDIS_RETRY_SECONDS = 5.0
 REMINDERS_RETRY_AFTER = timedelta(minutes=15)
 
 
-class NotificationsWorker:
+class NotificationsWorker(StoppableWorker):
     def __init__(
         self,
         settings: Settings,
@@ -52,6 +51,7 @@ class NotificationsWorker:
         sender: PushSender,
         now: Callable[[], datetime] = lambda: datetime.now(BUSINESS_TZ),
     ) -> None:
+        super().__init__()
         self.settings = settings
         self.scope = scope
         self.redis = redis
@@ -61,7 +61,6 @@ class NotificationsWorker:
         self.ticket_push = TicketPush(redis, settings.redis_channel_prefix, sender)
         self.reminders_done_on: date | None = None
         self.reminders_retry_at: datetime | None = None
-        self.stopping = False
         self._pubsub: PubSub | None = None
         self.metrics = metrics.WorkerMetrics("notifications")
 
@@ -137,7 +136,7 @@ class NotificationsWorker:
             if self._pubsub is None:
                 self._pubsub = self._subscribe()
                 if self._pubsub is None:
-                    time.sleep(min(left, REDIS_RETRY_SECONDS))
+                    self._stopping.wait(min(left, REDIS_RETRY_SECONDS))
                     continue
             try:
                 message = self._pubsub.get_message(timeout=left)
@@ -177,9 +176,6 @@ class NotificationsWorker:
         self._close_pubsub()
         logger.info("Worker уведомлений остановлен")
 
-    def stop(self, *_: object) -> None:
-        self.stopping = True
-
 
 def main() -> None:
     settings = get_settings()
@@ -191,13 +187,7 @@ def main() -> None:
         get_push_sender(settings),
     )
 
-    def _stop(signum: int, frame: FrameType | None) -> None:
-        worker.stop()
-
-    signal.signal(signal.SIGTERM, _stop)
-    signal.signal(signal.SIGINT, _stop)
-    worker.metrics.serve(settings.metrics_port)
-    worker.run_forever()
+    runtime.run(worker, settings.metrics_port)
 
 
 if __name__ == "__main__":

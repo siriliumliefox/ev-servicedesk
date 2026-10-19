@@ -13,7 +13,15 @@ from app.core.errors import ApiError
 from app.domain.users import service
 from app.models import AppUser, PushToken, RefreshToken
 from app.models.enums import TicketStatus, UserRole
-from tests.api.conftest import API, STAFF_PASSWORD, add_vehicle, bearer, code_from, register
+from tests.api.conftest import (
+    API,
+    STAFF_PASSWORD,
+    add_vehicle,
+    bearer,
+    code_from,
+    error_code,
+    register,
+)
 from tests.api.ticket_support import create
 
 ADMIN = "+375296600001"
@@ -92,7 +100,7 @@ def test_get_user_and_not_found(client, as_staff):
     for missing in (admin.id + 1000, 2**63):
         r = client.get(f"{API}/users/{missing}", headers=admin_headers)
         assert r.status_code == 404
-        assert r.json()["error"]["code"] == "USER_NOT_FOUND"
+        assert error_code(r) == "USER_NOT_FOUND"
 
 
 # ---------- Создание сотрудника ----------
@@ -122,7 +130,7 @@ def test_create_staff_user_conflicts_and_validation(client, as_staff, as_client)
             headers=admin_headers,
         )
         assert r.status_code == 409
-        assert r.json()["error"]["code"] == "PHONE_ALREADY_REGISTERED"
+        assert error_code(r) == "PHONE_ALREADY_REGISTERED"
     for body in (
         {"phone": NEW_STAFF, "role": "client", "password": PASSWORD},  # клиенты — сами
         {"phone": NEW_STAFF, "role": "engineer", "password": "short"},
@@ -153,7 +161,7 @@ def test_client_role_cannot_change(client, as_staff, as_client, db):
     for role in ("engineer", "admin"):
         r = patch(client, admin_headers, client_id, role=role)
         assert r.status_code == 409
-        assert r.json()["error"]["code"] == "ROLE_CHANGE_NOT_ALLOWED"
+        assert error_code(r) == "ROLE_CHANGE_NOT_ALLOWED"
     _, eng = as_staff(ENGINEER)
     r = client.patch(f"{API}/users/{eng.id}", json={"role": "client"}, headers=admin_headers)
     assert r.status_code == 422  # client в UserUpdateRequest не допускается схемой
@@ -170,7 +178,7 @@ def test_last_admin_cannot_be_demoted_or_blocked(client, as_staff):
     for body in ({"role": "engineer"}, {"is_active": False}):
         r = patch(client, admin_headers, admin.id, **body)
         assert r.status_code == 409
-        assert r.json()["error"]["code"] == "LAST_ADMIN"
+        assert error_code(r) == "LAST_ADMIN"
     # Подтверждение текущего состояния — не понижение.
     assert patch(client, admin_headers, admin.id, role="admin", is_active=True).status_code == 200
 
@@ -178,7 +186,7 @@ def test_last_admin_cannot_be_demoted_or_blocked(client, as_staff):
     assert patch(client, admin_headers, second.id, is_active=False).status_code == 200
     # Заблокированный администратор не считается: первый снова последний.
     r = patch(client, admin_headers, admin.id, role="engineer")
-    assert r.json()["error"]["code"] == "LAST_ADMIN"
+    assert error_code(r) == "LAST_ADMIN"
     assert patch(client, admin_headers, second.id, is_active=True).status_code == 200
     r = patch(client, admin_headers, admin.id, role="engineer")
     assert r.status_code == 200
@@ -231,7 +239,7 @@ def test_blocked_client_cannot_log_in_until_unblocked(client, as_staff, make_cli
     body = {"phone": CLIENT, "code": code_from(sms, CLIENT)}
     assert patch(client, admin_headers, user.id, is_active=False).status_code == 200
     r = client.post(f"{API}/auth/phone/verify-code", json=body)
-    assert r.status_code == 400 and r.json()["error"]["code"] == "ACCOUNT_DISABLED"
+    assert r.status_code == 400 and error_code(r) == "ACCOUNT_DISABLED"
     # Отказ не расходует код: после разблокировки тот же код входит.
     assert patch(client, admin_headers, user.id, is_active=True).status_code == 200
     r = client.post(f"{API}/auth/phone/verify-code", json=body)
@@ -398,14 +406,14 @@ def test_reset_password_rules(client, as_staff, as_client, make_client_user, mak
         assert reset(client, headers, eng.id).status_code == 403
     # У клиента пароля нет.
     r = reset(client, admin_headers, customer.id)
-    assert r.status_code == 409 and r.json()["error"]["code"] == "PASSWORD_NOT_ALLOWED"
+    assert r.status_code == 409 and error_code(r) == "PASSWORD_NOT_ALLOWED"
     # Нет пользователя или он анонимизирован.
     gone = make_staff("+375296600020")
     gone.anonymized_at = datetime.now(UTC)
     db.commit()
     for missing in (admin.id + 1000, gone.id):
         r = reset(client, admin_headers, missing)
-        assert r.status_code == 404 and r.json()["error"]["code"] == "USER_NOT_FOUND"
+        assert r.status_code == 404 and error_code(r) == "USER_NOT_FOUND"
     # Длина пароля — как при создании.
     for bad in ("x" * 11, "x" * 129):
         assert reset(client, admin_headers, eng.id, bad).status_code == 422
