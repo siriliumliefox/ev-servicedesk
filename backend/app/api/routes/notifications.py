@@ -89,7 +89,7 @@ def create_notification(
     body: NotificationCreateRequest, admin: CurrentUser, db: DbDep, outbox: OutboxDep
 ) -> NotificationOut:
     target = service.resolve_target(
-        db, body.type, body.target_vehicle_model_id, body.firmware_release_id
+        db, body.type, body.target_vehicle_model_id, body.firmware_release_id, for_publish=True
     )
     notification = service.publish(db, outbox, target, body.message)
     security_event(

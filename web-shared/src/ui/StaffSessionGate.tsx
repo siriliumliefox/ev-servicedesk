@@ -144,7 +144,8 @@ function LoginScreen({
 
   return (
     <main className="grid min-h-screen place-items-center bg-canvas p-6 text-fg">
-      <form onSubmit={submit} aria-labelledby="login-title" className="grid w-96 gap-4 rounded-lg border border-border bg-surface p-6 shadow-md">
+      {/* Ширина — не больше 24rem, но и не шире экрана: на узком окне без горизонтальной прокрутки (#105, №17). */}
+      <form onSubmit={submit} aria-labelledby="login-title" className="grid w-full max-w-96 gap-4 rounded-lg border border-border bg-surface p-6 shadow-md">
         <div className="grid gap-1">
           <h1 id="login-title" className="text-h2">
             {title}

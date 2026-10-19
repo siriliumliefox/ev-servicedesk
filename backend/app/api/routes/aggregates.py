@@ -76,7 +76,12 @@ def revise_maintenance_regulation(
     body: MaintenanceRegulationCreateRequest, admin: CurrentUser, db: DbDep
 ) -> MaintenanceRegulationOut:
     regulation = service.revise_regulation(
-        db, body.vehicle_model_id, body.aggregate_type_code, body.interval_km, body.interval_months
+        db,
+        body.vehicle_model_id,
+        body.aggregate_type_code,
+        body.interval_km,
+        body.interval_months,
+        author_id=admin.id,
     )
     security_event("regulation.revised", user_id=admin.id, target=f"regulation:{regulation.id}")
     return MaintenanceRegulationOut.model_validate(regulation)

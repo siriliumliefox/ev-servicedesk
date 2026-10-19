@@ -55,6 +55,9 @@ class _TicketChatScreenState extends State<TicketChatScreen> {
   final _scroll = ScrollController();
   late final AttachmentUploads _uploads = AttachmentUploads(_app.repository)..addListener(_changed);
   bool _sending = false;
+  // Ошибка отправки — над полем ввода, а не всплывающим сообщением: оно на 4 с закрывало поле и кнопку
+  // «Отправить», повторить отправку было нельзя (#105).
+  String? _sendError;
 
   /// «Переподключаемся…» — только если связи нет дольше мгновения: короткое подключение при открытии не мигает.
   bool _showReconnecting = false;
@@ -166,7 +169,10 @@ class _TicketChatScreenState extends State<TicketChatScreen> {
       showErrorSnack(context, blocker);
       return;
     }
-    setState(() => _sending = true);
+    setState(() {
+      _sending = true;
+      _sendError = null;
+    });
     final text = body.isEmpty ? 'Вложение' : body;
     final attachments = _uploads.uploaded;
     final key = _retryKey.forDraft([text, for (final a in attachments) a.key].join('\n'));
@@ -185,7 +191,7 @@ class _TicketChatScreenState extends State<TicketChatScreen> {
       });
       _scrollToEnd();
     } on Exception catch (e) {
-      if (mounted) showErrorSnack(context, e);
+      if (mounted) setState(() => _sendError = 'Не отправлено. ${actionErrorText(e)}');
     } finally {
       if (mounted) setState(() => _sending = false);
     }
@@ -286,6 +292,18 @@ class _TicketChatScreenState extends State<TicketChatScreen> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
+                    if (_sendError != null)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(EvSpace.s2, 0, EvSpace.s2, EvSpace.s2),
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text(
+                            _sendError!,
+                            key: const Key('send-error'),
+                            style: TextStyle(color: c.dangerText),
+                          ),
+                        ),
+                      ),
                     if (!_uploads.isEmpty)
                       Padding(
                         padding: const EdgeInsets.only(bottom: EvSpace.s2),

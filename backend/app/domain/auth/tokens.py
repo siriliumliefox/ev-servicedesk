@@ -80,6 +80,17 @@ def rotate(db: Session, refresh_token: str, settings: Settings) -> TokenPair:
     if row is None:  # удалён между поиском и блокировкой (например, вместе с пользователем)
         raise unauthorized("Недействительный refresh-токен")
     if row.revoked_at is not None:
+        user = db.get(AppUser, row.user_id)
+        ended = user.sessions_revoked_at if user is not None else None
+        if ended is not None and row.revoked_at <= ended:
+            # Отозван завершением всех сессий (блокировка, сброс или смена пароля, отзыв согласия,
+            # ответ на прошлый повтор) — это не повтор: сессия закончилась, сессий для отзыва нет
+            # (#105, №16: «уже использован» и ложное auth.refresh_reuse после блокировки).
+            raise unauthorized(
+                "Учётная запись недоступна"
+                if not user.is_available
+                else "Сессия завершена — войдите заново"
+            )
         revoke_all(db, row.user_id)
         db.commit()
         security_event("auth.refresh_reuse", outcome="denied", user_id=row.user_id)

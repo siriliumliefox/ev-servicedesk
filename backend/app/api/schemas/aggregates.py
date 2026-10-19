@@ -14,6 +14,7 @@ from app.domain.aggregates import TrafficLight
 INT_MAX = 2_147_483_647  # INTEGER в БД
 # Больше — add_months выходит за год 9999 (ValueError → 500); 100 лет хватает любому регламенту.
 INTERVAL_MONTHS_MAX = 1200
+INTERVAL_KM_MIN = 500  # меньше — опечатка, а не регламент (#105, ADR 0034)
 
 
 class AggregateTypeCreateRequest(BaseModel):
@@ -33,7 +34,8 @@ class AggregateTypeCreateRequest(BaseModel):
 class MaintenanceRegulationCreateRequest(BaseModel):
     vehicle_model_id: Annotated[int, Field(le=BIGINT_MAX)]
     aggregate_type_code: Annotated[str, Field(max_length=50)]
-    interval_km: Annotated[int | None, Field(ge=1, le=INT_MAX)] = None
+    # Не меньше 500 км (#105, №13): «1» вместо «10 000» давало выработку 1 600 000 %.
+    interval_km: Annotated[int | None, Field(ge=INTERVAL_KM_MIN, le=INT_MAX)] = None
     interval_months: Annotated[int | None, Field(ge=1, le=INTERVAL_MONTHS_MAX)] = None
 
     @model_validator(mode="after")
@@ -89,6 +91,9 @@ class MaintenanceRegulationOut(BaseModel):
     interval_km: int | None
     interval_months: int | None
     is_archived: bool
+    # Дата и автор версии (#105, U-44); автор — только id: регламенты читает и инженер.
+    created_at: datetime
+    created_by_user_id: int | None
 
 
 class AggregateStatusOut(BaseModel):

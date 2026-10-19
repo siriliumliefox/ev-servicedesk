@@ -172,6 +172,31 @@ def test_security_events(client, sms, make_staff, db, caplog: pytest.LogCaptureF
         assert "375296810" not in text, "телефона в событиях безопасности нет"
 
 
+def test_refresh_after_blocking_is_not_reuse(client, login_client, as_staff, caplog) -> None:
+    """#105 (№16): refresh-токен, отозванный блокировкой, — 401 без события повтора и без
+    второго отзыва сессий; разблокированному — «Сессия завершена»."""
+    caplog.set_level(logging.INFO, logger="app.security")
+    admin_headers, _ = as_staff("+375296810071", UserRole.ADMIN)
+    session = login_client("+375296810072")
+    me = client.get(f"{API}/me", headers=bearer(session["access_token"])).json()
+    blocked = client.patch(
+        f"{API}/users/{me['id']}", json={"is_active": False}, headers=admin_headers
+    )
+    assert blocked.status_code == 200
+    r = client.post(f"{API}/auth/refresh", json={"refresh_token": session["refresh_token"]})
+    assert (r.status_code, r.json()["error"]["message"]) == (401, "Учётная запись недоступна")
+    unblocked = client.patch(
+        f"{API}/users/{me['id']}", json={"is_active": True}, headers=admin_headers
+    )
+    assert unblocked.status_code == 200
+    r = client.post(f"{API}/auth/refresh", json={"refresh_token": session["refresh_token"]})
+    assert (r.status_code, r.json()["error"]["message"]) == (
+        401,
+        "Сессия завершена — войдите заново",
+    )
+    assert "auth.refresh_reuse" not in {r.event for r in security(caplog)}
+
+
 def test_logout_and_consent_withdrawal_events(client, login_client, caplog) -> None:
     caplog.set_level(logging.INFO, logger="app.security")
     session = login_client(CLIENT_PHONE)

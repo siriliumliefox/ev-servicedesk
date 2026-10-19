@@ -1018,5 +1018,15 @@ ALTER TABLE ticket_message ADD CONSTRAINT uq_ticket_message_ticket_id_author_id_
 
 UPDATE alembic_version SET version_num='0018' WHERE alembic_version.version_num = '0017';
 
+-- Running upgrade 0018 -> 0019
+
+ALTER TABLE maintenance_regulation ADD COLUMN created_by_user_id BIGINT;
+
+ALTER TABLE maintenance_regulation ADD CONSTRAINT fk_maintenance_regulation_created_by_user_id_app_user FOREIGN KEY(created_by_user_id) REFERENCES app_user (id) ON DELETE RESTRICT;
+
+CREATE INDEX ix_maintenance_regulation_created_by_user_id ON maintenance_regulation (created_by_user_id);
+
+UPDATE alembic_version SET version_num='0019' WHERE alembic_version.version_num = '0018';
+
 COMMIT;
 

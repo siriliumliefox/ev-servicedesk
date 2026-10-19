@@ -575,6 +575,9 @@ export function seedRegulations(): MaintenanceRegulation[] {
       interval_km: km,
       interval_months: months,
       is_archived: archived,
+      // Дата и автор версии (U-44): прошлая версия — раньше действующей.
+      created_at: archived ? "2026-03-02T09:00:00Z" : "2026-04-01T09:00:00Z",
+      created_by_user_id: ADMIN_ID,
     });
   // История пересмотра: у Voyah Free интервал масла был 7 500 км, затем увеличен до 10 000 (ADR 0012, «пересмотр»).
   add(3, "engine_oil", 7500, 12, true);

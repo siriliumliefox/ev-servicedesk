@@ -64,6 +64,14 @@ def test_replacement_scenario(case: dict) -> None:
     assert becomes_current(current, case["new"]["replaced_at"]) is case["becomes_current"]
 
 
+def test_same_date_lower_mileage_becomes_current() -> None:
+    """#105 (№7) — по E5: при равной дате текущая — последняя зафиксированная, даже с меньшим
+    пробегом. История не редактируется, и так исправляется ошибочно внесённая замена (ADR 0034)."""
+    current = Replacement(replaced_at=date(2026, 10, 1), mileage=50_000)
+    assert becomes_current(current, date(2026, 10, 1)) is True
+    assert becomes_current(current, date(2026, 9, 30)) is False
+
+
 def test_scenarios_cover_checklist_boundaries() -> None:
     """MASTER_CHECKLIST, Глава 5: границы 69/70/100/101% и «нет данных о замене»."""
     percents = {c["expect"]["percentage"] for c in SCENARIOS["status"] if c["expect"]}

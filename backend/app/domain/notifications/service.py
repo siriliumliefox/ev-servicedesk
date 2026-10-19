@@ -196,8 +196,16 @@ def resolve_target(
     type_: NotificationType,
     target_vehicle_model_id: int | None,
     firmware_release_id: int | None,
+    *,
+    for_publish: bool = False,
 ) -> Target:
-    """Проверки createNotification и previewNotificationAudience (ADR 0019 п. 4, 6)."""
+    """Проверки createNotification и previewNotificationAudience (ADR 0019 п. 4, 6).
+
+    Релиз с уже опубликованным уведомлением — 409 (#105, №6): `createFirmwareRelease` уведомляет
+    владельцев сам, ручная публикация прошивки — только для релиза без уведомления (заведённого
+    не через API). `for_publish` — строка релиза под FOR UPDATE: две ручные публикации одного
+    релиза идут по очереди, и вторая видит первую.
+    """
     if type_ is NotificationType.MAINTENANCE:
         raise field_error(
             "type",
@@ -223,7 +231,11 @@ def resolve_target(
         raise field_error(
             "firmware_release_id", "FIRMWARE_RELEASE_REQUIRED", "Укажите релиз прошивки"
         )
-    firmware = db.get(FirmwareRelease, firmware_release_id)
+    firmware = (
+        db.get(FirmwareRelease, firmware_release_id, with_for_update=for_publish)
+        if is_db_id(firmware_release_id)
+        else None
+    )
     if firmware is None:
         raise field_error(
             "firmware_release_id", "FIRMWARE_RELEASE_NOT_FOUND", "Релиз прошивки не найден"
@@ -233,6 +245,14 @@ def resolve_target(
             "firmware_release_id",
             "FIRMWARE_MODEL_MISMATCH",
             "Релиз относится к другой модели",
+        )
+    # Конфликт — после проверок запроса (422): сначала исправить запрос, потом — повтор.
+    notified = select(Notification.id).where(Notification.firmware_release_id == firmware.id)
+    if db.scalar(notified.limit(1)) is not None:
+        raise ApiError(
+            409,
+            "FIRMWARE_ALREADY_NOTIFIED",
+            "Об этом релизе прошивки уведомление уже опубликовано",
         )
     return Target(type_, db.get_one(VehicleModel, firmware.vehicle_model_id), firmware)
 

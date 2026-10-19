@@ -25,7 +25,12 @@ def not_found() -> ApiError:
     return ApiError(404, "NOT_FOUND", "Тикет не найден")
 
 
-def ticket_resolved() -> ApiError:
+def ticket_resolved(*, for_client: bool = False) -> ApiError:
+    """409. Переоткрывает тикет персонал — клиенту текст без «переоткройте» (#105)."""
+    if for_client:
+        return ApiError(
+            409, "TICKET_RESOLVED", "Обращение решено — если проблема вернулась, создайте новое"
+        )
     return ApiError(
         409, "TICKET_RESOLVED", "Тикет решён — сначала переоткройте его (смена статуса)"
     )
@@ -107,7 +112,7 @@ def ensure_can_write_message(user: AppUser, ticket: Ticket) -> None:
     if user.role is UserRole.ENGINEER and ticket.assigned_engineer_id != user.id:
         raise forbidden("Писать в чат можно после того, как тикет взят в работу")
     if ticket.status is TicketStatus.RESOLVED:
-        raise ticket_resolved()
+        raise ticket_resolved(for_client=user.role is UserRole.CLIENT)
 
 
 def hides_staff_contacts(viewer: AppUser, author: AppUser) -> bool:
