@@ -93,8 +93,10 @@ jobs:
               - "package.json"
               - "package-lock.json"
               - ".github/workflows/web-e2e.yml"
+              - ".github/actions/**"                   # composite backend-poetry/backend-image
             mobile:
               - "mobile/**"
+              - ".github/actions/**"                   # composite mobile-e2e и mobile-ui-e2e
               - ".github/workflows/mobile-ci.yml"
               - ".github/workflows/mobile-e2e.yml"
               - ".github/workflows/mobile-ui-e2e.yml"

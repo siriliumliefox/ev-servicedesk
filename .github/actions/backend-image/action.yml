@@ -21,7 +21,7 @@ runs:
         cache-from: type=gha
         cache-to: type=gha,mode=max
 
-    - uses: docker/login-action@v3
+    - uses: docker/login-action@v4
       if: inputs.image != ''
       with:
         registry: ghcr.io
