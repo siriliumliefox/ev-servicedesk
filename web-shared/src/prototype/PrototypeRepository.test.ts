@@ -221,7 +221,8 @@ describe("регламенты ТО", () => {
     const repo = admin();
     expect((await apiError(repo.createAggregateType({ code: "Brake Fluid", name: "Тормозная жидкость" }))).field).toBe("code");
     await repo.createAggregateType({ code: "brake_fluid", name: "Тормозная жидкость" });
-    expect((await apiError(repo.createAggregateType({ code: "brake_fluid", name: "Ещё раз" }))).status).toBe(409);
+    const twice = await apiError(repo.createAggregateType({ code: "brake_fluid", name: "Ещё раз" }));
+    expect([twice.status, twice.code]).toEqual([409, "AGGREGATE_TYPE_EXISTS"]);
   });
 });
 
@@ -312,7 +313,9 @@ describe("публикации и аналитика", () => {
     const release = await repo.createFirmwareRelease({ vehicle_model_id: 2, version: "RU 5.2.0", released_at: "2026-10-10" });
     const [latest] = (await repo.listPublishedNotifications()).items;
     expect(latest).toMatchObject({ type: "firmware", target_vehicle_model_id: 2, firmware_release_id: release.id });
-    expect((await apiError(repo.createFirmwareRelease({ vehicle_model_id: 2, version: "RU 5.2.0", released_at: "2026-10-10" }))).status).toBe(409);
+    // Как backend (#74, C8): повтор версии — 422 по полю version.
+    const again = await apiError(repo.createFirmwareRelease({ vehicle_model_id: 2, version: "RU 5.2.0", released_at: "2026-10-10" }));
+    expect([again.status, again.code, again.field]).toEqual([422, "FIRMWARE_VERSION_EXISTS", "version"]);
   });
 
   it("уведомление: текст обязателен; новое — первым в ленте", async () => {
