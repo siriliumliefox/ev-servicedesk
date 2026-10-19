@@ -117,6 +117,7 @@ class TicketDetailOut(TicketOut):
     source_article: TicketSourceArticleOut | None
     attachments: list[TicketAttachmentOut]
     vehicle_context: VehicleContextOut
+    client: UserPublic  # владелец авто (#104, контракт 1.14.0)
 
 
 class TicketMessageOut(BaseModel):
@@ -169,6 +170,7 @@ def ticket_detail_out(card: TicketCard, presign: Presign) -> TicketDetailOut:
                 AggregateStatusOut.model_validate(v) for v in card.aggregate_statuses
             ],
         ),
+        client=UserPublic.model_validate(card.client),
     )
 
 
