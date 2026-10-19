@@ -1,0 +1,95 @@
+name: infra-drill
+
+# Учения production-инфраструктуры на чистой ВМ раннера (глава 26, ADR 0030 пп. 22–23): раз в неделю и
+# вручную, в ci-gate не входит.
+# 1. bootstrap.sh на Ubuntu 24.04 — дважды (идемпотентность): пользователь deploy с forced command,
+#    sshd только по ключам, ufw, таймеры бэкапа.
+# 2. Стенд scripts/infra_stack.sh (staging + production из deploy/, MinIO с TLS, реестр, приёмник алертов).
+# 3. Учения: откат N → N+1 → N и автооткат, DR (SIGKILL → новая «ВМ» → restore.sh: RPO, RTO), алерты.
+# Отчёты — артефакт infra-drill-reports.
+
+on:
+  workflow_dispatch:
+    inputs:
+      drills:
+        description: "Учения через пробел: rollback dr alerts"
+        default: "rollback dr alerts"
+        type: string
+  schedule:
+    - cron: "0 2 * * 0"   # воскресенье 05:00 по Минску
+
+permissions:
+  contents: read
+
+concurrency:
+  group: infra-drill
+  cancel-in-progress: false
+
+jobs:
+  drill:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      DRILLS: ${{ inputs.drills || 'rollback dr alerts' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # выпуск N учения отката — git worktree старого коммита
+
+      - name: bootstrap.sh дважды (идемпотентность)
+        run: |
+          ssh-keygen -q -t ed25519 -N '' -f "$RUNNER_TEMP/deploy_key"
+          for run in 1 2; do
+            # Журнал пишет пользователь раннера — так и задумано.
+            # shellcheck disable=SC2024
+            sudo EV_BOOTSTRAP_SKIP_UPGRADE=1 deploy/scripts/bootstrap.sh staging "$RUNNER_TEMP/deploy_key.pub" > "$RUNNER_TEMP/bootstrap-$run.log"
+            echo "PASS  bootstrap, проход $run"
+          done
+          id deploy | grep -q docker && echo "PASS  пользователь deploy в группе docker"
+          sudo grep -q '^command="/opt/ev/bin/ev-ssh",no-port-forwarding' /home/deploy/.ssh/authorized_keys && echo "PASS  ключ деплоя — только ev-ssh"
+          [ "$(sudo grep -c . /home/deploy/.ssh/authorized_keys)" = 1 ] && echo "PASS  ключ не задублирован"
+          sudo ufw status | grep -q "Status: active" && echo "PASS  ufw активен"
+          systemctl list-timers --all | grep -q ev-backup-diff.timer && echo "PASS  таймеры бэкапа"
+          # forced command: разрешённая команда — да, произвольная — нет.
+          sudo -u deploy env SSH_ORIGINAL_COMMAND="status staging" /opt/ev/bin/ev-ssh | grep -q "ещё не выкладывалось" && echo "PASS  ev-ssh status"
+          if sudo -u deploy env SSH_ORIGINAL_COMMAND="bash -c id" /opt/ev/bin/ev-ssh 2>/dev/null; then echo "FAIL  ev-ssh выполнил произвольную команду"; exit 1; fi
+          echo "PASS  ev-ssh отклоняет произвольную команду"
+          if sudo -u deploy env SSH_ORIGINAL_COMMAND="status production" /opt/ev/bin/ev-ssh 2>/dev/null; then echo "FAIL  ev-ssh обслужил чужое окружение"; exit 1; fi
+          echo "PASS  ev-ssh — только своё окружение"
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - run: npm ci
+
+      - name: Стенд — staging и production
+        run: scripts/infra_stack.sh up both
+
+      - name: Учение отката
+        if: contains(env.DRILLS, 'rollback')
+        run: scripts/infra_stack.sh drill-rollback
+
+      - name: Учебное восстановление (DR)
+        if: contains(env.DRILLS, 'dr')
+        run: scripts/infra_stack.sh drill-dr
+
+      - name: Тест алертов
+        if: contains(env.DRILLS, 'alerts')
+        run: scripts/infra_stack.sh drill-alerts
+
+      - name: Итоги в сводку
+        if: always()
+        run: cat .infra-stand/reports/*.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: infra-drill-reports
+          path: .infra-stand/reports/
+          retention-days: 90
+
+      - name: Удалить стенд
+        if: always()
+        run: scripts/infra_stack.sh down

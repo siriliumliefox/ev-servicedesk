@@ -1,0 +1,73 @@
+# «Провайдер» локального стенда (глава 26, ADR 0030 п. 23; scripts/infra_stack.sh): S3 (MinIO с TLS
+# вместо S3 Timeweb — pgBackRest работает только по HTTPS), реестр образов вместо ghcr (выкладка тянет
+# образы по digest, как на ВМ), приёмник алертов вместо Telegram и dead-man. Сеть ev-provider
+# подключают окружения staging и production (compose.local.yml).
+name: ev-provider
+
+services:
+  minio:
+    image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372
+    command: ["server", "/data", "--certs-dir", "/certs", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${EV_STAND_S3_KEY:?}
+      MINIO_ROOT_PASSWORD: ${EV_STAND_S3_SECRET:?}
+    volumes:
+      - minio:/data
+      - ${EV_STAND:?}/minio-certs:/certs:ro
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "--cacert", "/certs/CAs/ca.crt", "https://s3.stand.test:9000/minio/health/live"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+    networks:
+      provider:
+        aliases: [s3.stand.test]
+
+  minio-init:
+    image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      S3_KEY: ${EV_STAND_S3_KEY}
+      S3_SECRET: ${EV_STAND_S3_SECRET}
+      SSL_CERT_FILE: /stand-ca/ca.crt   # mc (Go) доверяет УЦ стенда
+    volumes:
+      - ${EV_STAND}/minio-certs/CAs:/stand-ca:ro
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        mc alias set stand https://s3.stand.test:9000 "$$S3_KEY" "$$S3_SECRET" >/dev/null
+        for env in staging production; do
+          mc mb --ignore-existing "stand/ev-$$env-media" "stand/ev-$$env-backup"
+          echo '{"Rules":[{"ID":"expire-uploads","Status":"Enabled","Filter":{"Prefix":"uploads/"},"Expiration":{"Days":1}}]}' \
+            | mc ilm import "stand/ev-$$env-media"
+        done
+    restart: "no"
+    networks: [provider]
+
+  registry:
+    image: registry:3@sha256:ddf754342cfc8acc51a56d5d0ab6af06826461864460636d8bd5c546dab2a7b8
+    ports:
+      - "127.0.0.1:${EV_STAND_REGISTRY_PORT:-15000}:5000"
+    volumes:
+      - registry:/var/lib/registry
+    networks: [provider]
+
+  alert-sink:
+    image: python:3.12-alpine@sha256:1b668429b3511ab407d8e00648891631b0b1a4d7e15e3ca70f38ab5b91ad4ab4
+    command: ["python", "/app/alert_sink.py"]
+    volumes:
+      - ./alert_sink.py:/app/alert_sink.py:ro
+      - ${EV_STAND}/alerts:/data
+    ports:
+      - "127.0.0.1:${EV_STAND_SINK_PORT:-18099}:8080"
+    networks: [provider]
+
+volumes:
+  minio:
+  registry:
+
+networks:
+  provider:
+    name: ev-provider

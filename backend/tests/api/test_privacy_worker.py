@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from prometheus_client import REGISTRY
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -222,3 +223,18 @@ def test_retention_purges_only_expired(client, login_client, db: Session, worker
     assert (purged.refresh_tokens, purged.push_tokens, purged.deliveries) == (2, 1, 1)
     assert count(db, RefreshToken, RefreshToken.user_id == user_id) == 2  # текущий + свежий отзыв
     assert worker_for().purge() is not None, "новый worker — сразу"
+
+
+def test_queue_metrics(client_with_data, worker_for, db: Session) -> None:
+    """Очередь анонимизации в метриках (глава 26): дольше 14 дней — critical-алерт. В общей БД
+    тестов могут быть и другие клиенты в очереди — сверка с запросом, а не с константой."""
+    worker = worker_for()
+    before, oldest = privacy.queue_stats(db)
+    assert before >= 1 and oldest is not None
+    worker.observe_queue()
+    assert REGISTRY.get_sample_value("ev_privacy_queue_size") == before
+    assert REGISTRY.get_sample_value("ev_privacy_queue_oldest_age_seconds") >= 0
+    worker.run_once()
+    after, _ = privacy.queue_stats(db)
+    assert after < before
+    assert REGISTRY.get_sample_value("ev_privacy_queue_size") == after

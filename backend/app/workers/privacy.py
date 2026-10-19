@@ -20,6 +20,7 @@ from types import FrameType
 
 from redis import Redis
 
+from app.core.audit import security_event
 from app.core.config import Settings, get_settings
 from app.core.db import SessionScope, get_session_scope
 from app.core.logging import configure_logging
@@ -27,6 +28,7 @@ from app.core.redis import get_redis
 from app.core.storage import ObjectStorage, get_storage
 from app.domain.auth.sms import SmsError, SmsProvider, get_sms_provider_for
 from app.domain.users import privacy
+from app.workers import metrics
 
 logger = logging.getLogger("app.workers.privacy")
 
@@ -53,6 +55,7 @@ class PrivacyWorker:
         self.now = now
         self._purged_at: datetime | None = None
         self._stopping = threading.Event()
+        self.metrics = metrics.WorkerMetrics("privacy")
 
     def _notify_before_erase(self, item: privacy.Due, late: bool) -> bool:
         """SMS «данные удалены» до обнуления телефона; False — не дошло, ждём следующего прохода."""
@@ -87,6 +90,7 @@ class PrivacyWorker:
                 if privacy.anonymize(db, self.storage, item.user_id, now):
                     done += 1
                     logger.info("Клиент #%d анонимизирован", item.user_id)
+                    security_event("privacy.anonymized", target_user_id=item.user_id)
         return done
 
     def purge(self) -> privacy.Purged | None:
@@ -105,16 +109,27 @@ class PrivacyWorker:
         )
         return purged
 
+    def observe_queue(self) -> None:
+        """Очередь анонимизации: дольше 14 дней — critical-алерт (срок 99-З — 15 дней)."""
+        with self.scope() as db:
+            size, oldest = privacy.queue_stats(db)
+        metrics.PRIVACY_QUEUE_SIZE.set(size)
+        age = 0.0 if oldest is None else max((self.now() - oldest).total_seconds(), 0.0)
+        metrics.PRIVACY_QUEUE_OLDEST_AGE.set(age)
+
     def run_once(self) -> None:
         self.anonymize_due()
         self.purge()
+        self.observe_queue()
 
     def run_forever(self) -> None:
         logger.info("Worker ПД запущен: проход раз в %s с", self.settings.privacy_run_seconds)
         while not self._stopping.is_set():
             try:
                 self.run_once()
+                self.metrics.success()
             except Exception:  # noqa: BLE001 — сбой прохода не останавливает процесс
+                self.metrics.error()
                 logger.exception("Ошибка прохода worker ПД")
             self._stopping.wait(self.settings.privacy_run_seconds)
         logger.info("Worker ПД остановлен")
@@ -127,8 +142,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Анонимизация ПД и сроки хранения (ADR 0029)")
     parser.add_argument("--once", action="store_true", help="один проход и выход")
     args = parser.parse_args(argv)
-    configure_logging()
     settings = get_settings()
+    configure_logging(log_format=settings.log_format)
     worker = PrivacyWorker(
         settings,
         get_session_scope(),
@@ -145,6 +160,7 @@ def main(argv: list[str] | None = None) -> int:
 
     signal.signal(signal.SIGTERM, _stop)
     signal.signal(signal.SIGINT, _stop)
+    worker.metrics.serve(settings.metrics_port)
     worker.run_forever()
     return 0
 

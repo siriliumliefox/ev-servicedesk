@@ -1,9 +1,8 @@
 name: cd-staging
 
-# Граница честности (ADR 0008): сборка, публикация и перетегирование образа,
-# сборка статики — РЕАЛЬНЫ (ghcr.io). Финальный шаг «выкатить на сервер» —
-# заглушка: staging-сервера нет до Главы 26. Когда он появится, меняется
-# только job `deploy-staging`.
+# Сборка, публикация и перетегирование образов backend и PostgreSQL (ghcr.io), сборка статики и выкладка
+# на ВМ staging (глава 26, ADR 0030 п. 7: deploy-server.yml по SSH; пока сервер не заказан — «сервер не
+# настроен», ADR 0030 п. 2).
 #
 # Два режима:
 #   • push в develop / ручной запуск без git_sha — сборка образа
@@ -24,6 +23,8 @@ on:
       - "web-admin/**"
       - "web-shared/**"
       - "scripts/smoke_backend_image.sh"
+      - "scripts/rollback_compat.sh"     # страж плана отката (глава 26, ADR 0030 п. 16)
+      - "deploy/**"                      # конфигурации ВМ и образ PostgreSQL (глава 26)
       - "scripts/integration_stack.sh"   # интеграционный стек (Глава 17, ADR 0021)
       - "docker-compose.yml"   # образ MinIO smoke-теста (x-minio-image), интеграционный стек
       - "docker-compose.integration.yml"
@@ -109,6 +110,16 @@ jobs:
       - name: Интеграционный стек и сквозной сценарий (ADR 0021)
         run: scripts/integration_stack.sh backend:smoke
 
+      # План отката (ADR 0030 п. 16): текущий backend:staging (предыдущий выпуск) стартует на схеме
+      # кандидата и читает все таблицы. FAIL — миграция несовместима, откат потребует downgrade.
+      - name: Страж отката — предыдущий выпуск на схеме кандидата
+        run: |
+          if docker pull -q "$IMAGE:staging" >/dev/null 2>&1; then
+            scripts/rollback_compat.sh backend:smoke "$IMAGE:staging"
+          else
+            echo "::notice::Предыдущего выпуска backend:staging нет — страж пропущен"
+          fi
+
       - uses: docker/build-push-action@v6
         with:
           context: ./backend
@@ -118,6 +129,31 @@ jobs:
             ${{ env.IMAGE }}:staging-${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  # PostgreSQL 16 + pgBackRest (deploy/postgres, ADR 0030 п. 9) — образ ВМ, по digest в bundle деплоя.
+  build-postgres-image:
+    if: github.ref == 'refs/heads/develop' && (github.event_name == 'push' || inputs.git_sha == '')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: ./deploy/postgres
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}/postgres:staging
+            ghcr.io/${{ github.repository }}/postgres:staging-${{ github.sha }}
+          cache-from: type=gha,scope=postgres
+          cache-to: type=gha,scope=postgres,mode=max
 
   build-web:
     if: github.ref == 'refs/heads/develop' && (github.event_name == 'push' || inputs.git_sha == '')
@@ -193,19 +229,15 @@ jobs:
           fi
 
   deploy-staging:
-    needs: [build-backend-image, build-web, rollback-backend-image]
+    needs: [build-backend-image, build-postgres-image, build-web, rollback-backend-image]
     # Ровно один из режимов выполнен успешно, остальные пропущены.
     if: ${{ !failure() && !cancelled() && github.ref == 'refs/heads/develop' }}
-    runs-on: ubuntu-latest
-    environment: staging
-    steps:
-      - name: Деплой на staging (заглушка — реальная инфраструктура в Главе 26)
-        run: |
-          SHA="${ROLLBACK_SHA:-$GITHUB_SHA}"
-          echo "TODO (Глава 26, ADR 0008): реальный вызов к staging-хостингу, который:"
-          echo "  1) подтянет ghcr.io/${GITHUB_REPOSITORY,,}/backend:staging (= staging-$SHA)"
-          echo "  2) перезапустит backend-сервис"
-          echo "  3) выложит web-engineer-staging-$SHA / web-admin-staging-$SHA (артефакты сборки)"
+    uses: ./.github/workflows/deploy-server.yml
+    with:
+      environment: staging
+      sha: ${{ inputs.git_sha || github.sha }}
+      mode: ${{ inputs.git_sha && 'rollback' || 'deploy' }}
+    secrets: inherit
 
   regression:
     needs: [build-backend-image, build-web]

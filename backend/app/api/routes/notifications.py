@@ -27,6 +27,7 @@ from app.api.schemas.notifications import (
     VehicleFirmwareUpdateRequest,
 )
 from app.api.schemas.vehicles import VehicleOut
+from app.core.audit import security_event
 from app.core.db import BIGINT_MAX
 from app.domain.notifications import service
 from app.models.enums import STAFF_ROLES, NotificationType, UserRole
@@ -85,12 +86,16 @@ def list_notifications(user: CurrentUser, db: DbDep, page: PageDep) -> Notificat
     **rbac(UserRole.ADMIN),
 )
 def create_notification(
-    body: NotificationCreateRequest, db: DbDep, outbox: OutboxDep
+    body: NotificationCreateRequest, admin: CurrentUser, db: DbDep, outbox: OutboxDep
 ) -> NotificationOut:
     target = service.resolve_target(
         db, body.type, body.target_vehicle_model_id, body.firmware_release_id
     )
-    return NotificationOut.model_validate(service.publish(db, outbox, target, body.message))
+    notification = service.publish(db, outbox, target, body.message)
+    security_event(
+        "notification.published", user_id=admin.id, target=f"notification:{notification.id}"
+    )
+    return NotificationOut.model_validate(notification)
 
 
 @router.get(
@@ -178,11 +183,12 @@ def list_firmware_releases(
     **rbac(UserRole.ADMIN),
 )
 def create_firmware_release(
-    body: FirmwareReleaseCreateRequest, db: DbDep, outbox: OutboxDep
+    body: FirmwareReleaseCreateRequest, admin: CurrentUser, db: DbDep, outbox: OutboxDep
 ) -> FirmwareReleaseOut:
     release = service.create_firmware_release(
         db, outbox, body.vehicle_model_id, body.version, body.released_at
     )
+    security_event("firmware.released", user_id=admin.id, target=f"firmware:{release.id}")
     return FirmwareReleaseOut.model_validate(release)
 
 

@@ -1,6 +1,7 @@
 # Окружения и секреты — EV-ServiceDesk
 
-Глава 4, [ADR 0008](adr/0008-ci-gate-environments-staging-server.md). Модель: **local → staging → production**.
+Глава 4, [ADR 0008](adr/0008-ci-gate-environments-staging-server.md); серверы — глава 26,
+[ADR 0030](adr/0030-production-infrastructure.md). Модель: **local → staging → production**.
 Секреты между окружениями не переиспользуются.
 
 ## Модель
@@ -8,8 +9,8 @@
 | Окружение | Где живёт | Ветка деплоя | Секреты | Защита |
 |---|---|---|---|---|
 | **local** | машина разработчика | любая (не деплоится) | `.env` (gitignored), значения-заглушки из `.env.example` | — |
-| **staging** | GitHub Environment `staging`; сервер — Глава 26 | только `develop` (авто, `cd-staging.yml`) | Environment Secrets, уникальные | деплой только из `develop`, обход админом выключен |
-| **production** | GitHub Environment `production`; сервер — Глава 26 | только `main` | Environment Secrets, уникальные | деплой только из `main` + **required reviewer** (владелец), обход админом выключен |
+| **staging** | GitHub Environment `staging`; ВМ Timeweb Cloud, Москва (`deploy/`, ADR 0030; пока не заказана) | только `develop` (авто, `cd-staging.yml` → `deploy-server.yml`) | Environment Secrets, уникальные | деплой только из `develop`, обход админом выключен |
+| **production** | GitHub Environment `production`; ВМ Timeweb Cloud, Санкт-Петербург (пока не заказана) | только `main` (`cd-production.yml`, merge-коммит release-PR) | Environment Secrets, уникальные | деплой только из `main` + **required reviewer** (владелец), обход админом выключен |
 
 Окружения `dev` нет: при одном разработчике оно дублировало бы staging (та же ветка `develop`),
 не давая отдельной проверки (ADR 0008).
@@ -37,11 +38,11 @@ PR-ревью GitHub не позволяет одобрить собственн
 
 | Переменная | Отличается по окружениям? | Источник значения |
 |---|---|---|
-| `DATABASE_URL` | Да | своя БД на окружение — Глава 26 |
-| `REDIS_URL` | Да | аналогично — Глава 26 |
+| `DATABASE_URL` | Да | PostgreSQL окружения на его ВМ; собирает `deploy/scripts/render-secrets.sh` из `POSTGRES_PASSWORD` |
+| `REDIS_URL` | Да | Redis окружения на его ВМ (`deploy/compose.yml`) |
 | `JWT_SECRET` | Да | `scripts/set-environment-secrets.sh` (задан для staging и production) |
 | `SMS_PROVIDER_API_KEY` | Да (когда провайдер выбран) | пока пусто — бизнес-решение |
-| `S3_*` | Да | свой bucket/credentials на окружение — Глава 26; local — MinIO из `docker compose`. Вне local/test backend не стартует без ключей или без доступного бакета (ADR 0017) |
+| `S3_*` | Да | бакеты окружения в S3 Timeweb (`<окружение>-media`, `<окружение>-backup`; ADR 0030 п. 10); local — MinIO из `docker compose`. Вне local/test backend не стартует без ключей или без доступного бакета (ADR 0017) |
 | `PUSH_PROVIDER`, `FCM_SERVICE_ACCOUNT_JSON` | Да | ADR 0019: staging — `fake`, пока нет Firebase-проекта; production — только `fcm`. JSON-ключ сервисного аккаунта вводит владелец (`scripts/set-fcm-secret.sh`), один Firebase-проект с разными app id. Worker уведомлений — тот же образ, команда `python -m app.workers.notifications` |
 | `ANALYTICS_REFRESH_SECONDS` | Нет | ADR 0020: интервал обновления витрины дашборда (по умолчанию 300 с). Worker аналитики — тот же образ, команда `python -m app.workers.analytics` (`--once` — одно обновление) |
 
@@ -72,7 +73,8 @@ gh workflow run secrets-isolation.yml --ref develop
 `cd-staging.yml` при push в `develop` (изменения в `backend/`, `web-*/`):
 1. Собирает backend-образ и публикует в `ghcr.io/<repo>/backend` с тегами `staging-<sha>` и `staging`.
 2. Собирает статику `web-engineer`/`web-admin` (build-артефакты, хранятся 14 дней).
-3. «Выкатывает» на staging — **заглушка** до Главы 26: сервера нет (ADR 0008). Меняется только этот job.
+3. Выкладывает на ВМ staging (`deploy-server.yml`: bundle по SSH → `deploy.sh`: миграции, up, smoke, автооткат).
+   Пока ВМ не заказана (переменная окружения `SSH_HOST` пуста) — «сервер не настроен» (ADR 0030 п. 2).
 
 ### Откат без пересборки
 
@@ -83,5 +85,27 @@ gh workflow run secrets-isolation.yml --ref develop
 Запускает `cd-staging.yml` из `develop` с `git_sha`: сборка пропускается, существующий
 `backend:staging-<sha>` перетегируется в `backend:staging` (`docker buildx imagetools create`), затем digest
 сверяется — в логе `PASS`/`FAIL`. Откатиться можно на коммит, который уже собирался `cd-staging.yml`.
-Пока сервера нет, «откат» меняет то, на что указывает тег `staging`; после Главы 26 сервер будет
-подтягивать именно этот тег.
+Кроме перетегирования, `deploy-staging` выполняет на ВМ `ssh deploy@<ВМ> rollback staging <sha>` — выпуск
+из последних пяти на ВМ (`docs/runbooks/ROLLBACK.md`).
+
+## Серверы (глава 26, ADR 0030)
+
+Переменные окружения GitHub (не секреты): `SSH_HOST` (IPv4 ВМ; пусто — выкладка пропускается),
+`S3_MEDIA_BUCKET`, `S3_BACKUP_BUCKET`, `TELEGRAM_CHAT_ID`, `SMS_PROVIDER` (staging: `fake` до разрешения IP в
+A1). Переменные репозитория: `STAGING_MEDIA_ORIGIN`, `PRODUCTION_MEDIA_ORIGIN` — origin S3 для CSP кабинетов.
+
+| Секрет окружения | Откуда |
+|---|---|
+| `SSH_DEPLOY_KEY`, `SSH_KNOWN_HOSTS` | `scripts/set-infra-secrets.sh` (ключ генерируется, отпечаток хоста сверяет владелец) |
+| `POSTGRES_PASSWORD`, `POSTGRES_MONITOR_PASSWORD` | генерирует `scripts/set-infra-secrets.sh` |
+| `PGBACKREST_CIPHER_PASS` | генерирует `scripts/set-infra-secrets.sh`, **копия — у владельца офлайн** |
+| `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `BACKUP_S3_ACCESS_KEY`, `BACKUP_S3_SECRET_KEY` | панель Timeweb → `scripts/set-infra-secrets.sh` |
+| `GRAFANA_ADMIN_PASSWORD` | владелец (`scripts/set-infra-secrets.sh`) |
+| `ALERT_TELEGRAM_BOT_TOKEN`, `DEADMAN_URL` | владелец: бот @BotFather, healthchecks.io |
+| `SMS_PROVIDER_USER`, `SMS_PROVIDER_API_KEY`, `SMS_SENDER` | `scripts/set-a1-secrets.sh` |
+| `FCM_SERVICE_ACCOUNT_JSON` (production) | `scripts/set-fcm-secret.sh` |
+| `SMS_TEST_PHONES`, `SMS_TEST_CODE` (staging) | тестовые номера сквозных проверок и ночного прогона |
+| `PGBACKREST_REPO2_SFTP_HOST` (необязательно) | внешняя площадка repo2 |
+
+На ВМ секреты — `/opt/ev/<окружение>/secrets/*.env` (0600, пользователь `deploy`), обновляются каждой
+выкладкой из bundle. Шаги владельца — `docs/runbooks/OWNER_ACTIONS_26.md`.

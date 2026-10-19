@@ -42,6 +42,8 @@ jobs:
         ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.web_e2e == 'true'
         || steps.filter.outputs.backend == 'true' }}
       docs: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.docs == 'true' }}
+      # Production-инфраструктура (глава 26, ADR 0030 п. 6): deploy/ и заголовки кабинетов.
+      infra: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.infra == 'true' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -96,6 +98,14 @@ jobs:
               - ".github/workflows/mobile-ci.yml"
               - ".github/workflows/mobile-e2e.yml"
               - ".github/workflows/mobile-ui-e2e.yml"
+              - ".github/workflows/ci.yml"
+            infra:
+              - "deploy/**"
+              - "scripts/infra_stack.sh"
+              - "scripts/rollback_compat.sh"
+              - "web-shared/vite.ts"                   # SECURITY_HEADERS и CSP — тот же список в nginx
+              - "web-shared/src/nginxHeaders.test.ts"
+              - ".github/workflows/infra-ci.yml"
               - ".github/workflows/ci.yml"
             docs:
               - "docs/**"                              # в т. ч. openapi.yaml и asyncapi.yaml
@@ -153,6 +163,11 @@ jobs:
     needs: changes
     if: needs.changes.outputs.docs == 'true'
     uses: ./.github/workflows/docs-ci.yml
+
+  infra:
+    needs: changes
+    if: needs.changes.outputs.infra == 'true'
+    uses: ./.github/workflows/infra-ci.yml
 
   # Unicode NFC во всех текстовых файлах — на каждом PR, независимо от изменённых путей.
   unicode-nfc:
@@ -237,7 +252,7 @@ jobs:
   # `unicode-nfc`, `e2e-matrix`, `secret-scan` и `dependency-audit` успешны, а каждая проверка сервиса — успешна или не нужна
   # (skipped). Падение, отмена или пропуск из-за упавшей зависимости — красный.
   ci-gate:
-    needs: [changes, backend, web, mobile, mobile-e2e, mobile-ui-e2e, web-e2e, docs, unicode-nfc, e2e-matrix, secret-scan, dependency-audit]
+    needs: [changes, backend, web, mobile, mobile-e2e, mobile-ui-e2e, web-e2e, docs, infra, unicode-nfc, e2e-matrix, secret-scan, dependency-audit]
     if: always()
     runs-on: ubuntu-latest
     steps:

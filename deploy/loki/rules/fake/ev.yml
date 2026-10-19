@@ -1,0 +1,20 @@
+# Алерты Loki (глава 26, ADR 0030 п. 15); tenant fake — Loki без авторизации.
+groups:
+  - name: logs
+    rules:
+      # Потолок неудач входа на номер (ADR 0029 п. 11): распределённый подбор пароля сотрудника.
+      - alert: StaffPasswordBruteforce
+        expr: sum by (env) (count_over_time({logger="app.domain.auth.staff"} |= "Подбор пароля" [10m])) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "Подбор пароля сотрудника с разных адресов ({{ $labels.env }})"
+          runbook: docs/runbooks/ALERTS.md#staffpasswordbruteforce
+      # Всплеск отказов входа (подбор SMS-кода или пароля с одного или многих адресов).
+      - alert: LoginFailuresSpike
+        expr: sum by (env) (count_over_time({logger="app.security"} | json | event=~"auth.staff_login|auth.client_login" | outcome!="success" [10m])) > 100
+        labels:
+          severity: warning
+        annotations:
+          summary: "Больше 100 неудачных входов за 10 мин ({{ $labels.env }})"
+          runbook: docs/runbooks/ALERTS.md#staffpasswordbruteforce

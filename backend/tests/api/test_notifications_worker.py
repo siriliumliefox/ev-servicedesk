@@ -10,6 +10,7 @@ import time
 from datetime import UTC, date, datetime, timedelta
 
 import pytest
+from prometheus_client import REGISTRY
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
@@ -27,6 +28,7 @@ from app.models import (
     PushToken,
 )
 from app.models.enums import UserRole
+from app.workers.metrics import WorkerMetrics
 from tests.api.conftest import API, Headers, model_id
 from tests.api.notifications_support import feed, mileage, publish, regulation, replace
 
@@ -410,9 +412,9 @@ def test_crash_mid_batch_does_not_resend_delivered(
     db.commit()
     worker.dispatch()
     calls = worker.sender.calls
-    assert sorted(calls) == sorted(
-        [a.token, b.token, calls[1]]
-    ), "доставленный не отправлен повторно"
+    assert sorted(calls) == sorted([a.token, b.token, calls[1]]), (
+        "доставленный не отправлен повторно"
+    )
     assert all(r.delivered_at for r in deliveries(db, news["id"]))
 
 
@@ -582,3 +584,31 @@ def test_ticket_push_skips_deleted_vehicle(
         events.channel(ticket.id), TicketUpdated(ticket_id=ticket.id).model_dump_json()
     )
     assert sender.sent == [], "тикет удалённого авто клиенту не виден — push нет"
+
+
+# ---------- Метрики (глава 26, ADR 0030 п. 13) ----------
+
+
+def test_queue_metrics(client, admin, make_owner, make_worker, sender, db):
+    make_owner(None)
+    publish(client, admin, type="news", message="Метрики")
+    worker = make_worker()
+    worker.observe_queue()
+    assert REGISTRY.get_sample_value("ev_push_queue_pending") >= 1
+    assert REGISTRY.get_sample_value("ev_push_queue_oldest_age_seconds") >= 0
+    worker.tick()  # отправка и пересчёт очереди
+    assert REGISTRY.get_sample_value("ev_push_queue_pending") == 0
+    assert REGISTRY.get_sample_value("ev_push_queue_oldest_age_seconds") == 0
+
+
+def test_worker_metrics_success_and_errors() -> None:
+    m = WorkerMetrics("test-worker")
+    labels = {"worker": "test-worker"}
+    assert REGISTRY.get_sample_value("ev_worker_last_success_timestamp_seconds", labels) == 0
+    m.success()
+    assert (
+        REGISTRY.get_sample_value("ev_worker_last_success_timestamp_seconds", labels)
+        > time.time() - 5
+    )
+    m.error()
+    assert REGISTRY.get_sample_value("ev_worker_cycle_errors_total", labels) == 1

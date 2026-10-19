@@ -5,16 +5,19 @@
 в одном процессе: настройки (секреты-заглушки, фейковые SMS и push в production — ошибка
 `Settings`) и вне local/test — доступный бакет S3 (ADR 0017 п. 11). Ошибка — ненулевой код
 выхода и причина в логе; проверка в lifespan каждого процесса остаётся второй линией.
+Здесь же очищается каталог метрик процессов uvicorn (глава 26, ADR 0030 п. 13).
 """
 
 import sys
 
 from app.core.config import get_settings
+from app.core.metrics import reset_multiproc_dir
 from app.core.storage import get_storage, require_bucket
 
 
 def main() -> int:
     require_bucket(get_settings(), get_storage)
+    reset_multiproc_dir()
     return 0
 
 

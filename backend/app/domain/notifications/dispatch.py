@@ -22,7 +22,7 @@ from concurrent.futures import FIRST_COMPLETED, Executor, Future, ThreadPoolExec
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import ColumnElement, and_, exists, or_, select, update
+from sqlalchemy import ColumnElement, and_, exists, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
@@ -213,6 +213,31 @@ def dispatch_due(
             _record(db, settings, item, future.result())
             done += 1 + start_next(item.token_id)
     return done
+
+
+@dataclass(frozen=True)
+class QueueStats:
+    """Очередь push для метрик (глава 26): всего ждущих и самая старая из готовых к отправке."""
+
+    pending: int
+    oldest_due_at: datetime | None
+
+
+def queue_stats(db: Session) -> QueueStats:
+    """Ждущие доставки (частичный индекс `ix_notification_delivery_pending`); «старейшая готовая» —
+    срок попытки уже наступил: отложенные повторы отставанием не считаются."""
+    waiting = and_(
+        NotificationDelivery.delivered_at.is_(None), NotificationDelivery.failed_at.is_(None)
+    )
+    pending, oldest = db.execute(
+        select(
+            func.count(),
+            func.min(NotificationDelivery.next_attempt_at).filter(
+                NotificationDelivery.next_attempt_at <= func.now()
+            ),
+        ).where(waiting)
+    ).one()
+    return QueueStats(pending, oldest)
 
 
 def drain(

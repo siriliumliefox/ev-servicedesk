@@ -1,0 +1,37 @@
+name: infra-ci
+
+# Конфигурации production-инфраструктуры без серверов (глава 26, ADR 0030 п. 6): рендер шаблонов на
+# значениях обоих окружений, docker compose config, nginx -t, promtool check и test rules (юнит-тесты
+# алертов), amtool, Loki, Alloy, shellcheck; render.py — unittest; заголовки nginx = SECURITY_HEADERS
+# и CSP сборки кабинетов (тест web-shared). Вызывается из ci.yml при изменениях deploy/.
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  infra:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: render.py
+        run: python3 -m unittest deploy/scripts/test_render.py
+
+      - name: Конфигурации deploy/
+        run: deploy/scripts/check-configs.sh
+
+      - name: shellcheck скриптов стенда и стража отката
+        run: shellcheck -x -P SCRIPTDIR -S warning scripts/infra_stack.sh scripts/rollback_compat.sh
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - run: npm ci
+
+      - name: Заголовки nginx = SECURITY_HEADERS и CSP сборки
+        run: npx vitest run --root web-shared src/nginxHeaders.test.ts
