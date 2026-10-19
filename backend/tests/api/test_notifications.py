@@ -28,9 +28,8 @@ from app.models import (
     VehicleModel,
 )
 from app.models.enums import UserRole
-from tests.api.conftest import API, Headers, bearer, model_id, register
+from tests.api.conftest import API, Headers, bearer, error_code, model_id, register
 from tests.api.notifications_support import feed, publish
-from tests.api.ticket_support import error_code
 from tests.support.contract import contract_operation
 
 
@@ -563,5 +562,5 @@ def test_push_token_requires_active_consent(client, make_owner, db, settings):
     later = bearer(create_access_token(me, "client", settings))
     r = client.post(f"{API}/push-tokens", json={"token": "fcm-x:" + "y" * 40}, headers=later)
     assert r.status_code == 422
-    assert r.json()["error"]["code"] == "PD_CONSENT_REQUIRED"
+    assert error_code(r) == "PD_CONSENT_REQUIRED"
     assert db.scalar(select(func.count()).select_from(PushToken)) == 0

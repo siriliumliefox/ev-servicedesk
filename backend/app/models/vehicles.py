@@ -6,6 +6,7 @@ from sqlalchemy import (
     CHAR,
     BigInteger,
     CheckConstraint,
+    ColumnElement,
     Date,
     DateTime,
     ForeignKey,
@@ -14,9 +15,11 @@ from sqlalchemy import (
     Integer,
     String,
     UniqueConstraint,
+    and_,
     select,
     text,
 )
+from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import Mapped, column_property, mapped_column, relationship
 
 from app.models.base import Base, CreatedAtMixin, IdMixin, TimestampMixin
@@ -94,9 +97,21 @@ class Vehicle(IdMixin, TimestampMixin, Base):
         .scalar_subquery()
     )
 
-    @property
+    @hybrid_property
     def is_active(self) -> bool:
+        """Не удалено (soft-delete, ADR 0003); в запросе — `deleted_at IS NULL`."""
         return self.deleted_at is None
+
+    @is_active.inplace.expression
+    @classmethod
+    def _is_active_expression(cls) -> ColumnElement[bool]:
+        return cls.deleted_at.is_(None)
+
+    @classmethod
+    def owned_active(cls, user_id: int | ColumnElement[int]) -> ColumnElement[bool]:
+        """Неудалённое авто владельца `user_id`: смена владельца — soft-delete и новая запись
+        (ADR 0003), поэтому «авто клиента» — всегда пара «владелец + не удалено» (#73, D6)."""
+        return and_(cls.user_id == user_id, cls.is_active)
 
 
 class VehicleMileageCorrection(IdMixin, CreatedAtMixin, Base):

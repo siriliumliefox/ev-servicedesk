@@ -18,7 +18,7 @@ from app.models import (
     Ticket,
 )
 from app.models.enums import UserRole
-from tests.api.conftest import API, Headers
+from tests.api.conftest import API, Headers, error_code
 from tests.support import analytics_control as control
 
 OPERATIONS = {
@@ -157,7 +157,7 @@ def test_invalid_period(
 ) -> None:
     r = client.get(f"{API}{path}", params=params, headers=admin)
     assert r.status_code == 422, r.text
-    assert r.json()["error"]["code"] == code
+    assert error_code(r) == code
 
 
 @pytest.mark.parametrize("path", OPERATIONS)

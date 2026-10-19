@@ -159,9 +159,7 @@ def eligible_client() -> list[ColumnElement[bool]]:
 
 def _owners(model_id: int, firmware: FirmwareRelease | None) -> Select:
     """Владельцы неудалённых авто модели; для прошивки — с более ранней или неизвестной."""
-    stmt = select(Vehicle.user_id).where(
-        Vehicle.vehicle_model_id == model_id, Vehicle.deleted_at.is_(None)
-    )
+    stmt = select(Vehicle.user_id).where(Vehicle.vehicle_model_id == model_id, Vehicle.is_active)
     if firmware is not None:
         current = aliased(FirmwareRelease)
         stmt = stmt.outerjoin(current, current.id == Vehicle.current_firmware_release_id).where(

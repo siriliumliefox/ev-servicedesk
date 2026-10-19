@@ -20,10 +20,6 @@ MP4 = b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 64
 UPLOAD_KEY = re.compile(r"uploads/(\d+)/([0-9a-f-]{36})(\.[a-z0-9]+)?")
 
 
-def error_code(response: httpx.Response) -> str:
-    return response.json()["error"]["code"]
-
-
 # ---------- Загрузки ----------
 
 

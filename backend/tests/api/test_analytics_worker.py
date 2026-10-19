@@ -9,7 +9,8 @@ from sqlalchemy import Engine, text
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
-from app.domain.analytics.refresh import ADVISORY_LOCK_KEY, refresh_views
+from app.core.locks import AdvisoryLock
+from app.domain.analytics.refresh import refresh_views
 from app.domain.analytics.views import VIEWS
 from app.workers.analytics import AnalyticsWorker
 
@@ -30,7 +31,8 @@ def test_view_columns_match_query_description(db: Session, view) -> None:
 
 def test_second_instance_skips_refresh(migrated_engine: Engine) -> None:
     with migrated_engine.connect() as holder, migrated_engine.connect() as other:
-        holder.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": ADVISORY_LOCK_KEY})
+        lock = {"k": int(AdvisoryLock.ANALYTICS_REFRESH)}
+        holder.execute(text("SELECT pg_advisory_xact_lock(:k)"), lock)
         with Session(bind=other) as db:
             assert refresh_views(db) is False
         holder.rollback()
