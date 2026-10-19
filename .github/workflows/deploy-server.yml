@@ -80,13 +80,13 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         if: steps.server.outputs.configured == 'true' && inputs.mode == 'deploy'
         with:
           name: web-engineer-${{ inputs.environment }}-${{ inputs.sha }}
           path: dist/web-engineer
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         if: steps.server.outputs.configured == 'true' && inputs.mode == 'deploy'
         with:
           name: web-admin-${{ inputs.environment }}-${{ inputs.sha }}
