@@ -8,6 +8,7 @@ import { Button, TextField } from "../components";
 import { ERROR_TEXTS, errorText } from "../data/errors.ts";
 import type { ApiSession } from "../data/http/session.ts";
 import type { UserPublic, UserRole } from "../data/models.ts";
+import { normalizePhone } from "../data/phone.ts";
 import { ApiError } from "../data/repository.ts";
 import { useTheme, type ThemePreference } from "../theme/useTheme";
 import { LoadingState } from "./feedback.tsx";
@@ -132,7 +133,8 @@ function LoginScreen({
     setBusy(true);
     setError(null);
     try {
-      await onSubmit(phone.replace(/[\s()-]/g, ""), password);
+      // Номер целиком поверх префикса «+375» (+375+375…, 8 029…) — тот же номер (#114).
+      await onSubmit(normalizePhone(phone), password);
     } catch (err) {
       setError(describe(err));
       setBusy(false);

@@ -14,13 +14,14 @@ const json = (status: number, body: unknown) =>
 
 function backend(role: 'engineer' | 'admin') {
   const user = { id: 7, phone: '+375291112233', role, is_active: true, created_at: '2026-10-01T00:00:00Z' }
-  const state = { refreshOk: true, refreshes: 0 }
+  const state = { refreshOk: true, refreshes: 0, phones: [] as string[] }
   const empty = { items: [], meta: { page: 1, page_size: 100, total_items: 0, total_pages: 0 } }
   const fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = input instanceof Request ? input : new Request(input, init)
     const path = new URL(request.url).pathname.replace('/v1', '')
     if (path === '/auth/staff/login') {
-      const body = (await request.json()) as { password: string }
+      const body = (await request.json()) as { phone: string; password: string }
+      state.phones.push(body.phone)
       if (body.password !== PASSWORD) return json(401, { error: { code: 'UNAUTHORIZED', message: 'x' } })
       return json(200, { access_token: 'a1', refresh_token: 'r1', expires_in: 900, user })
     }
@@ -57,6 +58,19 @@ describe('вход инженера', () => {
     await login(user, 'wrong')
     expect(await screen.findByRole('alert')).toHaveTextContent('Неверный номер телефона или пароль.')
     expect(screen.queryByText('EV-ServiceDesk · Кабинет инженера')).toBeNull()
+  })
+
+  // #114 (X2): поле начинается с «+375» — номер, вставленный целиком, не превращается в +375+375….
+  it('номер, вставленный поверх префикса +375, уходит одним номером', async () => {
+    const { user, server } = setup('engineer')
+    const phone = screen.getByLabelText('Телефон')
+    expect(phone).toHaveValue('+375')
+    await user.click(phone)
+    await user.paste('+375 29 111-22-33')
+    await user.type(screen.getByLabelText('Пароль'), PASSWORD)
+    await user.click(screen.getByRole('button', { name: 'Войти' }))
+    expect(await screen.findByText('Обращений пока нет')).toBeInTheDocument()
+    expect(server.state.phones).toEqual(['+375291112233'])
   })
 
   it('инженер входит — доска; «Выйти» возвращает ко входу', async () => {
