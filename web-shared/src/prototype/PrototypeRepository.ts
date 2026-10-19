@@ -375,7 +375,7 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
       }
       if (!body.name.trim()) throw validation("Укажите название", "name");
       if (this.aggregateTypes.some((a) => a.code === body.code)) {
-        throw new ApiError("CONFLICT", "Агрегат с таким кодом уже есть", 409);
+        throw new ApiError("AGGREGATE_TYPE_EXISTS", "Агрегат с таким кодом уже есть", 409);
       }
       const created = { code: body.code, name: body.name.trim() };
       this.aggregateTypes.push(created);
@@ -673,7 +673,8 @@ export class PrototypeRepository implements EngineerRepository, AdminRepository 
       const version = body.version.trim();
       if (!version || version.length > 50) throw validation("Версия — от 1 до 50 символов", "version");
       if (this.firmware.some((f) => f.vehicle_model_id === body.vehicle_model_id && f.version === version)) {
-        throw new ApiError("CONFLICT", "Такая версия для модели уже опубликована", 409);
+        // Как backend (#74, C8): повтор версии — ошибка поля version, 422, а не 409.
+        throw new ApiError("FIRMWARE_VERSION_EXISTS", "Такая версия прошивки модели уже есть", 422, "version");
       }
       const release: FirmwareRelease = { id: this.nextId++, vehicle_model_id: body.vehicle_model_id, version, released_at: body.released_at };
       this.firmware.push(release);
