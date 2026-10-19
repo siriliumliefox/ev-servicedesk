@@ -16,7 +16,7 @@ Issue #138, PR #142, [ADR 0030](../adr/0030-production-infrastructure.md) (grill
 | План отката | PASS (стенд) | `deploy.sh` (автооткат), страж `rollback_compat.sh` в cd-staging (мутация поймана), `ROLLBACK.md` |
 | Централизованный сбор логов (ELK/Loki) | PASS (стенд), Loki + Alloy | журналы всех 17 сервисов с метками `env`, `service`, `logger`, `level`; `app.security` — 365 дней |
 | Учебное восстановление (DR drill) | PASS (стенд) | RPO 33 с (цель ≤ 300), RTO 22 с (цель ≤ 7200), аудит — 0 нарушений; `restore-check` — PASS |
-| Тест алертов: сбой → уведомление в целевое время | PASS (стенд, приёмник); Telegram — NOT RUN (бот владельца) | 6 сценариев, critical за 101–180 с (цель ≤ 300) |
+| Тест алертов: сбой → уведомление в целевое время | PASS (стенд): приёмник и Telegram владельца | 6 сценариев, critical за 101–180 с (цель ≤ 300); Telegram — 167/197 с, «восстановлено» доставлено |
 | **DoD:** production готов | **BLOCKED** | серверов нет |
 | **DoD:** мониторинг и алерты работают | PASS (стенд) | см. выше |
 | **DoD:** план отката опробован на staging | PASS на staging стенда; на сервере — BLOCKED | учение отката, ниже |
@@ -67,8 +67,8 @@ ORM читает все 25 таблиц, аудит целостности); м�
 (изолированный контейнер, `archive_mode=off`, аудит) — PASS за 4 с.
 
 ## Тест алертов (2026-10-19, стенд)
-Канал — приёмник стенда (webhook Alertmanager); Telegram подключится ботом владельца без изменений
-конфигурации (`EV_TELEGRAM_CHAT_ID`). Время — от сбоя до приёма уведомления.
+Канал — приёмник стенда (webhook Alertmanager), затем — Telegram-бот владельца (ниже). Время — от сбоя до
+приёма уведомления.
 
 | Сбой | Алерт | Секунд | Итог |
 |---|---|---|---|
@@ -78,6 +78,12 @@ ORM читает все 25 таблиц, аудит целостности); м�
 | остановлен notifications-worker | WorkerDown (critical) | 180 | PASS |
 | недоступен production — видно с staging | PeerDown (critical) | 170 | PASS |
 | (постоянно) | Watchdog → dead-man | 21 сигнал за время теста | PASS |
+
+**Telegram (2026-10-19, 11:39, staging стенда, бот владельца, `chat_id` из переменных окружений GitHub):**
+остановлен backend → BackendDown через 167 с, ServiceDown через 197 с (цель ≤ 300) — сообщения в чат
+владельца; backend запущен → оба «восстановлено». Alertmanager: `alertmanager_notifications_total
+{integration="telegram"}` 4, ошибок 0. Токен — файл стенда (`EV_STAND/telegram_token`, скрытый ввод
+владельца), в GitHub — секрет `ALERT_TELEGRAM_BOT_TOKEN` обоих окружений.
 
 Попутно алерты сработали и во время учения отката (простой сломанного выпуска) и первого неудачного
 выпуска стенда — BackendDown, ServiceDown, WorkerStale.
@@ -128,5 +134,5 @@ p95 21 мс, p99 59 мс, ошибок 0 % — пороги PASS; итоги в 
 ## Что осталось (до DONE)
 Заказ ВМ и S3, DNS, секреты, бот алертов, dead-man, A1, Firebase production, Let's Encrypt — владелец
 (`OWNER_ACTIONS_26.md`); затем агент: bootstrap ВМ, выкладка staging, повтор учений на сервере (откат,
-DR на новую ВМ, алерты в Telegram), X5, ZAP по серверу, полный прогон ADR 0028 на production-ВМ,
+DR на новую ВМ, алерты в Telegram с сервера), X5, ZAP по серверу, полный прогон ADR 0028 на production-ВМ,
 release-PR `develop → main` (`v1.0.0-rc.2`) → cd-production (Approve владельца).
