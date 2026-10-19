@@ -12,7 +12,8 @@
 #
 # EV_STAND — каталог стенда (по умолчанию .infra-stand, в .gitignore); EV_DRILL_BASE — выпуск N для
 # учений отката (по умолчанию d3257fb — глава 24, миграции до 0015). Telegram — если заданы
-# EV_ALERT_TELEGRAM_BOT_TOKEN и EV_TELEGRAM_CHAT_ID (бот владельца). Отчёты учений — EV_STAND/reports.
+# токен бота в EV_STAND/telegram_token (владелец записывает сам, скрытым вводом) и chat_id в
+# EV_STAND/telegram_chat_id или EV_TELEGRAM_CHAT_ID. Отчёты учений — EV_STAND/reports.
 #
 # Отличия от ВМ (в отчёте главы): один Docker на оба окружения; S3 — MinIO; «production» стенда работает
 # в режиме staging (A1 и FCM недоступны — фейковые SMS и push); TLS — УЦ стенда; Let's Encrypt не
@@ -89,6 +90,15 @@ wipe_repo() {
 
 # --- Окружения -------------------------------------------------------------------------------
 
+# chat_id алертов стенда: переменная окружения или файл EV_STAND/telegram_chat_id (не секрет);
+# без токена бота (EV_STAND/telegram_token) — пусто: только приёмник стенда.
+telegram_chat_id() {
+  [[ -s "$EV_STAND/telegram_token" ]] || return 0
+  if [[ -n "${EV_TELEGRAM_CHAT_ID:-}" ]]; then echo "$EV_TELEGRAM_CHAT_ID"; return; fi
+  [[ -s "$EV_STAND/telegram_chat_id" ]] && tr -d '[:space:]' < "$EV_STAND/telegram_chat_id"
+  return 0
+}
+
 ports() {
   # ports <env> — «адреса ВМ» на машине стенда.
   if [[ "$1" == staging ]]; then echo "18080 18443 19090 19093 13000"; else echo "28080 28443 29090 29093 23000"; fi
@@ -129,7 +139,7 @@ EV_TEXTFILE_DIR=$EV_STAND/textfile/$env
 EV_PROBE_CA_FILE=/etc/ev-ca/ca.crt
 EV_SMOKE_CA_FILE=$EV_STAND/ca/ca.crt
 EV_ALERT_WEBHOOK_URL=http://alert-sink:8080/$env
-EV_TELEGRAM_CHAT_ID=${EV_TELEGRAM_CHAT_ID:-}
+EV_TELEGRAM_CHAT_ID=$(telegram_chat_id)
 EV_RESTORE_NETWORK=ev-provider
 EV_RESTORE_EXTRA_ARGS="-e PGBACKREST_REPO1_STORAGE_PORT=9000 -e PGBACKREST_REPO1_STORAGE_CA_FILE=/etc/ev-ca/ca.crt -v $EV_STAND/ca:/etc/ev-ca:ro"
 EOF
@@ -212,6 +222,11 @@ deploy_release() {
     . "$EV_STAND/secrets-$env.env"
     set +a
     export EV_SMS_PROVIDER=fake EV_PUSH_PROVIDER=fake
+    # Токен бота алертов — из файла стенда, в журнал и аргументы не попадает.
+    if [[ -s "$EV_STAND/telegram_token" ]]; then
+      ALERT_TELEGRAM_BOT_TOKEN="$(cat "$EV_STAND/telegram_token")"
+      export ALERT_TELEGRAM_BOT_TOKEN
+    fi
     export EV_SHA="$as_sha" BACKEND_IMAGE EV_POSTGRES_IMAGE
     BACKEND_IMAGE="$(cat "$EV_STAND/builds/$sha/backend.ref")"
     EV_POSTGRES_IMAGE="$(cat "$EV_STAND/builds/postgres.ref")"
