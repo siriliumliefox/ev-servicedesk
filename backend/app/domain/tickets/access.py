@@ -46,7 +46,7 @@ def visible(user: AppUser) -> ColumnElement[bool]:
     if user.role is UserRole.ADMIN:
         return true()
     if user.role is UserRole.CLIENT:
-        own = select(Vehicle.id).where(Vehicle.user_id == user.id, Vehicle.deleted_at.is_(None))
+        own = select(Vehicle.id).where(Vehicle.owned_active(user.id))
         return Ticket.vehicle_id.in_(own)
     if user.role is UserRole.ENGINEER:
         return or_(Ticket.assigned_engineer_id == user.id, in_queue())

@@ -23,6 +23,7 @@ from tests.api.conftest import (
     api_settings,
     bearer,
     code_from,
+    error_code,
     telegram_widget,
 )
 
@@ -79,7 +80,7 @@ def test_code_is_single_use(client, sms):
     payload = {"phone": PHONE, "code": code, "pd_policy_version": POLICY}
     assert client.post(f"{API}/auth/phone/verify-code", json=payload).status_code == 200
     r = client.post(f"{API}/auth/phone/verify-code", json=payload)
-    assert r.status_code == 400 and r.json()["error"]["code"] == "CODE_EXPIRED"
+    assert r.status_code == 400 and error_code(r) == "CODE_EXPIRED"
 
 
 def test_wrong_code_then_correct(client, sms):
@@ -116,7 +117,7 @@ def test_attempts_exhausted_429(client, sms):
         f"{API}/auth/phone/verify-code",
         json={"phone": PHONE, "code": code, "pd_policy_version": POLICY},
     )
-    assert r.status_code == 400 and r.json()["error"]["code"] == "CODE_EXPIRED"
+    assert r.status_code == 400 and error_code(r) == "CODE_EXPIRED"
 
 
 def test_resend_rate_limited_429(client):
@@ -130,7 +131,7 @@ def test_consent_required_does_not_burn_code(client, sms, db: Session):
     client.post(f"{API}/auth/phone/request-code", json={"phone": PHONE})
     code = code_from(sms, PHONE)
     r = client.post(f"{API}/auth/phone/verify-code", json={"phone": PHONE, "code": code})
-    assert r.status_code == 422 and r.json()["error"]["code"] == "PD_CONSENT_REQUIRED"
+    assert r.status_code == 422 and error_code(r) == "PD_CONSENT_REQUIRED"
     assert db.scalar(select(func.count()).select_from(AppUser).where(AppUser.phone == PHONE)) == 0
     r = client.post(
         f"{API}/auth/phone/verify-code",
@@ -177,7 +178,7 @@ def test_no_sms_for_blocked_client_or_staff(
     # Тот же ответ, что и у свободного номера: состояние номера не раскрывается.
     assert client.post(f"{API}/auth/phone/request-code", json={"phone": OTHER}).json() == r.json()
     r = client.post(f"{API}/auth/phone/verify-code", json={"phone": PHONE, "code": "0000"})
-    assert r.status_code == 400 and r.json()["error"]["code"] == "CODE_EXPIRED"
+    assert r.status_code == 400 and error_code(r) == "CODE_EXPIRED"
 
 
 def test_disabled_client_cannot_login(client, sms, make_client_user, db: Session):
@@ -189,7 +190,7 @@ def test_disabled_client_cannot_login(client, sms, make_client_user, db: Session
     r = client.post(
         f"{API}/auth/phone/verify-code", json={"phone": PHONE, "code": code_from(sms, PHONE)}
     )
-    assert r.status_code == 400 and r.json()["error"]["code"] == "ACCOUNT_DISABLED"
+    assert r.status_code == 400 and error_code(r) == "ACCOUNT_DISABLED"
 
 
 def test_staff_cannot_use_sms_login(client, sms, make_staff):
@@ -200,13 +201,13 @@ def test_staff_cannot_use_sms_login(client, sms, make_staff):
         f"{API}/auth/phone/verify-code",
         json={"phone": PHONE, "code": code_from(sms, PHONE), "pd_policy_version": POLICY},
     )
-    assert r.status_code == 400 and r.json()["error"]["code"] == "STAFF_PASSWORD_LOGIN"
+    assert r.status_code == 400 and error_code(r) == "STAFF_PASSWORD_LOGIN"
 
 
 def test_invalid_phone_422(client):
     r = client.post(f"{API}/auth/phone/request-code", json={"phone": "80291234567"})
     assert r.status_code == 422
-    assert r.json()["error"]["code"] == "VALIDATION_ERROR"
+    assert error_code(r) == "VALIDATION_ERROR"
     assert "80291234567" not in r.text  # введённое значение не возвращается
 
 
@@ -290,7 +291,7 @@ def test_withdraw_pd_consent(client, login_client, db: Session, settings):
     assert client.delete(f"{API}/auth/pd-consent", headers=headers).status_code == 401
     later = bearer(create_access_token(session["user"]["id"], "client", settings))
     r = client.delete(f"{API}/auth/pd-consent", headers=later)
-    assert r.status_code == 409 and r.json()["error"]["code"] == "PD_CONSENT_NOT_ACTIVE"
+    assert r.status_code == 409 and error_code(r) == "PD_CONSENT_NOT_ACTIVE"
 
 
 def test_telegram_link(client, login_client):
@@ -302,7 +303,7 @@ def test_telegram_link(client, login_client):
     r = client.post(
         f"{API}/auth/telegram/link", json=telegram_widget("100"), headers=bearer(b["access_token"])
     )
-    assert r.status_code == 409 and r.json()["error"]["code"] == "TELEGRAM_ALREADY_LINKED"
+    assert r.status_code == 409 and error_code(r) == "TELEGRAM_ALREADY_LINKED"
 
 
 def _forged(body: dict) -> dict:
@@ -340,7 +341,7 @@ def test_telegram_link_unavailable_without_bot(app, client, login_client):
         json=telegram_widget("100"),
         headers=bearer(session["access_token"]),
     )
-    assert r.status_code == 503 and r.json()["error"]["code"] == "TELEGRAM_UNAVAILABLE"
+    assert r.status_code == 503 and error_code(r) == "TELEGRAM_UNAVAILABLE"
 
 
 class _FailingSms:
@@ -363,7 +364,7 @@ class _FailingSms:
 def test_sms_provider_failure_contract(app, client, flags, status, code):
     app.dependency_overrides[get_sms_provider] = lambda: _FailingSms(**flags)
     r = client.post(f"{API}/auth/phone/request-code", json={"phone": PHONE})
-    assert r.status_code == status and r.json()["error"]["code"] == code
+    assert r.status_code == status and error_code(r) == code
     # Не отправлено — можно сразу повторить; доставка неизвестна — только после паузы.
     again = client.post(f"{API}/auth/phone/request-code", json={"phone": PHONE})
     assert again.status_code == (429 if flags.get("delivery_unknown") else status)
@@ -376,7 +377,7 @@ def test_blank_policy_version_is_consent_required_and_keeps_code(client, sms):
         f"{API}/auth/phone/verify-code",
         json={"phone": PHONE, "code": code, "pd_policy_version": "   "},
     )
-    assert r.status_code == 422 and r.json()["error"]["code"] == "PD_CONSENT_REQUIRED"
+    assert r.status_code == 422 and error_code(r) == "PD_CONSENT_REQUIRED"
     r = client.post(
         f"{API}/auth/phone/verify-code",
         json={"phone": PHONE, "code": code, "pd_policy_version": f" {POLICY} "},
@@ -406,7 +407,7 @@ def test_anonymized_user_with_phone_cannot_log_in(client, sms, make_client_user,
     r = client.post(
         f"{API}/auth/phone/verify-code", json={"phone": phone, "code": code_from(sms, phone)}
     )
-    assert r.status_code == 400 and r.json()["error"]["code"] == "ACCOUNT_DISABLED"
+    assert r.status_code == 400 and error_code(r) == "ACCOUNT_DISABLED"
     r = client.post(
         f"{API}/auth/staff/login", json={"phone": "+375296900002", "password": STAFF_PASSWORD}
     )

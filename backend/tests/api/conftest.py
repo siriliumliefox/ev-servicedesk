@@ -62,6 +62,11 @@ def api_settings(**overrides: Any) -> Settings:
     return Settings(_env_file=None, **(values | overrides))
 
 
+def error_code(response: httpx.Response) -> str:
+    """Код ошибки ответа (`error.code` конверта ошибок контракта)."""
+    return response.json()["error"]["code"]
+
+
 @pytest.fixture
 def settings() -> Settings:
     return api_settings()

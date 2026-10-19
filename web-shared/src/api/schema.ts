@@ -402,6 +402,7 @@ export interface paths {
             header?: never;
             path: {
                 vehicleId: number;
+                /** @description Код агрегата (AggregateType.code); до 50 символов, длиннее — 422 (1.17.0, ADR 0035). */
                 aggregateTypeCode: string;
             };
             cookie?: never;
@@ -498,7 +499,7 @@ export interface paths {
         };
         /**
          * Карточка тикета с автопривязанным контекстом авто
-         * @description vehicle_context собирается из Vehicle Service и Aggregates Service (модель, текущая прошивка, статусы агрегатов на момент обращения) — межсервисная агрегация на уровне Tickets Service (глава 13; уточнено в 1.7.1). Уточнено в 1.4.0 (ADR 0017, RBAC-04): client — тикеты своих авто; engineer — очередь (status=new без исполнителя) и тикеты, назначенные ему; admin — все. Невидимый тикет — 404 (как доступ к авто, минимизация ПД). firmware_version_at_creation — прошивка на момент создания тикета (снимок, N-09), в отличие от текущей vehicle_context.vehicle.current_firmware_version. file_url вложений — presigned GET на 15 минут.
+         * @description vehicle_context собирается из Vehicle Service и Aggregates Service (модель, текущая прошивка, статусы агрегатов на момент обращения) — межсервисная агрегация на уровне Tickets Service (глава 13; уточнено в 1.7.1). Уточнено в 1.4.0 (ADR 0017, RBAC-04): client — тикеты своих авто; engineer — очередь (status=new без исполнителя) и тикеты, назначенные ему; admin — все. Невидимый тикет — 404 (как доступ к авто, минимизация ПД; 403 у операции нет — убран в 1.17.0, ADR 0035). firmware_version_at_creation — прошивка на момент создания тикета (снимок, N-09), в отличие от текущей vehicle_context.vehicle.current_firmware_version. file_url вложений — presigned GET на 15 минут.
          */
         get: operations["getTicket"];
         put?: never;
@@ -1168,7 +1169,10 @@ export interface components {
         };
         StaffLoginRequest: {
             phone: components["schemas"]["PhoneE164"];
-            /** Format: password */
+            /**
+             * Format: password
+             * @description До 256 символов, длиннее — 422 (стойкость при входе не проверяется — только при установке пароля). 1.17.0, ADR 0035.
+             */
             password: string;
         };
         /** @description Данные Telegram Login Widget. auth_date и hash необязательны в схеме (совместимость 1.x), но обязательны для сервера (1.12.0, ADR 0029 п. 16). */
@@ -1368,7 +1372,7 @@ export interface components {
         };
         PresignRequest: {
             /**
-             * @description Используется только расширение — ключ объекта uploads/{user_id}/{uuid}{расширение}; имя может содержать ПД и не хранится (ADR 0017). Уточнено в 1.4.0.
+             * @description Используется только расширение — ключ объекта uploads/{user_id}/{uuid}{расширение}; имя может содержать ПД и не хранится (ADR 0017). Уточнено в 1.4.0. От 1 до 255 символов, иначе 422 (1.17.0, ADR 0035).
              * @example photo.jpg
              */
             file_name: string;
@@ -1705,6 +1709,7 @@ export interface components {
             assigned_engineer_id: number | null;
         };
         PushTokenRegisterRequest: {
+            /** @description Сервер принимает до 1024 символов (длина колонки, ADR 0019 п. 8; токены FCM — около 200), длиннее — 422. maxLength 4096 схемы v1 не уменьшается — это было бы ломающим изменением (ADR 0007); 1.17.0, ADR 0035. */
             token: string;
         };
         VehicleFirmwareUpdateRequest: {
@@ -2099,7 +2104,7 @@ export interface operations {
     searchVehicleModels: {
         parameters: {
             query?: {
-                /** @description Подстрока по бренду/модели */
+                /** @description Подстрока по бренду/модели; до 100 символов, длиннее — 422 (лимит сервера — описанием: схема v1 заморожена, 1.17.0, ADR 0035). */
                 search?: string;
                 page?: components["parameters"]["PageParam"];
                 page_size?: components["parameters"]["PageSizeParam"];
@@ -2533,6 +2538,7 @@ export interface operations {
             header?: never;
             path: {
                 vehicleId: number;
+                /** @description Код агрегата (AggregateType.code); до 50 символов, длиннее — 422 (1.17.0, ADR 0035). */
                 aggregateTypeCode: string;
             };
             cookie?: never;
@@ -2724,7 +2730,6 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthorized"];
-            403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             422: components["responses"]["ValidationError"];
             default: components["responses"]["ServerError"];

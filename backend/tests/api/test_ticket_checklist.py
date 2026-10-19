@@ -32,13 +32,12 @@ from app.models import (
     Vehicle,
 )
 from app.models.enums import TicketCategory, UserRole
-from tests.api.conftest import API, UNKNOWN_VIN, Headers, add_vehicle, model_id
+from tests.api.conftest import API, UNKNOWN_VIN, Headers, add_vehicle, error_code, model_id
 from tests.api.ticket_support import (
     assign,
     card,
     claim,
     create,
-    error_code,
     history,
     ids,
     items,
