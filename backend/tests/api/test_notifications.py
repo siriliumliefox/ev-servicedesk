@@ -17,17 +17,20 @@ from sqlalchemy.orm import Session
 from app.core.security import create_access_token
 from app.core.time import today_in_business_tz
 from app.domain.notifications.push import Outcome, PushResult
+from app.domain.notifications.service import firmware_message
 from app.models import (
     AppUser,
     NotificationDelivery,
     NotificationRecipient,
     PdConsent,
     PushToken,
+    VehicleModel,
 )
 from app.models.enums import UserRole
 from tests.api.conftest import API, Headers, bearer, model_id, register
 from tests.api.notifications_support import feed, publish
 from tests.api.ticket_support import error_code
+from tests.support.contract import contract_operation
 
 
 @pytest.fixture
@@ -157,6 +160,17 @@ def set_firmware(client: TestClient, headers: Headers, vid: int, release_id: int
     return r
 
 
+def test_firmware_message_matches_contract():
+    """#113: шаблон текста о прошивке — в описании createFirmwareRelease; по нему же строит
+    предпросмотр админ-панель (web-shared `firmwareMessage`): клиент видит то, что видел админ."""
+    _, _, operation = contract_operation("createFirmwareRelease")
+    model = VehicleModel(brand="{brand}", model="{model}")
+    title, call = firmware_message(model, "{version}").split("\n")
+    description = " ".join(operation["description"].split())
+    assert f"«{title}»" in description
+    assert f"«{call}»" in description
+
+
 def test_firmware_release_targets_older_or_unknown_firmware(client, admin, make_owner, db: Session):
     model = zeekr(client, admin)
     unknown, older, newer = make_owner("Zeekr"), make_owner("Zeekr"), make_owner("Zeekr")
@@ -175,7 +189,9 @@ def test_firmware_release_targets_older_or_unknown_firmware(client, admin, make_
     assert v2["version"] == "2.0"
     items = feed(client, unknown.headers)["items"]
     assert items[0]["type"] == "firmware" and items[0]["firmware_release_id"] == v2["id"]
-    assert items[0]["message"] == "Для Zeekr 001 доступна прошивка 2.0"
+    assert items[0]["message"] == (
+        "Доступна прошивка 2.0 для Zeekr 001\nЗапишитесь на обновление в сервисном центре."
+    )
     assert feed(client, older.headers)["items"][0]["firmware_release_id"] == v2["id"]
     assert [n["firmware_release_id"] for n in feed(client, newer.headers)["items"]] == [
         v3["id"],

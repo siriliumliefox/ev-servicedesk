@@ -439,8 +439,15 @@ def list_firmware_stmt(vehicle_model_id: int | None) -> Select:
     return stmt
 
 
+FIRMWARE_CALL_TO_ACTION = "Запишитесь на обновление в сервисном центре."
+
+
 def firmware_message(model: VehicleModel, version: str) -> str:
-    return f"Для {model.brand} {model.model} доступна прошивка {version}"
+    """Текст уведомления о прошивке (#113, ADR 0033): тема и призыв записаться — две строки, как у
+    новостей. Шаблон — в описании createFirmwareRelease контракта; по нему же строит предпросмотр
+    админ-панель (web-shared `firmwareMessage`), так что клиент видит то, что видел администратор.
+    """
+    return f"Доступна прошивка {version} для {model.brand} {model.model}\n{FIRMWARE_CALL_TO_ACTION}"
 
 
 def create_firmware_release(

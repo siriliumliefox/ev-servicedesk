@@ -140,11 +140,18 @@ class _NotificationSheet extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final text = Theme.of(context).textTheme;
+    final vehicles = AppScope.read(context).vehicles;
     final vehicleId = item.vehicleId;
     // Напоминание о ТО — сразу записаться (та же форма, что из карточки агрегата, глава 9).
-    final canBook = item.type == NotificationType.maintenance &&
-        vehicleId != null &&
-        AppScope.read(context).vehicles.any((v) => v.id == vehicleId);
+    final canBook =
+        item.type == NotificationType.maintenance && vehicleId != null && vehicles.any((v) => v.id == vehicleId);
+    // Прошивка — запись на обновление авто этой модели (#113); несколько таких авто — выбор в форме.
+    final firmwareVehicles = item.type == NotificationType.firmware
+        ? [
+            for (final v in vehicles)
+              if (v.vehicleModel.id == item.targetVehicleModelId) v.id
+          ]
+        : const <int>[];
     return SafeArea(
       child: SingleChildScrollView(
         padding: const EdgeInsets.fromLTRB(EvSpace.s6, 0, EvSpace.s6, EvSpace.s6),
@@ -171,6 +178,23 @@ class _NotificationSheet extends StatelessWidget {
                   )),
                 icon: const Icon(Icons.event_available_outlined),
                 label: const Text('Записаться на ТО'),
+              ),
+            ],
+            if (firmwareVehicles.isNotEmpty) ...[
+              const SizedBox(height: EvSpace.s6),
+              FilledButton.icon(
+                key: const Key('book-firmware'),
+                onPressed: () => Navigator.of(context)
+                  ..pop()
+                  ..push(MaterialPageRoute<void>(
+                    builder: (_) => TicketCreateScreen(
+                      vehicleId: firmwareVehicles.length == 1 ? firmwareVehicles.single : null,
+                      booking: ServiceBooking.firmware,
+                      description: '${ServiceBooking.firmware.title}: ${item.title}',
+                    ),
+                  )),
+                icon: const Icon(Icons.system_update_outlined),
+                label: const Text('Записаться на обновление'),
               ),
             ],
           ],

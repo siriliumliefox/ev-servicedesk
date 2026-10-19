@@ -14,10 +14,11 @@ import '../../ui/states.dart';
 import 'attachment_tray.dart';
 import 'ticket_chat_screen.dart';
 
-/// Запись в сервис из карточки агрегата: заголовок формы и начало описания.
+/// Запись в сервис из карточки агрегата или уведомления: заголовок формы и начало описания.
 enum ServiceBooking {
   replacement('Запись на замену'),
-  maintenance('Запись на ТО');
+  maintenance('Запись на ТО'),
+  firmware('Запись на обновление прошивки');
 
   const ServiceBooking(this.title);
 

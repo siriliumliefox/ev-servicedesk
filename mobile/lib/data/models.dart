@@ -296,6 +296,7 @@ class NotificationItem {
     required this.createdAt,
     this.readAt,
     this.vehicleId,
+    this.targetVehicleModelId,
   });
 
   final int id;
@@ -307,12 +308,22 @@ class NotificationItem {
   /// Авто напоминания о ТО (type=maintenance) — запись на ТО из уведомления.
   final int? vehicleId;
 
+  /// Модель уведомления о прошивке (type=firmware) — запись на обновление авто этой модели (#113).
+  final int? targetVehicleModelId;
+
   bool get isRead => readAt != null;
 
   /// В контракте только message: заголовок — первая строка, текст — остальное.
   String get title => message.split('\n').first;
   String get body => message.split('\n').skip(1).join('\n').trim();
 
-  NotificationItem markRead(DateTime at) =>
-      NotificationItem(id: id, type: type, message: message, createdAt: createdAt, readAt: at, vehicleId: vehicleId);
+  NotificationItem markRead(DateTime at) => NotificationItem(
+        id: id,
+        type: type,
+        message: message,
+        createdAt: createdAt,
+        readAt: at,
+        vehicleId: vehicleId,
+        targetVehicleModelId: targetVehicleModelId,
+      );
 }

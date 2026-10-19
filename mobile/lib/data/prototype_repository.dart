@@ -669,9 +669,10 @@ class PrototypeRepository implements ClientRepository {
           NotificationItem(
             id: 1,
             type: NotificationType.firmware,
-            message: 'Вышла прошивка RU 2.5.0 для Li Auto L7\n'
-                'Исправлена работа голосового помощника. Обновление — в сервисном центре, запись через «Поддержку».',
+            // Как backend (ADR 0033): тема и призыв записаться; запись — кнопкой в уведомлении.
+            message: 'Доступна прошивка RU 2.5.0 для Li Auto L7\nЗапишитесь на обновление в сервисном центре.',
             createdAt: DateTime(2026, 10, 9, 10),
+            targetVehicleModelId: 1,
           ),
           NotificationItem(
             id: 2,

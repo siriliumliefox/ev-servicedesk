@@ -143,4 +143,5 @@ NotificationItem parseNotification(Json j) => NotificationItem(
       createdAt: _dateTime(j['created_at']),
       readAt: j['read_at'] == null ? null : _dateTime(j['read_at']),
       vehicleId: j['vehicle_id'] as int?,
+      targetVehicleModelId: j['target_vehicle_model_id'] as int?,
     );

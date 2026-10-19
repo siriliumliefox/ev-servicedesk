@@ -10,6 +10,7 @@ export type { ApiClient, components, operations, paths } from "./api/client.ts";
 // Глава 8: слой данных, прототип на фикстурах, общие компоненты кабинетов (ADR 0012).
 export * from "./data/models.ts";
 export * from "./data/labels.ts";
+export * from "./data/notifications.ts";
 export * from "./data/sla.ts";
 export * from "./data/format.ts";
 export * from "./data/phone.ts";

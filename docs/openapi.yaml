@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: EV-ServiceDesk API
-  version: "1.14.0"
+  version: "1.15.0"
   description: >
     API дипломного проекта «EV-ServiceDesk» (ООО «ЕТСавтоГомель»).
     Контракты сервисов: Auth, Vehicle, Aggregates & Maintenance, Tickets,
@@ -1806,6 +1806,10 @@ paths:
         (released_at, при равенстве — id). Неизвестная модель, повтор версии модели, дата в
         будущем — 422 VEHICLE_MODEL_NOT_FOUND, FIRMWARE_VERSION_EXISTS, RELEASED_AT_IN_FUTURE
         (коды — в 1.7.1).
+        Текст уведомления — две строки, как тема и текст новости (1.15.0, ADR 0033): «Доступна
+        прошивка {version} для {brand} {model}» и «Запишитесь на обновление в сервисном центре.».
+        Тот же текст показывает предпросмотр админ-панели; в приложении клиента у уведомления
+        о прошивке — запись на обновление (target_vehicle_model_id — модель его авто).
       requestBody:
         required: true
         content:

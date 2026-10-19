@@ -623,14 +623,28 @@ describe('лента публикаций', () => {
     expect((await repo.listPublishedNotifications()).items).toHaveLength(3)
   })
 
-  it('прошивка: тему формирует система; версия — пример в подсказке, не в placeholder (A7)', async () => {
+  it('прошивка: текст формирует система; версия — пример в подсказке, не в placeholder (A7)', async () => {
     const { click } = setup('/publications')
     await click(await screen.findByLabelText('Прошивка'))
     expect(screen.queryByLabelText('Тема')).not.toBeInTheDocument()
-    expect(screen.getByText(/Тему уведомления о прошивке формирует система/)).toBeInTheDocument()
+    expect(screen.getByText(/Текст уведомления о прошивке формирует система/)).toBeInTheDocument()
     const version = screen.getByLabelText('Версия')
     expect(version).not.toHaveAttribute('placeholder')
     expect(version).toHaveAccessibleDescription('Например: RU 2.6.0')
+  })
+
+  // #113: предпросмотр = текст, который получит клиент (тот же шаблон, что у сервера).
+  it('прошивка: предпросмотр совпадает с уведомлением клиенту', async () => {
+    const { user, click, repo } = setup('/publications')
+    await click(await screen.findByLabelText('Прошивка'))
+    await user.selectOptions(screen.getByLabelText('Модель'), 'Zeekr 001')
+    await user.type(screen.getByLabelText('Версия'), 'RU 3.1.0')
+    expect(screen.getByText('Доступна прошивка RU 3.1.0 для Zeekr 001')).toBeInTheDocument()
+    expect(screen.getByText('Запишитесь на обновление в сервисном центре.')).toBeInTheDocument()
+    await publish(click)
+    expect(await screen.findByText(/Релиз опубликован/)).toBeInTheDocument()
+    const [sent] = (await repo.listPublishedNotifications()).items
+    expect(sent.message).toBe('Доступна прошивка RU 3.1.0 для Zeekr 001\nЗапишитесь на обновление в сервисном центре.')
   })
 
   it('после публикации форма — в исходном состоянии: релиз для L7 → новость уходит всем моделям (U-03)', async () => {

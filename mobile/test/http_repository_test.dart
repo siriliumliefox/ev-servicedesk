@@ -183,6 +183,29 @@ void main() {
     expect(jsonDecode(opened.body), {'token': 'tok:en/1'});
   });
 
+  test('уведомление о прошивке — модель для записи на обновление (#113)', () async {
+    routes['GET /v1/notifications'] = (_) => _json(200, {
+          'items': [
+            {
+              'id': 3,
+              'type': 'firmware',
+              'target_vehicle_model_id': 5,
+              'firmware_release_id': 9,
+              'message': 'Доступна прошивка RU 3.1.0 для Zeekr 001\nЗапишитесь на обновление в сервисном центре.',
+              'created_at': '2026-10-13T10:00:00Z',
+              'read_at': null,
+            },
+          ],
+          'meta': {'page': 1, 'page_size': 100, 'total_items': 1, 'total_pages': 1},
+        });
+    final [item] = await repo.notifications();
+    expect(item.targetVehicleModelId, 5);
+    expect(item.title, 'Доступна прошивка RU 3.1.0 для Zeekr 001');
+    expect(item.body, 'Запишитесь на обновление в сервисном центре.');
+    expect(item.markRead(DateTime(2026, 10, 14)).targetVehicleModelId, 5,
+        reason: 'отметка о прочтении не теряет модель');
+  });
+
   test('статьи без авто — только общие (без модели)', () async {
     routes['GET /v1/knowledge-articles'] = (_) => _json(200, {
           'items': [

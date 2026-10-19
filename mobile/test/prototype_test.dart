@@ -275,7 +275,7 @@ void main() {
     expect(find.text('Уведомления'), findsOneWidget);
     await tester.tap(find.byKey(const Key('notification-1')));
     await tester.pumpAndSettle();
-    expect(find.textContaining('Исправлена работа голосового помощника'), findsOneWidget);
+    expect(find.text('Запишитесь на обновление в сервисном центре.'), findsOneWidget);
     await tester.tapAt(const Offset(10, 10)); // закрыть шит
     await tester.pumpAndSettle();
     await tester.pageBack();
@@ -294,6 +294,24 @@ void main() {
     expect(find.text('Запись на ТО'), findsOneWidget);
     expect(tester.widget<ChoiceChip>(find.byKey(const Key('vehicle-101'))).selected, isTrue,
         reason: 'авто из напоминания выбрано');
+  });
+
+  // #113 (ADR 0033): у уведомления о прошивке — запись на обновление, как у ТО; авто — той модели.
+  testWidgets('уведомление о прошивке — «Записаться на обновление» по авто модели', (tester) async {
+    await _pump(tester);
+    await tester.tap(find.byKey(const Key('notification-bell')).first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('notification-1')));
+    await tester.pumpAndSettle();
+    expect(find.text('Доступна прошивка RU 2.5.0 для Li Auto L7'), findsWidgets);
+    expect(find.text('Запишитесь на обновление в сервисном центре.'), findsOneWidget);
+    expect(find.byKey(const Key('book-maintenance')), findsNothing);
+    await tester.tap(find.byKey(const Key('book-firmware')));
+    await tester.pumpAndSettle();
+    expect(find.text('Запись на обновление прошивки'), findsOneWidget);
+    expect(tester.widget<ChoiceChip>(find.byKey(const Key('vehicle-101'))).selected, isTrue,
+        reason: 'единственное авто модели уведомления выбрано');
+    expect(find.text('Запись на обновление прошивки: Доступна прошивка RU 2.5.0 для Li Auto L7'), findsOneWidget);
   });
 
   testWidgets('«Новости» — только новости и акции; прошивки и ТО — в центре уведомлений', (tester) async {
