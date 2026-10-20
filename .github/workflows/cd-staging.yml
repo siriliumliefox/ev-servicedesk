@@ -185,7 +185,7 @@ jobs:
           grep -q 'http-equiv="Content-Security-Policy"' index.html
           grep -qE "[\"'\`]/v1[\"'\`]" assets/*.js
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.app }}-staging-${{ github.sha }}
           path: ${{ matrix.app }}/dist
