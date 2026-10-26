@@ -9,23 +9,23 @@ requires-python = ">=3.12,<4.0"
 dependencies = [
     "fastapi (>=0.136.3,<0.137)",
     "uvicorn[standard] (>=0.32.0,<0.33.0)",
-    "sqlalchemy (>=2.1.5,<3.0.0)",
-    "alembic (>=1.13.0,<2.0.0)",
+    "sqlalchemy (>=2.1.6,<3.0.0)",
+    "alembic (>=1.20.1,<2.0.0)",
     "psycopg[binary] (>=3.3.6,<4.0.0)",
-    "pydantic-settings (>=2.16.0,<3.0.0)",
+    "pydantic-settings (>=2.16.1,<3.0.0)",
     "redis (>=5.2.0,<6.0.0)",
     "pyjwt[crypto] (>=2.9,<3)",
     "argon2-cffi (>=23.1,<26)",
     "httpx (>=0.27,<0.28)",
-    "boto3 (>=1.43.114,<2.0)",
+    "boto3 (>=1.43.118,<2.0)",
     "zxcvbn (>=4.5,<5)",
-    "starlette (>=1.3.1,<2)",
+    "starlette (>=1.10.0,<2)",
     "prometheus-client (>=0.21,<1)",
 ]
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^9.0.3"
-ruff = "^0.17.1"
+ruff = "^0.17.2"
 openapi-spec-validator = "^0.7"
 pyyaml = "^6.0"
 fakeredis = {version = ">=2.40.0,<3", extras = ["lua"]}
